@@ -1,0 +1,1074 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>数据采集系统</title>
+  <!-- 引入外部资源（CDN） -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+  <!-- Tailwind 自定义配置 -->
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: '#165DFF',
+            success: '#00B42A',
+            warning: '#FF7D00',
+            danger: '#F53F3F',
+            dark: '#1D2129',
+            'dark-2': '#4E5969',
+            'light-1': '#C9CDD4',
+            'light-2': '#F2F3F5'
+          },
+          fontFamily: {
+            inter: ['Inter', 'system-ui', 'sans-serif'],
+          },
+        },
+      }
+    }
+  </script>
+  <style type="text/tailwindcss">
+    @layer utilities {
+      .content-auto {
+        content-visibility: auto;
+      }
+      .btn-hover {
+        @apply transition-all duration-300 hover:shadow-lg hover:-translate-y-1;
+      }
+      .card-shadow {
+        @apply shadow-md hover:shadow-xl transition-shadow duration-300;
+      }
+      .animate-fade {
+        animation: fade 0.5s ease-in-out;
+      }
+      .animate-slide {
+        animation: slide 0.6s ease-out;
+      }
+      .animate-pulse-slow {
+        animation: pulse 3s infinite;
+      }
+      .animate-bounce-slow {
+        animation: bounce 2s infinite;
+      }
+      .animate-count {
+        animation: count 1s ease-out forwards;
+      }
+    }
+
+    @keyframes fade {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    @keyframes slide {
+      from { transform: translateY(20px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+
+    @keyframes bounce {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-5px); }
+    }
+
+    @keyframes count {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* 手势动画样式 */
+    .gesture-animation {
+      position: relative;
+      width: 200px;
+      height: 200px;
+      margin: 0 auto;
+    }
+
+    .finger {
+      position: absolute;
+      background-color: #165DFF;
+      border-radius: 10px;
+      transition: all 1s ease-in-out;
+    }
+  </style>
+</head>
+<body class="font-inter bg-light-2 text-dark min-h-screen overflow-x-hidden">
+  <!-- 初始界面 -->
+  <div id="initial-page" class="page active h-screen flex flex-col">
+    <!-- 顶部Logo区域 -->
+    <header class="w-full p-6 flex items-center bg-white shadow-sm">
+      <div class="flex items-center space-x-8">
+        <div class="text-center">
+          <div class="text-primary font-bold text-xl">华为</div>
+          <div class="text-xs text-dark-2 mt-1">HUAWEI TECHNOLOGIES</div>
+        </div>
+        <div class="w-px h-8 bg-light-1"></div>
+        <div class="text-center">
+          <div class="text-primary font-bold text-xl">东南大学</div>
+          <div class="text-xs text-dark-2 mt-1">SOUTHEAST UNIVERSITY</div>
+        </div>
+        <div class="w-px h-8 bg-light-1"></div>
+        <div class="text-center">
+          <div class="text-primary font-bold text-xl">哈尔滨工业大学</div>
+          <div class="text-xs text-dark-2 mt-1">HARBIN INSTITUTE OF TECHNOLOGY</div>
+        </div>
+      </div>
+    </header>
+
+    <!-- 中央按钮区域 -->
+    <main class="flex-1 flex items-center justify-center p-6">
+      <div class="flex space-x-12">
+        <!-- 采集按钮 -->
+        <button id="collect-btn" class="btn-hover w-64 h-64 rounded-2xl bg-primary text-white flex flex-col items-center justify-center p-6 card-shadow">
+          <i class="fa fa-bar-chart text-6xl mb-4"></i>
+          <span class="text-3xl font-bold">采集</span>
+          <span class="mt-2 text-white/80">开始数据采集任务</span>
+        </button>
+
+        <!-- 后台按钮 -->
+        <button id="backend-btn" class="btn-hover w-64 h-64 rounded-2xl bg-white text-primary flex flex-col items-center justify-center p-6 border-2 border-primary card-shadow">
+          <i class="fa fa-cogs text-6xl mb-4"></i>
+          <span class="text-3xl font-bold">后台</span>
+          <span class="mt-2 text-primary/80">管理采集数据文件</span>
+        </button>
+      </div>
+    </main>
+
+    <!-- 底部设备状态区域 -->
+    <footer class="w-full p-6 bg-white shadow-inner">
+      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-6">
+        <!-- 蓝牙状态 -->
+        <div class="bg-light-2 p-4 rounded-lg">
+          <div class="flex items-center justify-between mb-2">
+            <span class="font-medium">蓝牙连接</span>
+            <span class="flex items-center text-success">
+              <i class="fa fa-check-circle mr-1"></i>已连接
+            </span>
+          </div>
+          <div class="w-full bg-light-1 rounded-full h-2">
+            <div id="bluetooth-strength" class="bg-success h-2 rounded-full" style="width: 92%"></div>
+          </div>
+          <div class="text-xs text-dark-2 mt-1">信号强度: <span id="bluetooth-db">-58</span>dBm</div>
+        </div>
+
+        <!-- 设备电量 -->
+        <div class="bg-light-2 p-4 rounded-lg">
+          <div class="flex items-center justify-between mb-2">
+            <span class="font-medium">设备电量</span>
+            <span class="flex items-center text-success">
+              <i class="fa fa-battery-three-quarters mr-1"></i>78%
+            </span>
+          </div>
+          <div class="w-full bg-light-1 rounded-full h-2">
+            <div class="bg-warning h-2 rounded-full" style="width: 78%"></div>
+          </div>
+          <div class="text-xs text-dark-2 mt-1">预计可用: 5.2小时</div>
+        </div>
+
+        <!-- 相机连接 -->
+        <div class="bg-light-2 p-4 rounded-lg">
+          <div class="flex items-center justify-between mb-2">
+            <span class="font-medium">相机状态</span>
+            <span class="flex items-center text-success">
+              <i class="fa fa-check-circle mr-1"></i>已连接
+            </span>
+          </div>
+          <div class="flex items-center justify-between text-xs text-dark-2 mt-3">
+            <span>型号: Sony IMX586</span>
+            <span class="text-primary animate-pulse-slow">运行中</span>
+          </div>
+        </div>
+
+        <!-- 存储状态 -->
+        <div class="bg-light-2 p-4 rounded-lg">
+          <div class="flex items-center justify-between mb-2">
+            <span class="font-medium">存储容量</span>
+            <span class="flex items-center text-dark-2">
+              <i class="fa fa-hdd-o mr-1"></i>42%
+            </span>
+          </div>
+          <div class="w-full bg-light-1 rounded-full h-2">
+            <div class="bg-primary h-2 rounded-full" style="width: 42%"></div>
+          </div>
+          <div class="text-xs text-dark-2 mt-1">已用: 87.3GB / 总: 208GB</div>
+        </div>
+
+        <!-- 实时信号传输吞吐量 -->
+        <div class="bg-light-2 p-4 rounded-lg">
+          <div class="flex items-center justify-between mb-2">
+            <span class="font-medium">传输吞吐量</span>
+            <span class="flex items-center text-primary animate-pulse-slow">
+              <i class="fa fa-exchange mr-1"></i>实时
+            </span>
+          </div>
+          <div class="w-full bg-light-1 rounded-full h-2">
+            <div id="throughput-bar" class="bg-primary h-2 rounded-full" style="width: 75%"></div>
+          </div>
+          <div class="text-xs text-dark-2 mt-1">当前: <span id="throughput-value">3.24</span> MB/s</div>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <!-- 采集流程界面 -->
+  <div id="collect-page" class="page hidden h-screen flex flex-col">
+    <!-- 顶部导航 -->
+    <header class="w-full p-4 bg-white shadow-sm flex items-center justify-between">
+      <div class="flex items-center">
+        <button id="back-to-initial" class="btn-hover mr-4 text-primary">
+          <i class="fa fa-arrow-left mr-1"></i>返回
+        </button>
+        <h1 class="text-xl font-bold text-primary">数据采集流程</h1>
+      </div>
+      <div class="text-dark-2 text-sm">
+        <span id="collect-time">2025-11-08 15:30:45</span>
+      </div>
+    </header>
+
+    <!-- 采集动画区域 -->
+    <main class="flex-1 flex flex-col items-center justify-center p-6 bg-gradient-to-b from-white to-light-2">
+      <div class="w-full max-w-4xl mx-auto text-center">
+        <!-- 进度指示器 -->
+        <div class="flex justify-between items-center mb-12">
+          <div class="flex flex-col items-center w-1/3">
+            <div class="w-12 h-12 rounded-full bg-primary text-white flex items-center justify-center font-bold text-lg border-4 border-white shadow-lg">1</div>
+            <span class="mt-2 font-medium">离散手势采集</span>
+            <span class="text-xs text-dark-2">拇指上下左右滑动</span>
+          </div>
+          <div class="flex-1 h-1 bg-light-1 mx-2">
+            <div class="h-full bg-primary" id="progress-bar-1" style="width: 0%"></div>
+          </div>
+          <div class="flex flex-col items-center w-1/3">
+            <div class="w-12 h-12 rounded-full bg-light-1 text-dark-2 flex items-center justify-center font-bold text-lg border-4 border-white shadow-lg">2</div>
+            <span class="mt-2 font-medium">连续手势采集-1</span>
+            <span class="text-xs text-dark-2">拇指食指捏合</span>
+          </div>
+          <div class="flex-1 h-1 bg-light-1 mx-2">
+            <div class="h-full bg-primary" id="progress-bar-2" style="width: 0%"></div>
+          </div>
+          <div class="flex flex-col items-center w-1/3">
+            <div class="w-12 h-12 rounded-full bg-light-1 text-dark-2 flex items-center justify-center font-bold text-lg border-4 border-white shadow-lg">3</div>
+            <span class="mt-2 font-medium">连续手势采集-2</span>
+            <span class="text-xs text-dark-2">食指抬起</span>
+          </div>
+        </div>
+
+        <!-- 总采集时间提示 -->
+        <div class="bg-warning/10 text-warning p-3 rounded-lg mb-8 inline-block">
+          <i class="fa fa-clock-o mr-2"></i>预计总采集时间：45分钟，请合理安排时间
+        </div>
+
+        <!-- 动画展示区域 -->
+        <div class="bg-white rounded-2xl p-8 shadow-xl mb-8 animate-fade">
+          <!-- 初始状态：任务说明 -->
+          <div id="task-intro" class="flex flex-col items-center">
+            <div class="w-32 h-32 rounded-full bg-primary/10 flex items-center justify-center mb-6">
+              <i class="fa fa-hand-paper-o text-5xl text-primary animate-pulse-slow"></i>
+            </div>
+            <h2 class="text-2xl font-bold mb-4">手势采集任务说明</h2>
+            <p class="text-dark-2 max-w-xl mb-6">本次采集包含三个手势任务，请按照动画指导完成。每个任务将录制多组数据，确保动作规范、连贯。</p>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 w-full">
+              <div class="bg-light-2 p-4 rounded-lg text-left">
+                <div class="flex items-center mb-2">
+                  <div class="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center mr-2">1</div>
+                  <h3 class="font-bold">离散手势采集</h3>
+                </div>
+                <p class="text-sm text-dark-2">拇指上滑、下滑、左滑、右滑四个方向的离散动作</p>
+              </div>
+              <div class="bg-light-2 p-4 rounded-lg text-left">
+                <div class="flex items-center mb-2">
+                  <div class="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center mr-2">2</div>
+                  <h3 class="font-bold">连续手势采集-1</h3>
+                </div>
+                <p class="text-sm text-dark-2">拇指与食指从张开到捏合的连续动作，保持匀速</p>
+              </div>
+              <div class="bg-light-2 p-4 rounded-lg text-left">
+                <div class="flex items-center mb-2">
+                  <div class="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center mr-2">3</div>
+                  <h3 class="font-bold">连续手势采集-2</h3>
+                </div>
+                <p class="text-sm text-dark-2">食指从弯曲到完全抬起的连续动作，保持平稳</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- 手势指导动画 -->
+          <div id="gesture-animation" class="hidden">
+            <h2 class="text-2xl font-bold mb-6" id="current-animation-title">离散手势：拇指上滑</h2>
+            <div class="gesture-animation mb-8">
+              <!-- 手掌底座 -->
+              <div class="absolute bottom-0 left-1/2 transform -translate-x-1/2 w-40 h-32 bg-primary/20 rounded-t-full"></div>
+              <!-- 拇指 -->
+              <div id="thumb" class="finger w-6 h-20 bottom-8 left-1/2 transform -translate-x-1/2 -translate-y-4 rounded-t-lg"></div>
+              <!-- 食指 -->
+              <div id="index-finger" class="finger w-6 h-24 bottom-8 left-[30%] transform translate-x-4 rounded-t-lg"></div>
+              <!-- 中指 -->
+              <div class="finger w-6 h-22 bottom-8 left-1/2 transform -translate-x-1/2 rounded-t-lg"></div>
+              <!-- 无名指 -->
+              <div class="finger w-6 h-20 bottom-8 left-[70%] transform -translate-x-4 rounded-t-lg"></div>
+              <!-- 小指 -->
+              <div class="finger w-6 h-18 bottom-8 right-[30%] transform -translate-x-8 rounded-t-lg"></div>
+            </div>
+            <p class="text-dark-2 mb-6" id="animation-instruction">请跟随动画演示，做出拇指向上滑动的动作，保持动作清晰、连贯</p>
+            <div class="flex justify-center space-x-4">
+              <button id="prev-gesture" class="btn-hover bg-white text-primary border border-primary px-4 py-2 rounded-lg font-medium">
+                <i class="fa fa-step-backward mr-1"></i>上一个
+              </button>
+              <button id="next-gesture" class="btn-hover bg-primary text-white px-4 py-2 rounded-lg font-medium">
+                <i class="fa fa-step-forward mr-1"></i>下一个
+              </button>
+            </div>
+          </div>
+
+          <!-- 倒计时区域 -->
+          <div id="countdown-area" class="hidden">
+            <h2 class="text-2xl font-bold mb-8">即将开始采集</h2>
+            <div class="text-8xl font-bold text-primary mb-8" id="countdown">3</div>
+            <p class="text-dark-2 text-lg">准备完成第一个采集任务：<span id="countdown-task">离散手势采集</span></p>
+            <p class="text-dark-2 mt-4">请保持设备稳定，手势动作规范</p>
+          </div>
+
+          <!-- 采集进行中区域 -->
+          <div id="collecting-area" class="hidden">
+            <h2 class="text-2xl font-bold mb-4">采集进行中</h2>
+            <div class="w-full bg-light-1 rounded-full h-4 mb-6">
+              <div id="task-progress" class="bg-primary h-4 rounded-full" style="width: 0%"></div>
+            </div>
+            <p class="text-dark-2 text-lg mb-4">当前任务：<span id="current-task">离散手势采集</span></p>
+            <p class="text-dark-2 mb-6">当前手势：<span id="current-gesture">拇指上滑</span></p>
+            <div class="flex justify-center">
+              <i class="fa fa-circle text-success animate-pulse-slow text-2xl mr-2"></i>
+              <span class="text-success text-lg">正在录制数据，请保持动作稳定...</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 控制按钮 -->
+        <div class="flex justify-center space-x-4">
+          <button id="start-collect" class="btn-hover bg-primary text-white px-8 py-3 rounded-lg font-bold text-lg shadow-lg">
+            <i class="fa fa-play-circle mr-2"></i>开始采集
+          </button>
+          <button id="skip-animation" class="btn-hover bg-white text-primary border border-primary px-6 py-3 rounded-lg font-medium hidden">
+            <i class="fa fa-forward mr-1"></i>跳过动画，直接开始
+          </button>
+        </div>
+      </div>
+    </main>
+
+    <!-- 底部控制区域 -->
+    <footer class="w-full p-4 bg-white shadow-inner flex justify-end">
+      <button id="restart-collect" class="btn-hover bg-white text-primary border border-primary px-6 py-2 rounded-lg font-medium">
+        <i class="fa fa-refresh mr-1"></i>重新开始本次采集
+      </button>
+    </footer>
+  </div>
+
+  <!-- 后台管理界面 -->
+  <div id="backend-page" class="page hidden h-screen flex flex-col">
+    <!-- 顶部导航 -->
+    <header class="w-full p-4 bg-white shadow-sm flex items-center justify-between">
+      <div class="flex items-center">
+        <button id="back-to-initial-2" class="btn-hover mr-4 text-primary">
+          <i class="fa fa-arrow-left mr-1"></i>返回
+        </button>
+        <h1 class="text-xl font-bold text-primary">数据管理后台</h1>
+      </div>
+      <div class="flex items-center space-x-4">
+        <button class="btn-hover text-primary">
+          <i class="fa fa-search mr-1"></i>搜索
+        </button>
+        <button class="btn-hover text-primary">
+          <i class="fa fa-upload mr-1"></i>导出
+        </button>
+      </div>
+    </header>
+
+    <!-- 主内容区域 -->
+    <main class="flex-1 flex p-6 bg-light-2">
+      <!-- 左侧预览区域 -->
+      <div class="w-1/2 bg-white rounded-2xl p-6 shadow-lg mr-6 flex flex-col">
+        <h2 class="text-xl font-bold mb-4 flex items-center">
+          <i class="fa fa-file-text-o text-primary mr-2"></i>数据文件预览
+        </h2>
+        
+        <!-- 初始状态提示 -->
+        <div id="file-preview" class="text-center py-12 text-dark-2 flex-1 flex flex-col items-center justify-center">
+          <i class="fa fa-file-code-o text-6xl mb-4 text-light-1"></i>
+          <p>请在右侧选择一个HDF5文件进行预览</p>
+          <p class="text-sm mt-2">支持查看文件结构、多通道信号波形和基本统计信息</p>
+        </div>
+
+        <!-- 数据预览区域 -->
+        <div id="data-preview" class="hidden flex-1 flex flex-col">
+          <div class="border-b border-light-1 pb-4 mb-4">
+            <h3 class="font-bold text-lg" id="preview-filename">data_20251107_1430.hdf5</h3>
+            <div class="flex flex-wrap gap-2 mt-2">
+              <span class="bg-primary/10 text-primary text-xs px-2 py-1 rounded" id="preview-createTime">创建时间: 2025-11-07 14:30:22</span>
+              <span class="bg-primary/10 text-primary text-xs px-2 py-1 rounded" id="preview-size">文件大小: 128.5 MB</span>
+              <span class="bg-primary/10 text-primary text-xs px-2 py-1 rounded">sEMG: 16通道 × 10000采样点</span>
+              <span class="bg-primary/10 text-primary text-xs px-2 py-1 rounded">IMU: 9通道 × 10000采样点</span>
+            </div>
+          </div>
+
+          <!-- 信号图表预览窗口 -->
+          <div class="mb-6 flex-1 min-h-[300px]">
+            <h4 class="font-bold mb-3">多通道信号预览</h4>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 h-full">
+              <!-- sEMG信号图表 -->
+              <div class="bg-light-2 p-3 rounded-lg h-full">
+                <h5 class="text-sm font-medium mb-2">sEMG信号 (16通道)</h5>
+                <div class="w-full h-[200px]">
+                  <canvas id="semg-chart"></canvas>
+                </div>
+              </div>
+              <!-- IMU信号图表 -->
+              <div class="bg-light-2 p-3 rounded-lg h-full">
+                <h5 class="text-sm font-medium mb-2">IMU信号 (9通道)</h5>
+                <div class="w-full h-[200px]">
+                  <canvas id="imu-chart"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 文件结构 -->
+          <div class="mb-4 flex-1 overflow-auto">
+            <h4 class="font-bold mb-2">文件结构</h4>
+            <div class="pl-4 border-l-2 border-primary/30">
+              <div class="flex items-center py-1">
+                <i class="fa fa-folder text-warning mr-2"></i>
+                <span>root</span>
+              </div>
+              <div class="pl-6 border-l-2 border-light-1">
+                <div class="flex items-center py-1">
+                  <i class="fa fa-folder text-warning mr-2"></i>
+                  <span>sEMG (16通道)</span>
+                </div>
+                <div class="pl-6 border-l-2 border-light-1">
+                  <div class="flex items-center py-1">
+                    <i class="fa fa-file text-primary mr-2"></i>
+                    <span>channel_01 (10000×1)</span>
+                  </div>
+                  <div class="flex items-center py-1">
+                    <i class="fa fa-file text-primary mr-2"></i>
+                    <span>channel_02 (10000×1)</span>
+                  </div>
+                  <div class="flex items-center py-1 text-primary">
+                    <i class="fa fa-ellipsis-h mr-2"></i>
+                    <span>... 其余14个通道</span>
+                  </div>
+                </div>
+                <div class="flex items-center py-1">
+                  <i class="fa fa-folder text-warning mr-2"></i>
+                  <span>IMU (9通道)</span>
+                </div>
+                <div class="pl-6 border-l-2 border-light-1">
+                  <div class="flex items-center py-1">
+                    <i class="fa fa-file text-primary mr-2"></i>
+                    <span>accelerometer (10000×3)</span>
+                  </div>
+                  <div class="flex items-center py-1">
+                    <i class="fa fa-file text-primary mr-2"></i>
+                    <span>gyroscope (10000×3)</span>
+                  </div>
+                  <div class="flex items-center py-1">
+                    <i class="fa fa-file text-primary mr-2"></i>
+                    <span>magnetometer (10000×3)</span>
+                  </div>
+                </div>
+                <div class="flex items-center py-1">
+                  <i class="fa fa-folder text-warning mr-2"></i>
+                  <span>metadata</span>
+                </div>
+                <div class="pl-6 border-l-2 border-light-1">
+                  <div class="flex items-center py-1">
+                    <i class="fa fa-file text-primary mr-2"></i>
+                    <span>device_info</span>
+                  </div>
+                  <div class="flex items-center py-1">
+                    <i class="fa fa-file text-primary mr-2"></i>
+                    <span>gesture_labels</span>
+                  </div>
+                  <div class="flex items-center py-1">
+                    <i class="fa fa-file text-primary mr-2"></i>
+                    <span>calibration_data</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 数据统计摘要 -->
+          <div class="flex-1">
+            <h4 class="font-bold mb-2">数据统计摘要</h4>
+            <div class="grid grid-cols-2 gap-4">
+              <div class="bg-light-2 p-3 rounded-lg">
+                <div class="text-sm text-dark-2">sEMG信号</div>
+                <div class="text-lg font-bold" id="stats-semgRange">±2.56 mV</div>
+                <div class="text-xs text-dark-2">采样率: 1000 Hz | 带宽: 20-500 Hz</div>
+              </div>
+              <div class="bg-light-2 p-3 rounded-lg">
+                <div class="text-sm text-dark-2">IMU - 加速度</div>
+                <div class="text-lg font-bold" id="stats-imuAccRange">±1.25 g</div>
+                <div class="text-xs text-dark-2">采样率: 200 Hz | 量程: ±8g</div>
+              </div>
+              <div class="bg-light-2 p-3 rounded-lg">
+                <div class="text-sm text-dark-2">IMU - 角速度</div>
+                <div class="text-lg font-bold" id="stats-imuGyroRange">±15.3 °/s</div>
+                <div class="text-xs text-dark-2">采样率: 200 Hz | 量程: ±2000°/s</div>
+              </div>
+              <div class="bg-light-2 p-3 rounded-lg">
+                <div class="text-sm text-dark-2">数据完整性</div>
+                <div class="text-lg font-bold text-success" id="stats-completeness">100%</div>
+                <div class="text-xs text-dark-2">无缺失 | 无异常值 | 无噪声</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧文件管理器 -->
+      <div class="w-1/2 bg-white rounded-2xl p-6 shadow-lg overflow-auto">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="text-xl font-bold flex items-center">
+            <i class="fa fa-folder-open text-primary mr-2"></i>采集文件列表
+          </h2>
+          <div class="flex items-center space-x-2">
+            <button class="btn-hover text-sm text-primary">
+              <i class="fa fa-sort-amount-asc mr-1"></i>排序
+            </button>
+            <button class="btn-hover text-sm text-primary">
+              <i class="fa fa-trash-o mr-1"></i>删除选中
+            </button>
+          </div>
+        </div>
+
+        <!-- 文件列表（将通过API动态加载） -->
+        <div class="space-y-2" id="file-list">
+          <!-- 这里将由JS动态填充 -->
+        </div>
+
+        <!-- 分页 -->
+        <div class="flex justify-center mt-6">
+          <nav class="flex items-center space-x-1">
+            <button class="btn-hover w-8 h-8 rounded flex items-center justify-center text-dark-2">
+              <i class="fa fa-angle-left"></i>
+            </button>
+            <button class="w-8 h-8 rounded flex items-center justify-center bg-primary text-white">1</button>
+            <button class="btn-hover w-8 h-8 rounded flex items-center justify-center text-dark-2">2</button>
+            <button class="btn-hover w-8 h-8 rounded flex items-center justify-center text-dark-2">3</button>
+            <button class="btn-hover w-8 h-8 rounded flex items-center justify-center text-dark-2">
+              <i class="fa fa-angle-right"></i>
+            </button>
+          </nav>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    // 页面切换逻辑
+    const pages = document.querySelectorAll('.page');
+    const initialPage = document.getElementById('initial-page');
+    const collectPage = document.getElementById('collect-page');
+    const backendPage = document.getElementById('backend-page');
+
+    // 初始界面按钮
+    document.getElementById('collect-btn').addEventListener('click', () => {
+      switchPage(collectPage);
+    });
+
+    document.getElementById('backend-btn').addEventListener('click', () => {
+      switchPage(backendPage);
+      // 加载文件列表
+      loadFileList();
+    });
+
+    // 返回按钮
+    document.getElementById('back-to-initial').addEventListener('click', () => {
+      switchPage(initialPage);
+      resetCollectPage();
+    });
+
+    document.getElementById('back-to-initial-2').addEventListener('click', () => {
+      switchPage(initialPage);
+    });
+
+    // 页面切换函数
+    function switchPage(targetPage) {
+      pages.forEach(page => {
+        page.classList.add('hidden');
+        page.classList.remove('active');
+      });
+      targetPage.classList.remove('hidden');
+      targetPage.classList.add('active', 'animate-fade');
+    }
+
+    // 1. 从后端API获取动态设备状态
+    async function fetchDeviceStatus() {
+      try {
+        const response = await fetch('/api/device-status');
+        const data = await response.json();
+        
+        // 更新蓝牙状态
+        document.getElementById('bluetooth-db').textContent = data.bluetooth.db;
+        document.getElementById('bluetooth-strength').style.width = `${data.bluetooth.strength}%`;
+        
+        // 更新传输吞吐量
+        document.getElementById('throughput-value').textContent = data.throughput.value;
+        document.getElementById('throughput-bar').style.width = `${data.throughput.percent}%`;
+      } catch (error) {
+        console.error('获取设备状态失败：', error);
+      }
+    }
+
+    // 每2秒更新一次设备状态
+    setInterval(fetchDeviceStatus, 2000);
+    fetchDeviceStatus(); // 初始加载
+
+    // 2. 采集界面逻辑
+    const taskIntro = document.getElementById('task-intro');
+    const gestureAnimation = document.getElementById('gesture-animation');
+    const countdownArea = document.getElementById('countdown-area');
+    const collectingArea = document.getElementById('collecting-area');
+    const startCollectBtn = document.getElementById('start-collect');
+    const skipAnimationBtn = document.getElementById('skip-animation');
+    const prevGestureBtn = document.getElementById('prev-gesture');
+    const nextGestureBtn = document.getElementById('next-gesture');
+    const restartCollectBtn = document.getElementById('restart-collect');
+    const countdownEl = document.getElementById('countdown');
+    const currentAnimationTitle = document.getElementById('current-animation-title');
+    const animationInstruction = document.getElementById('animation-instruction');
+    const currentTaskEl = document.getElementById('current-task');
+    const currentGestureEl = document.getElementById('current-gesture');
+    const taskProgressEl = document.getElementById('task-progress');
+
+    // 手势动画序列
+    const gestures = [
+      {
+        title: '离散手势：拇指上滑',
+        instruction: '请跟随动画演示，做出拇指向上滑动的动作，保持动作清晰、连贯',
+        animation: () => {
+          document.getElementById('thumb').style.transform = 'translateX(-50%) translateY(-20px)';
+        }
+      },
+      {
+        title: '离散手势：拇指下滑',
+        instruction: '请跟随动画演示，做出拇指向下滑动的动作，保持动作平稳',
+        animation: () => {
+          document.getElementById('thumb').style.transform = 'translateX(-50%) translateY(10px)';
+        }
+      },
+      {
+        title: '离散手势：拇指左滑',
+        instruction: '请跟随动画演示，做出拇指向左滑动的动作，动作幅度适中',
+        animation: () => {
+          document.getElementById('thumb').style.transform = 'translateX(-70px) translateY(-4px)';
+        }
+      },
+      {
+        title: '离散手势：拇指右滑',
+        instruction: '请跟随动画演示，做出拇指向右滑动的动作，动作幅度适中',
+        animation: () => {
+          document.getElementById('thumb').style.transform = 'translateX(20px) translateY(-4px)';
+        }
+      },
+      {
+        title: '连续手势-1：拇指食指捏合',
+        instruction: '请跟随动画演示，拇指与食指从张开到捏合的连续动作，保持匀速',
+        animation: () => {
+          document.getElementById('thumb').style.transform = 'translateX(-30px) translateY(-4px)';
+          document.getElementById('index-finger').style.transform = 'translateX(-10px) translateY(-4px)';
+        }
+      },
+      {
+        title: '连续手势-2：食指抬起',
+        instruction: '请跟随动画演示，食指从弯曲到完全抬起的连续动作，保持平稳',
+        animation: () => {
+          document.getElementById('index-finger').style.transform = 'translateX(4px) translateY(-20px)';
+        }
+      }
+    ];
+
+    let currentGestureIndex = 0;
+    let collectProgress = 0;
+    let currentTask = 1;
+    const progressBars = [
+      document.getElementById('progress-bar-1'),
+      document.getElementById('progress-bar-2')
+    ];
+    const taskCircles = document.querySelectorAll('.rounded-full.bg-light-1');
+
+    // 开始采集流程
+    startCollectBtn.addEventListener('click', () => {
+      taskIntro.classList.add('hidden');
+      gestureAnimation.classList.remove('hidden');
+      skipAnimationBtn.classList.remove('hidden');
+      startCollectBtn.classList.add('hidden');
+      updateGestureAnimation(0);
+    });
+
+    // 跳过动画
+    skipAnimationBtn.addEventListener('click', () => {
+      gestureAnimation.classList.add('hidden');
+      skipAnimationBtn.classList.add('hidden');
+      countdownArea.classList.remove('hidden');
+      startCountdown();
+    });
+
+    // 上一个手势
+    prevGestureBtn.addEventListener('click', () => {
+      currentGestureIndex = Math.max(0, currentGestureIndex - 1);
+      updateGestureAnimation(currentGestureIndex);
+    });
+
+    // 下一个手势
+    nextGestureBtn.addEventListener('click', () => {
+      currentGestureIndex = Math.min(gestures.length - 1, currentGestureIndex + 1);
+      
+      if (currentGestureIndex === gestures.length - 1) {
+        gestureAnimation.classList.add('hidden');
+        skipAnimationBtn.classList.add('hidden');
+        countdownArea.classList.remove('hidden');
+        startCountdown();
+      } else {
+        updateGestureAnimation(currentGestureIndex);
+      }
+    });
+
+    // 重新开始采集
+    restartCollectBtn.addEventListener('click', resetCollectPage);
+
+    // 更新手势动画
+    function updateGestureAnimation(index) {
+      const gesture = gestures[index];
+      currentGestureIndex = index;
+      
+      currentAnimationTitle.textContent = gesture.title;
+      animationInstruction.textContent = gesture.instruction;
+      
+      // 重置所有手指位置
+      document.getElementById('thumb').style.transform = 'translateX(-50%) translateY(-4px)';
+      document.getElementById('index-finger').style.transform = 'translateX(4px) translateY(-4px)';
+      
+      // 执行当前手势动画
+      setTimeout(gesture.animation, 300);
+    }
+
+    // 倒计时功能
+    function startCountdown() {
+      let countdown = 3;
+      countdownEl.textContent = countdown;
+      
+      const countdownInterval = setInterval(() => {
+        countdown--;
+        countdownEl.textContent = countdown;
+        countdownEl.classList.add('animate-count');
+        
+        if (countdown <= 0) {
+          clearInterval(countdownInterval);
+          countdownArea.classList.add('hidden');
+          collectingArea.classList.remove('hidden');
+          startCollecting();
+        } else {
+          setTimeout(() => {
+            countdownEl.classList.remove('animate-count');
+          }, 500);
+        }
+      }, 1000);
+    }
+
+    // 模拟采集过程
+    function startCollecting() {
+      let taskProgress = 0;
+      const totalDuration = 15; // 模拟每个任务15秒
+      const updateInterval = 100;
+      const steps = totalDuration * 10;
+      const stepProgress = 100 / steps;
+
+      // 设置当前任务信息
+      const taskNames = ['离散手势采集', '连续手势采集-1', '连续手势采集-2'];
+      currentTaskEl.textContent = taskNames[currentTask - 1];
+      currentGestureEl.textContent = gestures[currentGestureIndex].title.split('：')[1];
+
+      const collectInterval = setInterval(() => {
+        taskProgress += stepProgress;
+        taskProgressEl.style.width = `${taskProgress}%`;
+        
+        // 更新整体进度
+        if (currentTask === 1) {
+          collectProgress = taskProgress / 3;
+          progressBars[0].style.width = `${collectProgress * 3}%`;
+        } else if (currentTask === 2) {
+          collectProgress = 33.33 + (taskProgress / 3);
+          progressBars[0].style.width = '100%';
+          progressBars[1].style.width = `${(collectProgress - 33.33) * 3}%`;
+        } else if (currentTask === 3) {
+          collectProgress = 66.66 + (taskProgress / 3);
+          progressBars[0].style.width = '100%';
+          progressBars[1].style.width = '100%';
+        }
+
+        if (taskProgress >= 100) {
+          clearInterval(collectInterval);
+          taskProgressEl.style.width = '100%';
+          
+          // 切换到下一个任务
+          if (currentTask < 3) {
+            currentTask++;
+            taskCircles[currentTask - 2].classList.remove('bg-light-1', 'text-dark-2');
+            taskCircles[currentTask - 2].classList.add('bg-primary', 'text-white');
+            
+            // 重置采集区域
+            collectingArea.classList.add('hidden');
+            countdownArea.classList.remove('hidden');
+            countdownEl.textContent = 3;
+            currentGestureIndex = (currentTask === 2) ? 4 : 5;
+            startCountdown();
+          } else {
+            // 所有任务完成
+            taskCircles[2].classList.remove('bg-light-1', 'text-dark-2');
+            taskCircles[2].classList.add('bg-primary', 'text-white');
+            currentTaskEl.textContent = '采集完成';
+            currentGestureEl.textContent = '所有任务已完成';
+            collectingArea.querySelector('.text-success').textContent = '采集完成！数据已自动保存';
+          }
+        }
+      }, updateInterval);
+    }
+
+    // 重置采集界面
+    function resetCollectPage() {
+      taskIntro.classList.remove('hidden');
+      gestureAnimation.classList.add('hidden');
+      countdownArea.classList.add('hidden');
+      collectingArea.classList.add('hidden');
+      startCollectBtn.classList.remove('hidden');
+      skipAnimationBtn.classList.add('hidden');
+      
+      // 重置进度
+      collectProgress = 0;
+      currentTask = 1;
+      currentGestureIndex = 0;
+      progressBars.forEach(bar => bar.style.width = '0%');
+      taskCircles.forEach((circle, index) => {
+        if (index > 0) {
+          circle.classList.remove('bg-primary', 'text-white');
+          circle.classList.add('bg-light-1', 'text-dark-2');
+        }
+      });
+      
+      // 重置按钮状态和手势位置
+      startCollectBtn.disabled = false;
+      startCollectBtn.innerHTML = '<i class="fa fa-play-circle mr-2"></i>开始采集';
+      taskProgressEl.style.width = '0%';
+      document.getElementById('thumb').style.transform = 'translateX(-50%) translateY(-4px)';
+      document.getElementById('index-finger').style.transform = 'translateX(4px) translateY(-4px)';
+    }
+
+    // 3. 后台界面 - 加载文件列表和预览数据
+    async function loadFileList() {
+      try {
+        const response = await fetch('/api/files');
+        const files = await response.json();
+        const fileListEl = document.getElementById('file-list');
+        
+        // 清空现有列表
+        fileListEl.innerHTML = '';
+        
+        // 填充文件列表
+        files.forEach((file, index) => {
+          const fileItem = document.createElement('div');
+          fileItem.className = `file-item flex items-center justify-between p-3 rounded-lg ${index === 0 ? 'bg-primary/10 border border-primary' : 'hover:bg-light-2'} cursor-pointer transition-colors`;
+          fileItem.innerHTML = `
+            <div class="flex items-center">
+              <i class="fa fa-file-code-o text-primary mr-3 text-xl"></i>
+              <div>
+                <div class="font-medium">${file.name}</div>
+                <div class="text-xs text-dark-2">${file.createTime} | ${file.size}</div>
+              </div>
+            </div>
+            <button class="preview-btn btn-hover bg-primary text-white px-3 py-1 rounded text-sm" data-filename="${file.name}">
+              预览
+            </button>
+          `;
+          fileListEl.appendChild(fileItem);
+        });
+        
+        // 绑定预览按钮事件
+        document.querySelectorAll('.preview-btn').forEach(btn => {
+          btn.addEventListener('click', async (e) => {
+            const filename = e.target.dataset.filename;
+            await previewFile(filename);
+          });
+        });
+      } catch (error) {
+        console.error('加载文件列表失败：', error);
+      }
+    }
+
+    // 预览HDF5文件
+    async function previewFile(filename) {
+      try {
+        const response = await fetch(`/api/preview-file/${filename}`);
+        const fileData = await response.json();
+        
+        // 更新预览区域信息
+        document.getElementById('preview-filename').textContent = fileData.filename;
+        document.getElementById('preview-createTime').textContent = `创建时间: ${fileData.createTime}`;
+        document.getElementById('preview-size').textContent = `文件大小: ${fileData.size}`;
+        
+        // 更新统计信息
+        document.getElementById('stats-semgRange').textContent = fileData.dataStats.semgRange;
+        document.getElementById('stats-imuAccRange').textContent = fileData.dataStats.imuAccRange;
+        document.getElementById('stats-imuGyroRange').textContent = fileData.dataStats.imuGyroRange;
+        document.getElementById('stats-completeness').textContent = fileData.dataStats.completeness;
+        
+        // 显示预览区域
+        document.getElementById('file-preview').classList.add('hidden');
+        document.getElementById('data-preview').classList.remove('hidden');
+        document.getElementById('data-preview').classList.add('animate-slide');
+        
+        // 绘制信号图表
+        drawSignalCharts(fileData.semgData, fileData.imuData);
+        
+        // 更新文件列表选中状态
+        document.querySelectorAll('.file-item').forEach(item => {
+          item.classList.remove('bg-primary/10', 'border-primary');
+          item.classList.add('hover:bg-light-2');
+          if (item.querySelector('.font-medium').textContent === filename) {
+            item.classList.add('bg-primary/10', 'border-primary');
+            item.classList.remove('hover:bg-light-2');
+          }
+        });
+      } catch (error) {
+        console.error('预览文件失败：', error);
+      }
+    }
+
+    // 绘制多通道信号图表
+    function drawSignalCharts(semgData, imuData) {
+      // 销毁已存在的图表
+      if (window.semgChart) window.semgChart.destroy();
+      if (window.imuChart) window.imuChart.destroy();
+
+      const labels = Array.from({ length: 100 }, (_, i) => i);
+
+      // sEMG信号图表（显示前4个通道）
+      const semgCtx = document.getElementById('semg-chart').getContext('2d');
+      window.semgChart = new Chart(semgCtx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: semgData.slice(0, 4).map((data, index) => ({
+            label: `通道 ${index + 1}`,
+            data: data,
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0.4,
+            borderColor: `hsl(${index * 90}, 70%, 50%)`,
+            fill: false
+          }))
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            y: {
+              beginAtZero: false,
+              title: { display: true, text: '幅值 (mV)' }
+            },
+            x: { title: { display: true, text: '采样点' } }
+          },
+          plugins: {
+            legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } }
+          }
+        }
+      });
+
+      // IMU信号图表（加速度计+陀螺仪各1通道）
+      const imuCtx = document.getElementById('imu-chart').getContext('2d');
+      window.imuChart = new Chart(imuCtx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: '加速度计 X',
+              data: imuData[0],
+              borderWidth: 1.5,
+              pointRadius: 0,
+              tension: 0.4,
+              borderColor: '#165DFF',
+              fill: false
+            },
+            {
+              label: '加速度计 Y',
+              data: imuData[1],
+              borderWidth: 1.5,
+              pointRadius: 0,
+              tension: 0.4,
+              borderColor: '#00B42A',
+              fill: false
+            },
+            {
+              label: '加速度计 Z',
+              data: imuData[2],
+              borderWidth: 1.5,
+              pointRadius: 0,
+              tension: 0.4,
+              borderColor: '#FF7D00',
+              fill: false
+            },
+            {
+              label: '陀螺仪 X',
+              data: imuData[3].map(v => v / 10), // 缩放显示
+              borderWidth: 1.5,
+              pointRadius: 0,
+              tension: 0.4,
+              borderColor: '#F53F3F',
+              fill: false
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            y: { beginAtZero: false, title: { display: true, text: '幅值' } },
+            x: { title: { display: true, text: '采样点' } }
+          },
+          plugins: {
+            legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } }
+          }
+        }
+      });
+    }
+
+    // 更新当前时间
+    function updateCurrentTime() {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const hour = String(now.getHours()).padStart(2, '0');
+      const minute = String(now.getMinutes()).padStart(2, '0');
+      const second = String(now.getSeconds()).padStart(2, '0');
+      
+      document.getElementById('collect-time').textContent = 
+        `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+    }
+
+    // 每秒更新时间
+    setInterval(updateCurrentTime, 1000);
+    updateCurrentTime();
+  </script>
+</body>
+</html>
