@@ -8,8 +8,10 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
+    "@serialport/parser-readline": "^11.0.1",
+    "cors": "^2.8.5",
     "express": "^4.19.2",
-    "cors": "^2.8.5"
+    "serialport": "^13.0.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.4"
