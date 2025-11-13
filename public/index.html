@@ -217,158 +217,676 @@
     </footer>
   </div>
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   <!-- 采集流程界面 -->
-  <div id="collect-page" class="page hidden h-screen flex flex-col">
+<div id="collect-page" class="page hidden h-screen flex flex-col">
     <!-- 顶部导航 -->
     <header class="w-full p-4 bg-white shadow-sm flex items-center justify-between">
-      <div class="flex items-center">
-        <button id="back-to-initial" class="btn-hover mr-4 text-primary">
-          <i class="fa fa-arrow-left mr-1"></i>返回
-        </button>
-        <h1 class="text-xl font-bold text-primary">数据采集流程</h1>
-      </div>
-      <div class="text-dark-2 text-sm">
-        <span id="collect-time">2025-11-08 15:30:45</span>
-      </div>
+        <div class="flex items-center">
+            <button id="back-to-initial" class="btn-hover mr-4 text-primary">
+                <i class="fa fa-arrow-left mr-1"></i>返回
+            </button>
+            <h1 class="text-xl font-bold text-primary">数据采集流程</h1>
+        </div>
+        <div class="text-dark-2 text-sm">
+            <span id="collect-time">2025-11-08 15:30:45</span>
+        </div>
     </header>
 
-    <!-- 采集动画区域 -->
-    <main class="flex-1 flex flex-col items-center justify-center p-6 bg-gradient-to-b from-white to-light-2">
-      <div class="w-full max-w-4xl mx-auto text-center">
-        <!-- 进度指示器 -->
-        <div class="flex justify-between items-center mb-12">
-          <div class="flex flex-col items-center w-1/3">
-            <div class="w-12 h-12 rounded-full bg-primary text-white flex items-center justify-center font-bold text-lg border-4 border-white shadow-lg">1</div>
-            <span class="mt-2 font-medium">离散手势采集</span>
-            <span class="text-xs text-dark-2">拇指上下左右滑动</span>
-          </div>
-          <div class="flex-1 h-1 bg-light-1 mx-2">
-            <div class="h-full bg-primary" id="progress-bar-1" style="width: 0%"></div>
-          </div>
-          <div class="flex flex-col items-center w-1/3">
-            <div class="w-12 h-12 rounded-full bg-light-1 text-dark-2 flex items-center justify-center font-bold text-lg border-4 border-white shadow-lg">2</div>
-            <span class="mt-2 font-medium">连续手势采集-1</span>
-            <span class="text-xs text-dark-2">拇指食指捏合</span>
-          </div>
-          <div class="flex-1 h-1 bg-light-1 mx-2">
-            <div class="h-full bg-primary" id="progress-bar-2" style="width: 0%"></div>
-          </div>
-          <div class="flex flex-col items-center w-1/3">
-            <div class="w-12 h-12 rounded-full bg-light-1 text-dark-2 flex items-center justify-center font-bold text-lg border-4 border-white shadow-lg">3</div>
-            <span class="mt-2 font-medium">连续手势采集-2</span>
-            <span class="text-xs text-dark-2">食指抬起</span>
-          </div>
+    <!-- 主内容区域 -->
+    <main class="flex-1 flex p-4 bg-gray-50">
+        <!-- 左侧：EMG信号显示区域（独立运行） -->
+        <div class="w-1/3 bg-white rounded-lg p-3 mr-4 flex flex-col border border-gray-200">
+            <h2 class="text-md font-bold mb-3 flex items-center">
+                <i class="fa fa-line-chart text-primary mr-2"></i>实时EMG信号
+            </h2>
+            
+            <!-- 控制栏 -->
+            <div class="flex items-center justify-between mb-3">
+                <div class="flex items-center space-x-2">
+                    <span class="text-sm text-gray-600">通道:</span>
+                    <select id="channel-select" class="border rounded px-2 py-1 text-sm">
+                        <option value="all">全部通道</option>
+                        <option value="1-8">通道 1-8</option>
+                        <option value="9-16">通道 9-16</option>
+                    </select>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <button id="pause-signal" class="bg-gray-100 text-gray-700 px-3 py-1 rounded text-sm border">
+                        <i class="fa fa-pause mr-1"></i>暂停
+                    </button>
+                    <button id="clear-signal" class="bg-gray-100 text-gray-700 px-3 py-1 rounded text-sm border">
+                        <i class="fa fa-trash mr-1"></i>清空
+                    </button>
+                </div>
+            </div>
+            
+            <!-- 信号图表网格 -->
+            <div class="grid grid-cols-2 gap-2 flex-1 overflow-y-auto" id="signal-grid">
+                <div class="text-center py-8 text-gray-400" id="no-signal-message">
+                    <i class="fa fa-wave-square text-3xl mb-2"></i>
+                    <p>等待信号数据...</p>
+                </div>
+            </div>
+            
+            <!-- 数据统计 -->
+            <div class="mt-3 p-2 bg-gray-50 rounded text-xs">
+                <div class="grid grid-cols-2 gap-2">
+                    <div>数据包: <span class="font-mono" id="packet-count">0</span></div>
+                    <div>采样率: <span class="font-mono" id="sample-rate">0</span> Hz</div>
+                    <div>信号范围: <span class="font-mono" id="signal-range">±0mV</span></div>
+                    <div>更新时间: <span class="font-mono" id="last-update">-</span></div>
+                    <div>连接状态: <span class="font-mono" id="connection-status">未连接</span></div>
+                </div>
+            </div>
         </div>
 
-        <!-- 总采集时间提示 -->
-        <div class="bg-warning/10 text-warning p-3 rounded-lg mb-8 inline-block">
-          <i class="fa fa-clock-o mr-2"></i>预计总采集时间：45分钟，请合理安排时间
-        </div>
+        <!-- 右侧：采集流程区域（独立运行） -->
+        <div class="w-2/3 flex flex-col">
+            <!-- 进度指示器 -->
+            <div class="flex items-center mb-6">
+                <div class="flex flex-col items-center w-1/3">
+                    <div class="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold">1</div>
+                    <span class="mt-2 text-sm font-medium">离散手势</span>
+                </div>
+                <div class="flex-1 h-1 bg-gray-200 mx-2">
+                    <div class="h-full bg-blue-600" id="progress-bar-1" style="width: 0%"></div>
+                </div>
+                <div class="flex flex-col items-center w-1/3">
+                    <div class="w-10 h-10 rounded-full bg-gray-300 text-gray-600 flex items-center justify-center font-bold">2</div>
+                    <span class="mt-2 text-sm font-medium">连续手势-1</span>
+                </div>
+                <div class="flex-1 h-1 bg-gray-200 mx-2">
+                    <div class="h-full bg-blue-600" id="progress-bar-2" style="width: 0%"></div>
+                </div>
+                <div class="flex flex-col items-center w-1/3">
+                    <div class="w-10 h-10 rounded-full bg-gray-300 text-gray-600 flex items-center justify-center font-bold">3</div>
+                    <span class="mt-2 text-sm font-medium">连续手势-2</span>
+                </div>
+            </div>
 
-        <!-- 动画展示区域 -->
-        <div class="bg-white rounded-2xl p-8 shadow-xl mb-8 animate-fade">
-          <!-- 初始状态：任务说明 -->
-          <div id="task-intro" class="flex flex-col items-center">
-            <div class="w-32 h-32 rounded-full bg-primary/10 flex items-center justify-center mb-6">
-              <i class="fa fa-hand-paper-o text-5xl text-primary animate-pulse-slow"></i>
+            <!-- 内容区域 -->
+            <div class="bg-white rounded-lg p-6 shadow mb-6 flex-1">
+                <!-- 采集进行中区域 -->
+                <div id="collecting-area">
+                    <h2 class="text-xl font-bold mb-4 text-center">准备采集</h2>
+                    <div class="w-full bg-gray-200 rounded-full h-3 mb-6">
+                        <div id="task-progress" class="bg-blue-600 h-3 rounded-full" style="width: 0%"></div>
+                    </div>
+                    <div class="text-center">
+                        <div class="flex items-center justify-center text-blue-600 mb-4">
+                            <i class="fa fa-circle mr-2"></i>
+                            <span class="font-medium">等待开始采集...</span>
+                        </div>
+                        <p class="text-gray-600">当前任务: <span id="current-task">准备中</span></p>
+                        <p class="text-gray-600">当前手势: <span id="current-gesture">-</span></p>
+                    </div>
+                </div>
             </div>
-            <h2 class="text-2xl font-bold mb-4">手势采集任务说明</h2>
-            <p class="text-dark-2 max-w-xl mb-6">本次采集包含三个手势任务，请按照动画指导完成。每个任务将录制多组数据，确保动作规范、连贯。</p>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 w-full">
-              <div class="bg-light-2 p-4 rounded-lg text-left">
-                <div class="flex items-center mb-2">
-                  <div class="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center mr-2">1</div>
-                  <h3 class="font-bold">离散手势采集</h3>
-                </div>
-                <p class="text-sm text-dark-2">拇指上滑、下滑、左滑、右滑四个方向的离散动作</p>
-              </div>
-              <div class="bg-light-2 p-4 rounded-lg text-left">
-                <div class="flex items-center mb-2">
-                  <div class="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center mr-2">2</div>
-                  <h3 class="font-bold">连续手势采集-1</h3>
-                </div>
-                <p class="text-sm text-dark-2">拇指与食指从张开到捏合的连续动作，保持匀速</p>
-              </div>
-              <div class="bg-light-2 p-4 rounded-lg text-left">
-                <div class="flex items-center mb-2">
-                  <div class="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center mr-2">3</div>
-                  <h3 class="font-bold">连续手势采集-2</h3>
-                </div>
-                <p class="text-sm text-dark-2">食指从弯曲到完全抬起的连续动作，保持平稳</p>
-              </div>
-            </div>
-          </div>
 
-          <!-- 手势指导动画 -->
-          <div id="gesture-animation" class="hidden">
-            <h2 class="text-2xl font-bold mb-6" id="current-animation-title">离散手势：拇指上滑</h2>
-            <div class="gesture-animation mb-8">
-              <!-- 手掌底座 -->
-              <div class="absolute bottom-0 left-1/2 transform -translate-x-1/2 w-40 h-32 bg-primary/20 rounded-t-full"></div>
-              <!-- 拇指 -->
-              <div id="thumb" class="finger w-6 h-20 bottom-8 left-1/2 transform -translate-x-1/2 -translate-y-4 rounded-t-lg"></div>
-              <!-- 食指 -->
-              <div id="index-finger" class="finger w-6 h-24 bottom-8 left-[30%] transform translate-x-4 rounded-t-lg"></div>
-              <!-- 中指 -->
-              <div class="finger w-6 h-22 bottom-8 left-1/2 transform -translate-x-1/2 rounded-t-lg"></div>
-              <!-- 无名指 -->
-              <div class="finger w-6 h-20 bottom-8 left-[70%] transform -translate-x-4 rounded-t-lg"></div>
-              <!-- 小指 -->
-              <div class="finger w-6 h-18 bottom-8 right-[30%] transform -translate-x-8 rounded-t-lg"></div>
-            </div>
-            <p class="text-dark-2 mb-6" id="animation-instruction">请跟随动画演示，做出拇指向上滑动的动作，保持动作清晰、连贯</p>
+            <!-- 控制按钮 -->
             <div class="flex justify-center space-x-4">
-              <button id="prev-gesture" class="btn-hover bg-white text-primary border border-primary px-4 py-2 rounded-lg font-medium">
-                <i class="fa fa-step-backward mr-1"></i>上一个
-              </button>
-              <button id="next-gesture" class="btn-hover bg-primary text-white px-4 py-2 rounded-lg font-medium">
-                <i class="fa fa-step-forward mr-1"></i>下一个
-              </button>
+                <button id="start-collect" class="bg-blue-600 text-white px-6 py-2 rounded font-medium">
+                    <i class="fa fa-play mr-2"></i>开始采集
+                </button>
+                <button id="stop-collect" class="bg-red-600 text-white px-6 py-2 rounded font-medium hidden">
+                    <i class="fa fa-stop mr-2"></i>停止采集
+                </button>
             </div>
-          </div>
-
-          <!-- 倒计时区域 -->
-          <div id="countdown-area" class="hidden">
-            <h2 class="text-2xl font-bold mb-8">即将开始采集</h2>
-            <div class="text-8xl font-bold text-primary mb-8" id="countdown">3</div>
-            <p class="text-dark-2 text-lg">准备完成第一个采集任务：<span id="countdown-task">离散手势采集</span></p>
-            <p class="text-dark-2 mt-4">请保持设备稳定，手势动作规范</p>
-          </div>
-
-          <!-- 采集进行中区域 -->
-          <div id="collecting-area" class="hidden">
-            <h2 class="text-2xl font-bold mb-4">采集进行中</h2>
-            <div class="w-full bg-light-1 rounded-full h-4 mb-6">
-              <div id="task-progress" class="bg-primary h-4 rounded-full" style="width: 0%"></div>
-            </div>
-            <p class="text-dark-2 text-lg mb-4">当前任务：<span id="current-task">离散手势采集</span></p>
-            <p class="text-dark-2 mb-6">当前手势：<span id="current-gesture">拇指上滑</span></p>
-            <div class="flex justify-center">
-              <i class="fa fa-circle text-success animate-pulse-slow text-2xl mr-2"></i>
-              <span class="text-success text-lg">正在录制数据，请保持动作稳定...</span>
-            </div>
-          </div>
         </div>
-
-        <!-- 控制按钮 -->
-        <div class="flex justify-center space-x-4">
-          <button id="start-collect" class="btn-hover bg-primary text-white px-8 py-3 rounded-lg font-bold text-lg shadow-lg">
-            <i class="fa fa-play-circle mr-2"></i>开始采集
-          </button>
-          <button id="skip-animation" class="btn-hover bg-white text-primary border border-primary px-6 py-3 rounded-lg font-medium hidden">
-            <i class="fa fa-forward mr-1"></i>跳过动画，直接开始
-          </button>
-        </div>
-      </div>
     </main>
+</div>
 
-    <!-- 底部控制区域 -->
-    <footer class="w-full p-4 bg-white shadow-inner flex justify-end">
-      <button id="restart-collect" class="btn-hover bg-white text-primary border border-primary px-6 py-2 rounded-lg font-medium">
-        <i class="fa fa-refresh mr-1"></i>重新开始本次采集
-      </button>
-    </footer>
-  </div>
+<script>
+// ==================== 全局变量 ====================
+let emgWebSocket = null;
+let isCollecting = false;
+let isPaused = false;
+let packetCounter = 0;
+let dataBuffer = [];
+let debugCounter = 0;
+let lastDataTime = Date.now();
+
+// ==================== 左侧EMG信号显示模块 ====================
+const EMGDisplayModule = {
+    // 初始化信号显示
+    initialize() {
+        console.log('📊 初始化EMG信号显示');
+        this.initializeCompactEMGDisplay();
+        this.setupSignalControls();
+        this.connectToRealtimeEngine();
+    },
+
+// 修改EMGDisplayModule的initializeCompactEMGDisplay方法
+initializeCompactEMGDisplay() {
+    const grid = document.getElementById('signal-grid');
+    const noSignal = document.getElementById('no-signal-message');
+    
+    if (!grid) {
+        console.error('无法找到signal-grid元素');
+        return;
+    }
+    
+    // 清空现有内容
+    grid.innerHTML = '';
+    noSignal.classList.add('hidden');
+    
+    // 确保容器可见后再创建图表（解决隐藏元素尺寸为0的问题）
+    setTimeout(() => {
+        // 创建16个紧凑通道
+        for (let i = 0; i < 16; i++) {
+            const channelDiv = document.createElement('div');
+            channelDiv.className = 'bg-white rounded p-2 border border-gray-200';
+            channelDiv.innerHTML = `
+                <div class="flex justify-between items-center mb-2">
+                    <span class="text-xs font-medium text-gray-700">通道 ${i + 1}</span>
+                    <span class="text-xs font-mono bg-blue-100 text-blue-700 px-2 py-1 rounded" id="ch${i + 1}-value">0mV</span>
+                </div>
+                <canvas id="emg-channel-${i + 1}" class="w-full h-8 bg-gray-50 border border-gray-300 rounded"></canvas>
+            `;
+            grid.appendChild(channelDiv);
+            
+            // 初始化画布
+            const canvas = document.getElementById(`emg-channel-${i + 1}`);
+            if (!canvas) {
+                console.error(`无法找到emg-channel-${i + 1}画布元素`);
+                continue;
+            }
+            const ctx = canvas.getContext('2d');
+            
+            // 修复canvas尺寸问题（使用CSS设置的尺寸）
+            canvas.width = canvas.clientWidth;
+            canvas.height = 32;  // 固定高度，与CSS中的h-8保持一致
+            
+            // 绘制初始网格
+            this.drawScientificGrid(ctx, canvas.width, canvas.height);
+        }
+    }, 0);  // 在下一帧执行，确保DOM已更新
+},
+
+    // 绘制科学网格
+    drawScientificGrid(ctx, width, height) {
+        ctx.clearRect(0, 0, width, height);
+        
+        // 绘制背景
+        ctx.fillStyle = '#f8f9fa';
+        ctx.fillRect(0, 0, width, height);
+        
+        // 绘制网格线
+        ctx.strokeStyle = '#e5e7eb';
+        ctx.lineWidth = 1;
+        
+        // 水平线
+        for (let i = 0; i <= 4; i++) {
+            const y = i * (height / 4);
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(width, y);
+            ctx.stroke();
+        }
+        
+        // 零位线（中心线）
+        ctx.strokeStyle = '#9ca3af';
+        ctx.beginPath();
+        ctx.moveTo(0, height / 2);
+        ctx.lineTo(width, height / 2);
+        ctx.stroke();
+    },
+
+    // 更新通道数据
+    updateEMGChannel(channel, value) {
+        const canvas = document.getElementById(`emg-channel-${channel}`);
+        const valueDisplay = document.getElementById(`ch${channel}-value`);
+        
+        if (!canvas || !valueDisplay) return;
+        
+        const ctx = canvas.getContext('2d');
+        
+        // 初始化数据数组
+        if (!canvas._data) {
+            canvas._data = [];
+            canvas._maxPoints = Math.floor(canvas.width / 3);
+        }
+        
+        // 更新数值显示
+        valueDisplay.textContent = `${value.toFixed(7)}mV`;
+        
+        // 添加新数据点
+        canvas._data.push(value);
+        if (canvas._data.length > canvas._maxPoints) {
+            canvas._data.shift();
+        }
+        
+        // 重绘信号
+        this.drawScientificSignal(ctx, canvas.width, canvas.height, canvas._data);
+    },
+
+    // 绘制科学信号线
+    drawScientificSignal(ctx, width, height, data) {
+        // 先绘制网格
+        this.drawScientificGrid(ctx, width, height);
+        
+        if (data.length < 2) return;
+        
+        // 计算动态范围
+        const maxVal = Math.max(...data.map(Math.abs));
+        const range = Math.max(100, maxVal * 1.2);
+        
+        // 绘制信号线
+        ctx.strokeStyle = '#3b82f6';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        
+        const xScale = width / (data.length - 1);
+        
+        for (let i = 0; i < data.length; i++) {
+            const x = i * xScale;
+            const normalizedY = (data[i] + range) / (2 * range);
+            const y = height - (normalizedY * height);
+            
+            if (i === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
+        }
+        
+        ctx.stroke();
+    },
+
+    // 更新所有通道
+    updateAllEMGChannels(emgData) {
+        if (!emgData || !emgData.channels || emgData.channels.length !== 16) {
+            console.warn('无效的EMG数据');
+            return;
+        }
+        
+        // 更新每个通道
+        for (let i = 0; i < 16; i++) {
+            this.updateEMGChannel(i + 1, emgData.channels[i]);
+        }
+        
+        // 更新统计信息
+        this.updateStatistics(emgData);
+        
+        // 调试输出：每100个数据包打印一次
+        debugCounter++;
+        if (debugCounter % 100 === 0) {
+            this.debugPrintEMGData(emgData);
+        }
+    },
+
+    // 调试输出EMG数据
+    debugPrintEMGData(emgData) {
+        console.log('📦 EMG数据包 #' + emgData.packetCount);
+        console.log('📊 16通道数据:');
+        
+        for (let i = 0; i < 16; i++) {
+            console.log(`  通道 ${(i + 1).toString().padStart(2)}: ${emgData.channels[i].toFixed(7).padStart(8)} mV`);
+        }
+        
+        console.log('⏱️  时间戳:', emgData.timestamp);
+        console.log('📈 采样率:', emgData.interval > 0 ? Math.round(1000 / emgData.interval) + ' Hz' : 'N/A');
+        console.log('----------------------------------------');
+    },
+
+    // 更新统计信息
+    updateStatistics(emgData) {
+        const packetCount = document.getElementById('packet-count');
+        const sampleRate = document.getElementById('sample-rate');
+        const signalRange = document.getElementById('signal-range');
+        const lastUpdate = document.getElementById('last-update');
+        
+        if (packetCount) packetCount.textContent = emgData.packetCount || packetCounter;
+        if (sampleRate) sampleRate.textContent = emgData.interval > 0 ? Math.round(1000 / emgData.interval) : 0;
+        if (signalRange && emgData.channels) {
+            const min = Math.min(...emgData.channels);
+            const max = Math.max(...emgData.channels);
+            const range = Math.max(Math.abs(min), Math.abs(max));
+            signalRange.textContent = `±${range.toFixed(7)}mV`;
+        }
+        if (lastUpdate) lastUpdate.textContent = new Date().toLocaleTimeString();
+    },
+
+    // WebSocket连接
+    connectToRealtimeEngine() {
+        try {
+            emgWebSocket = new WebSocket('ws://localhost:8080');
+            
+            emgWebSocket.onopen = () => {
+                console.log('✅ 已连接到实时引擎');
+                this.updateConnectionStatus('已连接');
+            };
+            
+            emgWebSocket.onmessage = (event) => {
+                if (isPaused) return;
+                
+                try {
+                    const packet = JSON.parse(event.data);
+                    if (packet.type === 'emg_data') {
+                        packetCounter++;
+                        this.updateAllEMGChannels(packet.data);
+                        
+                        // 隐藏"等待信号数据"消息
+                        const noSignalMessage = document.getElementById('no-signal-message');
+                        if (noSignalMessage) {
+                            noSignalMessage.classList.add('hidden');
+                        }
+                    }
+                } catch (error) {
+                    console.error('❌ 解析数据失败:', error);
+                }
+            };
+            
+            emgWebSocket.onerror = (error) => {
+                console.error('❌ WebSocket连接错误:', error);
+                this.updateConnectionStatus('连接错误');
+            };
+            
+            emgWebSocket.onclose = () => {
+                console.log('🔌 连接已关闭，3秒后重连...');
+                this.updateConnectionStatus('重新连接中...');
+                setTimeout(() => this.connectToRealtimeEngine(), 3000);
+            };
+            
+        } catch (error) {
+            console.error('❌ 创建WebSocket连接失败:', error);
+            this.updateConnectionStatus('连接失败');
+        }
+    },
+
+    // 更新连接状态
+    updateConnectionStatus(status) {
+        const statusElement = document.getElementById('connection-status');
+        if (statusElement) {
+            statusElement.textContent = status;
+        }
+    },
+
+    // 设置信号控制
+    setupSignalControls() {
+        // 暂停/继续按钮
+        document.getElementById('pause-signal').addEventListener('click', () => {
+            isPaused = !isPaused;
+            const pauseBtn = document.getElementById('pause-signal');
+            
+            if (isPaused) {
+                pauseBtn.innerHTML = '<i class="fa fa-play mr-1"></i>继续';
+                pauseBtn.classList.remove('bg-gray-100');
+                pauseBtn.classList.add('bg-green-100', 'text-green-700');
+                this.updateConnectionStatus('已暂停');
+            } else {
+                pauseBtn.innerHTML = '<i class="fa fa-pause mr-1"></i>暂停';
+                pauseBtn.classList.remove('bg-green-100', 'text-green-700');
+                pauseBtn.classList.add('bg-gray-100');
+                this.updateConnectionStatus('已连接');
+            }
+        });
+
+        // 清空按钮
+        document.getElementById('clear-signal').addEventListener('click', () => {
+            this.clearAllChannels();
+        });
+
+        // 通道选择器
+        document.getElementById('channel-select').addEventListener('change', (e) => {
+            this.filterChannels(e.target.value);
+        });
+    },
+
+    // 清空所有通道
+    clearAllChannels() {
+        for (let i = 1; i <= 16; i++) {
+            const canvas = document.getElementById(`emg-channel-${i}`);
+            const valueDisplay = document.getElementById(`ch${i}-value`);
+            
+            if (canvas && canvas._data) {
+                canvas._data = [];
+                const ctx = canvas.getContext('2d');
+                this.drawScientificGrid(ctx, canvas.width, canvas.height);
+            }
+            
+            if (valueDisplay) {
+                valueDisplay.textContent = '0mV';
+            }
+        }
+        
+        // 重置统计
+        document.getElementById('packet-count').textContent = '0';
+        document.getElementById('sample-rate').textContent = '0';
+        document.getElementById('signal-range').textContent = '±0mV';
+        packetCounter = 0;
+        debugCounter = 0;
+    },
+
+    // 过滤通道显示
+    filterChannels(filter) {
+        const channels = document.querySelectorAll('[id^="emg-channel-"]');
+        channels.forEach((canvas, index) => {
+            const channelNum = index + 1;
+            const shouldShow = filter === 'all' || 
+                (filter === '1-8' && channelNum <= 8) ||
+                (filter === '9-16' && channelNum >= 9);
+            
+            canvas.parentElement.style.display = shouldShow ? 'block' : 'none';
+        });
+    }
+};
+
+// ==================== 右侧采集流程模块 ====================
+const CollectionModule = {
+    // 初始化采集流程
+    initialize() {
+        console.log('🎬 初始化采集流程');
+        this.setupCollectionControls();
+        this.updateCurrentTime();
+        setInterval(() => this.updateCurrentTime(), 1000);
+    },
+
+    // 设置采集控制
+    setupCollectionControls() {
+        // 开始采集按钮
+        document.getElementById('start-collect').addEventListener('click', () => {
+            this.startCollection();
+        });
+
+        // 停止采集按钮
+        document.getElementById('stop-collect').addEventListener('click', () => {
+            this.stopCollection();
+        });
+
+        // 返回按钮
+        document.getElementById('back-to-initial').addEventListener('click', () => {
+            this.stopCollection();
+            // 这里添加页面切换逻辑
+        });
+    },
+
+    // 开始采集
+    startCollection() {
+        isCollecting = true;
+        console.log('🚀 开始数据采集');
+        
+        // 更新UI状态
+        document.getElementById('start-collect').classList.add('hidden');
+        document.getElementById('stop-collect').classList.remove('hidden');
+        document.getElementById('current-task').textContent = '离散手势采集';
+        document.getElementById('current-gesture').textContent = '拇指上滑';
+        
+        // 更新状态指示器
+        const statusIndicator = document.querySelector('#collecting-area .flex.items-center');
+        if (statusIndicator) {
+            statusIndicator.className = 'flex items-center justify-center text-green-600 mb-4';
+            statusIndicator.innerHTML = '<i class="fa fa-circle animate-pulse mr-2"></i><span class="font-medium">正在录制数据...</span>';
+        }
+
+        // 开始更新进度条
+        this.startProgressBar();
+    },
+
+    // 停止采集
+    stopCollection() {
+        isCollecting = false;
+        console.log('🛑 停止数据采集');
+        
+        // 更新UI状态
+        document.getElementById('start-collect').classList.remove('hidden');
+        document.getElementById('stop-collect').classList.add('hidden');
+        document.getElementById('current-task').textContent = '已停止';
+        document.getElementById('current-gesture').textContent = '-';
+        
+        // 更新状态指示器
+        const statusIndicator = document.querySelector('#collecting-area .flex.items-center');
+        if (statusIndicator) {
+            statusIndicator.className = 'flex items-center justify-center text-red-600 mb-4';
+            statusIndicator.innerHTML = '<i class="fa fa-stop-circle mr-2"></i><span class="font-medium">采集已停止</span>';
+        }
+
+        // 停止进度条
+        clearInterval(this.progressInterval);
+    },
+
+    // 开始更新进度条
+    startProgressBar() {
+        let progress = 0;
+        clearInterval(this.progressInterval);
+        
+        this.progressInterval = setInterval(() => {
+            if (isCollecting) {
+                progress += 0.5;
+                document.getElementById('task-progress').style.width = `${Math.min(progress, 100)}%`;
+                
+                if (progress >= 100) {
+                    // 进度完成，切换到下一个任务
+                    this.nextCollectionTask();
+                    progress = 0;
+                }
+            }
+        }, 100);
+    },
+
+    // 下一个采集任务
+    nextCollectionTask() {
+        // 这里可以添加任务切换逻辑
+        console.log('➡️ 切换到下一个采集任务');
+    },
+
+    // 更新时间显示
+    updateCurrentTime() {
+        const now = new Date();
+        const timeString = now.toLocaleString('zh-CN', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        });
+        document.getElementById('collect-time').textContent = timeString;
+    }
+};
+
+// ==================== 页面初始化 ====================
+// 同时检查页面初始化逻辑，修改DOMContentLoaded事件处理
+document.addEventListener('DOMContentLoaded', function() {
+    // 页面显示时自动初始化
+    const collectPage = document.getElementById('collect-page');
+    
+    // 增加直接初始化逻辑，防止MutationObserver失效
+    function initializeIfActive() {
+        if (!collectPage.classList.contains('hidden')) {
+            console.log('📋 采集页面已显示，初始化所有模块');
+            EMGDisplayModule.initialize();
+            CollectionModule.initialize();
+        }
+    }
+    
+    // 立即检查一次
+    initializeIfActive();
+    
+    // 继续使用观察者监听
+    const observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
+                initializeIfActive();
+            }
+        });
+    });
+    
+    observer.observe(collectPage, { attributes: true });
+});
+// ==================== 全局函数 ====================
+// 页面切换函数（示例）
+function switchPage(targetPageId) {
+    document.querySelectorAll('.page').forEach(page => {
+        page.classList.add('hidden');
+        page.classList.remove('active');
+    });
+    
+    const targetPage = document.getElementById(targetPageId);
+    if (targetPage) {
+        targetPage.classList.remove('hidden');
+        targetPage.classList.add('active');
+    }
+}
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
   <!-- 后台管理界面 -->
   <div id="backend-page" class="page hidden h-screen flex flex-col">
@@ -872,6 +1390,51 @@
       document.getElementById('thumb').style.transform = 'translateX(-50%) translateY(-4px)';
       document.getElementById('index-finger').style.transform = 'translateX(4px) translateY(-4px)';
     }
+
+// 在页面加载完成后初始化
+document.addEventListener('DOMContentLoaded', function() {
+    // 在采集按钮点击时初始化信号显示
+    document.getElementById('collect-btn').addEventListener('click', function() {
+        // 延迟初始化以确保DOM已更新
+        setTimeout(() => {
+            initializeSignalCharts();
+            setupSignalControls();
+            startEMGDataSimulation();
+        }, 100);
+    });
+});
+
+// 添加CSS样式
+const signalStyles = `
+    .channel-chart {
+        transition: all 0.3s ease;
+    }
+    .channel-chart:hover {
+        background-color: #f8f9fa;
+        transform: translateY(-1px);
+    }
+    .value-display {
+        font-family: 'Courier New', monospace;
+        background: #165DFF;
+        color: white;
+        padding: 2px 6px;
+        border-radius: 3px;
+        min-width: 60px;
+        text-align: center;
+    }
+    .min-value, .max-value {
+        font-family: 'Courier New', monospace;
+        color: #6b7280;
+    }
+`;
+
+// 注入样式
+if (!document.querySelector('#signal-styles')) {
+    const styleSheet = document.createElement('style');
+    styleSheet.id = 'signal-styles';
+    styleSheet.textContent = signalStyles;
+    document.head.appendChild(styleSheet);
+}
 
     // 3. 后台界面 - 加载文件列表和预览数据
     async function loadFileList() {
