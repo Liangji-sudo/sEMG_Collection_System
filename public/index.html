@@ -369,12 +369,31 @@ let lastDataTime = Date.now();
 
 // ==================== 左侧EMG信号显示模块 ====================
 const EMGDisplayModule = {
+
+    isInitialized: false, // 初始化标志
+
     // 初始化信号显示
     initialize() {
+
+        // 如果已经初始化过，直接返回
+        if (this.isInitialized) {
+            console.log('EMG模块已初始化，跳过重复执行。');
+            return;
+        }
+
         console.log('📊 初始化EMG信号显示');
         this.initializeCompactEMGDisplay();
         this.setupSignalControls();
         this.connectToRealtimeEngine();
+
+        this.isInitialized = true; // 标记为已初始化
+    },
+
+        // 在 cleanup 或 reset 时，需要将标志重置为 false
+    cleanup() {
+        console.log('🧹 清理EMG信号显示资源');
+        // ... 清理逻辑 ...
+        this.isInitialized = false; // 重置标志
     },
 
 // 修改EMGDisplayModule的initializeCompactEMGDisplay方法
@@ -388,12 +407,23 @@ initializeCompactEMGDisplay() {
     }
     
     // 清空现有内容
+    if(noSignal == null){
+      console.log('before noSignal is null');
+    }else{
+      console.log('before noSignal is not null');
+    }
     grid.innerHTML = '';
-    noSignal.classList.add('hidden');
+    if(noSignal == null){
+      console.log('noSignal is null');
+    }else{
+      console.log('noSignal is not null');
+    }
+    //noSignal.classList.add('hidden');
     
     // 确保容器可见后再创建图表（解决隐藏元素尺寸为0的问题）
     setTimeout(() => {
         // 创建16个紧凑通道
+        console.log('liangji start setTimeout draw');
         for (let i = 0; i < 16; i++) {
             const channelDiv = document.createElement('div');
             channelDiv.className = 'bg-white rounded p-2 border border-gray-200';
@@ -810,25 +840,38 @@ const CollectionModule = {
 // 同时检查页面初始化逻辑，修改DOMContentLoaded事件处理
 document.addEventListener('DOMContentLoaded', function() {
     // 页面显示时自动初始化
-    const collectPage = document.getElementById('collect-page');
     
+    const collectPage = document.getElementById('collect-page');
+    console.log('------------------DOMContentLoaded ----------------------------------------------------------------------------------');
     // 增加直接初始化逻辑，防止MutationObserver失效
     function initializeIfActive() {
+        
+
         if (!collectPage.classList.contains('hidden')) {
-            console.log('📋 采集页面已显示，初始化所有模块');
-            EMGDisplayModule.initialize();
-            CollectionModule.initialize();
+            if (!EMGDisplayModule.isInitialized) {
+                console.log('📋 采集页面已显示，初始化所有模块');
+                EMGDisplayModule.initialize();
+                CollectionModule.initialize();
+            }
+        }else {
+        // 如果页面被隐藏了，可以在这里执行清理操作
+            console.log('📋 采集页面已隐藏，do nothing。');
         }
+
     }
     
     // 立即检查一次
+    console.log('first initializeIfActive+++++++++++');
     initializeIfActive();
+    console.log('first initializeIfActive   over +++++++++++');
     
     // 继续使用观察者监听
     const observer = new MutationObserver(function(mutations) {
         mutations.forEach(function(mutation) {
             if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
+                console.log('mutation start initializeIfActive !!!!!!!!!!!!!!!');
                 initializeIfActive();
+                console.log('mutation start initializeIfActive over !!!!!!!!!!!!!!!');
             }
         });
     });
@@ -1370,6 +1413,8 @@ function switchPage(targetPageId) {
       collectingArea.classList.add('hidden');
       startCollectBtn.classList.remove('hidden');
       skipAnimationBtn.classList.add('hidden');
+
+      EMGDisplayModule.cleanup();
       
       // 重置进度
       collectProgress = 0;
@@ -1392,6 +1437,7 @@ function switchPage(targetPageId) {
     }
 
 // 在页面加载完成后初始化
+/*
 document.addEventListener('DOMContentLoaded', function() {
     // 在采集按钮点击时初始化信号显示
     document.getElementById('collect-btn').addEventListener('click', function() {
@@ -1403,6 +1449,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 100);
     });
 });
+*/
 
 // 添加CSS样式
 const signalStyles = `
