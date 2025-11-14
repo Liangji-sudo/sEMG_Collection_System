@@ -17,6 +17,11 @@ class DeviceSync extends EventEmitter {
         this.lastDataTime = Date.now();
         this.lastValues = Array(16).fill(0); // 最新的16通道值
         this.lastInterval = 0; // 最后的数据包间隔
+
+        this.totalBytesReceived = 0;    // 累计接收的总字节数
+        this.lastThroughputCheckTime = null;  // 上次计算吞吐量的时间
+        this.lastBytesCount = 0;        // 上次计算时的总字节数
+        this.currentThroughput = 0;     // 当前吞吐量（字节/秒）
     }
 
     // 初始化串口连接
@@ -72,7 +77,7 @@ class DeviceSync extends EventEmitter {
     handleData(data) {
         try {
             this.packetCount++;
-            
+            this.totalBytesReceived += data.length;
             // 获取高精度时间戳
             const timestamp = this.getHighPrecisionTimestamp();
             
@@ -126,6 +131,39 @@ class DeviceSync extends EventEmitter {
             this.emit('error', error);
         }
     }
+
+
+        // 新增：计算并返回当前每秒传输的数据量（字节/秒）
+    getCurrentThroughput() {
+        const currentTime = Date.now();
+        
+        // 首次调用时初始化基准值
+        if (!this.lastThroughputCheckTime) {
+            this.lastThroughputCheckTime = currentTime;
+            this.lastBytesCount = this.totalBytesReceived;
+            return 0;
+        }
+        
+        // 计算时间差（毫秒）
+        const timeDiffMs = currentTime - this.lastThroughputCheckTime;
+        if (timeDiffMs <= 0) {
+            return this.currentThroughput; // 避免除以零
+        }
+        
+        // 计算字节差和时间差（转换为秒）
+        const bytesDiff = this.totalBytesReceived - this.lastBytesCount;
+        const timeDiffSec = timeDiffMs / 1000;
+        
+        // 计算吞吐量（字节/秒）
+        this.currentThroughput = bytesDiff / timeDiffSec;
+        
+        // 更新基准值，用于下次计算
+        this.lastThroughputCheckTime = currentTime;
+        this.lastBytesCount = this.totalBytesReceived;
+        
+        return this.currentThroughput;
+    }
+
 
     // 解析EMG数据包格式
     parseEMGData(dataString) {

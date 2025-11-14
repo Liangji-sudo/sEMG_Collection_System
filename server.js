@@ -22,8 +22,10 @@ app.get('/api/device-status', (req, res) => {
     // 原有的模拟数据
     const bluetoothDb = Math.floor(Math.random() * 30) - 70;
     const bluetoothStrength = Math.max(0, Math.min(100, 100 - (bluetoothDb + 70) * 3.33));
-    const throughput = (Math.random() * 1.5 + 2.5).toFixed(2);
-    const throughputPercent = Math.max(0, Math.min(100, (throughput - 2.5) / 1.5 * 100));
+    //const throughput = (Math.random() * 1.5 + 2.5).toFixed(2);
+
+    const throughput = (deviceSync.getCurrentThroughput()/1000).toFixed(4);
+    const throughputPercent = throughput/10;
 
     res.json({
         bluetooth: {
@@ -60,36 +62,7 @@ app.get('/api/device-status', (req, res) => {
     });
 });
 
-// 新增API路由 - 获取实时EMG数据
-app.get('/api/emg-data', (req, res) => {
-    try {
-        const syncStatus = deviceSync.getStatus();
-        const emgData = syncStatus.emgData || Array(16).fill().map(() => Math.floor(Math.random() * 2000) - 1000);
-        
-        res.json({
-            success: true,
-            data: {
-                channels: emgData,
-                packetCount: syncStatus.dataCount,
-                timestamp: Date.now(),
-                sampleRate: parseFloat(syncStatus.currentRate) || 20
-            }
-        });
-    } catch (error) {
-        console.error('获取EMG数据错误:', error);
-        // 返回模拟数据作为后备
-        res.json({
-            success: false,
-            error: error.message,
-            data: {
-                channels: Array(16).fill().map(() => Math.floor(Math.random() * 2000) - 1000),
-                packetCount: 0,
-                timestamp: Date.now(),
-                sampleRate: 20
-            }
-        });
-    }
-});
+
 
 // 文件列表API
 app.get('/api/files', (req, res) => {
@@ -213,7 +186,7 @@ async function startServer() {
         // 然后启动HTTP服务器
         const server = app.listen(PORT, () => {
             console.log(`数据采集系统已启动，访问地址：http://localhost:${PORT}`);
-            console.log('EMG数据API: http://localhost:' + PORT + '/api/emg-data');
+            //console.log('EMG数据API: http://localhost:' + PORT + '/api/emg-data');
             console.log('设备状态API: http://localhost:' + PORT + '/api/device-status');
             
             // 自动打开浏览器（可选）
@@ -236,41 +209,3 @@ startServer().then(server => {
     console.error('服务器启动失败:', error);
 });
 
-
-// 提供状态检查API
-app.get('/api/status', (req, res) => {
-    res.json({
-        deviceSync: deviceSync.getStatus(),
-        realtimeEngine: realtimeEngine.getStatus(),
-        serverTime: new Date().toISOString()
-    });
-});
-
-// 添加测试数据API
-app.get('/api/test-emg-data', (req, res) => {
-    const testData = {
-        channels: Array(16).fill().map(() => (Math.random() * 4000 - 2000).toFixed(1)),
-        packetCount: Math.floor(Math.random() * 1000),
-        interval: 50,
-        timestamp: Date.now()
-    };
-    
-    res.json(testData);
-});
-
-// 添加手动触发测试数据的函数
-function sendTestData() {
-    const testData = {
-        type: 'emg_data',
-        data: {
-            channels: Array(16).fill().map(() => (Math.random() * 4000 - 2000)),
-            packetCount: Math.floor(Math.random() * 1000),
-            interval: 50,
-            timestamp: Date.now()
-        },
-        serverTime: Date.now()
-    };
-    
-    // 直接发送到实时引擎
-    realtimeEngine.receiveEMGData(testData.data);
-}
