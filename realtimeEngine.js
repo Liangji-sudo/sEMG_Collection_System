@@ -127,12 +127,12 @@ class RealtimeEngine extends EventEmitter {
 
         // 发送最近的一些数据点（例如最后50个）
         const recentData = this.dataBuffer.slice(-50);
-        console.log(`[${new Date().toISOString()}] 向新连接客户端发送缓冲数据 (共 ${recentData.length} 条)`);
+        //console.log(`[${new Date().toISOString()}] 向新连接客户端发送缓冲数据 (共 ${recentData.length} 条)`);
         
         recentData.forEach((dataPacket, index) => {
             if (ws.readyState === WebSocket.OPEN) {
                 // 打印单条缓冲数据
-                console.log(`  缓冲数据 #${index + 1}:`, JSON.stringify(dataPacket, null, 2));
+                //console.log(`  缓冲数据 #${index + 1}:`, JSON.stringify(dataPacket, null, 2));
                 ws.send(JSON.stringify(dataPacket));
             }
         });
