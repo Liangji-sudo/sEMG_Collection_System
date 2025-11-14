@@ -371,6 +371,7 @@ let lastDataTime = Date.now();
 const EMGDisplayModule = {
 
     isInitialized: false, // 初始化标志
+    isConnected: false, // 连接状态标志
 
     // 初始化信号显示
     initialize() {
@@ -394,6 +395,9 @@ const EMGDisplayModule = {
         console.log('🧹 清理EMG信号显示资源');
         // ... 清理逻辑 ...
         this.isInitialized = false; // 重置标志
+
+        console.log('🧹 清理EMG websocket 连接标志');
+        this.isConnected = false; // 重置标志
     },
 
 // 修改EMGDisplayModule的initializeCompactEMGDisplay方法
@@ -600,11 +604,19 @@ initializeCompactEMGDisplay() {
 
     // WebSocket连接
     connectToRealtimeEngine() {
+
+        if (this.isConnected) {
+            console.log('已有活跃连接，忽略重复调用。');
+            return;
+        }
         try {
+            
+            console.log('new websocket !!!!!!!!!!!!!!!!!');
             emgWebSocket = new WebSocket('ws://localhost:8080');
             
             emgWebSocket.onopen = () => {
                 console.log('✅ 已连接到实时引擎');
+                this.isConnected = true; // 开始连接，设置标志
                 this.updateConnectionStatus('已连接');
             };
             
@@ -630,12 +642,14 @@ initializeCompactEMGDisplay() {
             
             emgWebSocket.onerror = (error) => {
                 console.error('❌ WebSocket连接错误:', error);
+                this.isConnected = false; // 连接关闭，重置标志
                 this.updateConnectionStatus('连接错误');
             };
             
             emgWebSocket.onclose = () => {
                 console.log('🔌 连接已关闭，3秒后重连...');
                 this.updateConnectionStatus('重新连接中...');
+                this.isConnected = false; // 连接关闭，重置标志
                 setTimeout(() => this.connectToRealtimeEngine(), 3000);
             };
             
@@ -861,17 +875,17 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // 立即检查一次
-    console.log('first initializeIfActive+++++++++++');
-    initializeIfActive();
-    console.log('first initializeIfActive   over +++++++++++');
+    //console.log('first initializeIfActive+++++++++++');
+    //initializeIfActive();
+    //console.log('first initializeIfActive   over +++++++++++');
     
     // 继续使用观察者监听
     const observer = new MutationObserver(function(mutations) {
         mutations.forEach(function(mutation) {
             if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
-                console.log('mutation start initializeIfActive !!!!!!!!!!!!!!!');
+                //console.log('mutation start initializeIfActive !!!!!!!!!!!!!!!');
                 initializeIfActive();
-                console.log('mutation start initializeIfActive over !!!!!!!!!!!!!!!');
+                //console.log('mutation start initializeIfActive over !!!!!!!!!!!!!!!');
             }
         });
     });
