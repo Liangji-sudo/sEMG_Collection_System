@@ -224,26 +224,7 @@
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  <!-- 采集流程界面 -->
+<!-- 2.1 采集流程界面 -->
 <div id="collect-page" class="page hidden h-screen flex flex-col">
     <!-- 顶部导航 -->
     <header class="w-full p-4 bg-white shadow-sm flex items-center justify-between">
@@ -362,6 +343,8 @@
     </main>
 </div>
 
+
+<!-- 2.2 采集界面左右模块的实现逻辑 -->
 <script>
 // ==================== 全局变量 ====================
 let emgWebSocket = null;
@@ -615,7 +598,6 @@ initializeCompactEMGDisplay() {
             return;
         }
         try {
-            
             console.log('new websocket !!!!!!!!!!!!!!!!!');
             emgWebSocket = new WebSocket('ws://localhost:8080');
             
@@ -859,13 +841,10 @@ const CollectionModule = {
 // 同时检查页面初始化逻辑，修改DOMContentLoaded事件处理
 document.addEventListener('DOMContentLoaded', function() {
     // 页面显示时自动初始化
-    
     const collectPage = document.getElementById('collect-page');
     console.log('------------------DOMContentLoaded ----------------------------------------------------------------------------------');
     // 增加直接初始化逻辑，防止MutationObserver失效
     function initializeIfActive() {
-        
-
         if (!collectPage.classList.contains('hidden')) {
             if (!EMGDisplayModule.isInitialized) {
                 console.log('📋 采集页面已显示，初始化所有模块');
@@ -897,322 +876,10 @@ document.addEventListener('DOMContentLoaded', function() {
     
     observer.observe(collectPage, { attributes: true });
 });
-// ==================== 全局函数 ====================
-// 页面切换函数（示例）
-function switchPage(targetPageId) {
-    document.querySelectorAll('.page').forEach(page => {
-        page.classList.add('hidden');
-        page.classList.remove('active');
-    });
-    
-    const targetPage = document.getElementById(targetPageId);
-    if (targetPage) {
-        targetPage.classList.remove('hidden');
-        targetPage.classList.add('active');
-    }
-}
 </script>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  <!-- 后台管理界面 -->
-  <div id="backend-page" class="page hidden h-screen flex flex-col">
-    <!-- 顶部导航 -->
-    <header class="w-full p-4 bg-white shadow-sm flex items-center justify-between">
-      <div class="flex items-center">
-        <button id="back-to-initial-2" class="btn-hover mr-4 text-primary">
-          <i class="fa fa-arrow-left mr-1"></i>返回
-        </button>
-        <h1 class="text-xl font-bold text-primary">数据管理后台</h1>
-      </div>
-      <div class="flex items-center space-x-4">
-        <button class="btn-hover text-primary">
-          <i class="fa fa-search mr-1"></i>搜索
-        </button>
-        <button class="btn-hover text-primary">
-          <i class="fa fa-upload mr-1"></i>导出
-        </button>
-      </div>
-    </header>
-
-    <!-- 主内容区域 -->
-    <main class="flex-1 flex p-6 bg-light-2">
-      <!-- 左侧预览区域 -->
-      <div class="w-1/2 bg-white rounded-2xl p-6 shadow-lg mr-6 flex flex-col">
-        <h2 class="text-xl font-bold mb-4 flex items-center">
-          <i class="fa fa-file-text-o text-primary mr-2"></i>数据文件预览
-        </h2>
-        
-        <!-- 初始状态提示 -->
-        <div id="file-preview" class="text-center py-12 text-dark-2 flex-1 flex flex-col items-center justify-center">
-          <i class="fa fa-file-code-o text-6xl mb-4 text-light-1"></i>
-          <p>请在右侧选择一个HDF5文件进行预览</p>
-          <p class="text-sm mt-2">支持查看文件结构、多通道信号波形和基本统计信息</p>
-        </div>
-
-        <!-- 数据预览区域 -->
-        <div id="data-preview" class="hidden flex-1 flex flex-col">
-          <div class="border-b border-light-1 pb-4 mb-4">
-            <h3 class="font-bold text-lg" id="preview-filename">data_20251107_1430.hdf5</h3>
-            <div class="flex flex-wrap gap-2 mt-2">
-              <span class="bg-primary/10 text-primary text-xs px-2 py-1 rounded" id="preview-createTime">创建时间: 2025-11-07 14:30:22</span>
-              <span class="bg-primary/10 text-primary text-xs px-2 py-1 rounded" id="preview-size">文件大小: 128.5 MB</span>
-              <span class="bg-primary/10 text-primary text-xs px-2 py-1 rounded">sEMG: 16通道 × 10000采样点</span>
-              <span class="bg-primary/10 text-primary text-xs px-2 py-1 rounded">IMU: 9通道 × 10000采样点</span>
-            </div>
-          </div>
-
-          <!-- 信号图表预览窗口 -->
-          <div class="mb-6 flex-1 min-h-[300px]">
-            <h4 class="font-bold mb-3">多通道信号预览</h4>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 h-full">
-              <!-- sEMG信号图表 -->
-              <div class="bg-light-2 p-3 rounded-lg h-full">
-                <h5 class="text-sm font-medium mb-2">sEMG信号 (16通道)</h5>
-                <div class="w-full h-[200px]">
-                  <canvas id="semg-chart"></canvas>
-                </div>
-              </div>
-              <!-- IMU信号图表 -->
-              <div class="bg-light-2 p-3 rounded-lg h-full">
-                <h5 class="text-sm font-medium mb-2">IMU信号 (9通道)</h5>
-                <div class="w-full h-[200px]">
-                  <canvas id="imu-chart"></canvas>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 文件结构 -->
-          <div class="mb-4 flex-1 overflow-auto">
-            <h4 class="font-bold mb-2">文件结构</h4>
-            <div class="pl-4 border-l-2 border-primary/30">
-              <div class="flex items-center py-1">
-                <i class="fa fa-folder text-warning mr-2"></i>
-                <span>root</span>
-              </div>
-              <div class="pl-6 border-l-2 border-light-1">
-                <div class="flex items-center py-1">
-                  <i class="fa fa-folder text-warning mr-2"></i>
-                  <span>sEMG (16通道)</span>
-                </div>
-                <div class="pl-6 border-l-2 border-light-1">
-                  <div class="flex items-center py-1">
-                    <i class="fa fa-file text-primary mr-2"></i>
-                    <span>channel_01 (10000×1)</span>
-                  </div>
-                  <div class="flex items-center py-1">
-                    <i class="fa fa-file text-primary mr-2"></i>
-                    <span>channel_02 (10000×1)</span>
-                  </div>
-                  <div class="flex items-center py-1 text-primary">
-                    <i class="fa fa-ellipsis-h mr-2"></i>
-                    <span>... 其余14个通道</span>
-                  </div>
-                </div>
-                <div class="flex items-center py-1">
-                  <i class="fa fa-folder text-warning mr-2"></i>
-                  <span>IMU (9通道)</span>
-                </div>
-                <div class="pl-6 border-l-2 border-light-1">
-                  <div class="flex items-center py-1">
-                    <i class="fa fa-file text-primary mr-2"></i>
-                    <span>accelerometer (10000×3)</span>
-                  </div>
-                  <div class="flex items-center py-1">
-                    <i class="fa fa-file text-primary mr-2"></i>
-                    <span>gyroscope (10000×3)</span>
-                  </div>
-                  <div class="flex items-center py-1">
-                    <i class="fa fa-file text-primary mr-2"></i>
-                    <span>magnetometer (10000×3)</span>
-                  </div>
-                </div>
-                <div class="flex items-center py-1">
-                  <i class="fa fa-folder text-warning mr-2"></i>
-                  <span>metadata</span>
-                </div>
-                <div class="pl-6 border-l-2 border-light-1">
-                  <div class="flex items-center py-1">
-                    <i class="fa fa-file text-primary mr-2"></i>
-                    <span>device_info</span>
-                  </div>
-                  <div class="flex items-center py-1">
-                    <i class="fa fa-file text-primary mr-2"></i>
-                    <span>gesture_labels</span>
-                  </div>
-                  <div class="flex items-center py-1">
-                    <i class="fa fa-file text-primary mr-2"></i>
-                    <span>calibration_data</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 数据统计摘要 -->
-          <div class="flex-1">
-            <h4 class="font-bold mb-2">数据统计摘要</h4>
-            <div class="grid grid-cols-2 gap-4">
-              <div class="bg-light-2 p-3 rounded-lg">
-                <div class="text-sm text-dark-2">sEMG信号</div>
-                <div class="text-lg font-bold" id="stats-semgRange">±2.56 mV</div>
-                <div class="text-xs text-dark-2">采样率: 1000 Hz | 带宽: 20-500 Hz</div>
-              </div>
-              <div class="bg-light-2 p-3 rounded-lg">
-                <div class="text-sm text-dark-2">IMU - 加速度</div>
-                <div class="text-lg font-bold" id="stats-imuAccRange">±1.25 g</div>
-                <div class="text-xs text-dark-2">采样率: 200 Hz | 量程: ±8g</div>
-              </div>
-              <div class="bg-light-2 p-3 rounded-lg">
-                <div class="text-sm text-dark-2">IMU - 角速度</div>
-                <div class="text-lg font-bold" id="stats-imuGyroRange">±15.3 °/s</div>
-                <div class="text-xs text-dark-2">采样率: 200 Hz | 量程: ±2000°/s</div>
-              </div>
-              <div class="bg-light-2 p-3 rounded-lg">
-                <div class="text-sm text-dark-2">数据完整性</div>
-                <div class="text-lg font-bold text-success" id="stats-completeness">100%</div>
-                <div class="text-xs text-dark-2">无缺失 | 无异常值 | 无噪声</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 右侧文件管理器 -->
-      <div class="w-1/2 bg-white rounded-2xl p-6 shadow-lg overflow-auto">
-        <div class="flex justify-between items-center mb-4">
-          <h2 class="text-xl font-bold flex items-center">
-            <i class="fa fa-folder-open text-primary mr-2"></i>采集文件列表
-          </h2>
-          <div class="flex items-center space-x-2">
-            <button class="btn-hover text-sm text-primary">
-              <i class="fa fa-sort-amount-asc mr-1"></i>排序
-            </button>
-            <button class="btn-hover text-sm text-primary">
-              <i class="fa fa-trash-o mr-1"></i>删除选中
-            </button>
-          </div>
-        </div>
-
-        <!-- 文件列表（将通过API动态加载） -->
-        <div class="space-y-2" id="file-list">
-          <!-- 这里将由JS动态填充 -->
-        </div>
-
-        <!-- 分页 -->
-        <div class="flex justify-center mt-6">
-          <nav class="flex items-center space-x-1">
-            <button class="btn-hover w-8 h-8 rounded flex items-center justify-center text-dark-2">
-              <i class="fa fa-angle-left"></i>
-            </button>
-            <button class="w-8 h-8 rounded flex items-center justify-center bg-primary text-white">1</button>
-            <button class="btn-hover w-8 h-8 rounded flex items-center justify-center text-dark-2">2</button>
-            <button class="btn-hover w-8 h-8 rounded flex items-center justify-center text-dark-2">3</button>
-            <button class="btn-hover w-8 h-8 rounded flex items-center justify-center text-dark-2">
-              <i class="fa fa-angle-right"></i>
-            </button>
-          </nav>
-        </div>
-      </div>
-    </main>
-  </div>
-
-  <script>
-    // 页面切换逻辑
-    const pages = document.querySelectorAll('.page');
-    const initialPage = document.getElementById('initial-page');
-    const collectPage = document.getElementById('collect-page');
-    const backendPage = document.getElementById('backend-page');
-
-    // 初始界面按钮
-    document.getElementById('collect-btn').addEventListener('click', () => {
-      switchPage(collectPage);
-    });
-
-    document.getElementById('backend-btn').addEventListener('click', () => {
-      switchPage(backendPage);
-      // 加载文件列表
-      loadFileList();
-    });
-
-    // 返回按钮
-    document.getElementById('back-to-initial').addEventListener('click', () => {
-      switchPage(initialPage);
-      resetCollectPage();
-    });
-
-    document.getElementById('back-to-initial-2').addEventListener('click', () => {
-      switchPage(initialPage);
-    });
-
-    // 页面切换函数
-    function switchPage(targetPage) {
-      pages.forEach(page => {
-        page.classList.add('hidden');
-        page.classList.remove('active');
-      });
-      targetPage.classList.remove('hidden');
-      targetPage.classList.add('active', 'animate-fade');
-    }
-
-    // 1. 从后端API获取动态设备状态
-    async function fetchDeviceStatus() {
-      try {
-        const response = await fetch('/api/device-status');
-        const data = await response.json();
-        
-        // 更新蓝牙状态
-        document.getElementById('bluetooth-db').textContent = data.bluetooth.db;
-        document.getElementById('bluetooth-strength').style.width = `${data.bluetooth.strength}%`;
-        
-        // 更新传输吞吐量
-        document.getElementById('throughput-value').textContent = data.throughput.value;
-        document.getElementById('throughput-bar').style.width = `${data.throughput.percent}%`;
-      } catch (error) {
-        console.error('获取设备状态失败：', error);
-      }
-    }
-
-    // 每2秒更新一次设备状态
-    setInterval(fetchDeviceStatus, 2000);
-    fetchDeviceStatus(); // 初始加载
-
+<!--  2.3 采集界面右半部分采集逻辑流程 -->
+<script>
     // 2. 采集界面逻辑
     const taskIntro = document.getElementById('task-intro');
     const gestureAnimation = document.getElementById('gesture-animation');
@@ -1454,22 +1121,216 @@ function switchPage(targetPageId) {
       document.getElementById('thumb').style.transform = 'translateX(-50%) translateY(-4px)';
       document.getElementById('index-finger').style.transform = 'translateX(4px) translateY(-4px)';
     }
+</script>
 
-// 在页面加载完成后初始化
-/*
-document.addEventListener('DOMContentLoaded', function() {
-    // 在采集按钮点击时初始化信号显示
-    document.getElementById('collect-btn').addEventListener('click', function() {
-        // 延迟初始化以确保DOM已更新
-        setTimeout(() => {
-            initializeSignalCharts();
-            setupSignalControls();
-            startEMGDataSimulation();
-        }, 100);
-    });
-});
-*/
 
+
+<!-- 3.1 后台管理界面 -->
+<div id="backend-page" class="page hidden h-screen flex flex-col">
+    <!-- 顶部导航 -->
+    <header class="w-full p-4 bg-white shadow-sm flex items-center justify-between">
+      <div class="flex items-center">
+        <button id="back-to-initial-2" class="btn-hover mr-4 text-primary">
+          <i class="fa fa-arrow-left mr-1"></i>返回
+        </button>
+        <h1 class="text-xl font-bold text-primary">数据管理后台</h1>
+      </div>
+      <div class="flex items-center space-x-4">
+        <button class="btn-hover text-primary">
+          <i class="fa fa-search mr-1"></i>搜索
+        </button>
+        <button class="btn-hover text-primary">
+          <i class="fa fa-upload mr-1"></i>导出
+        </button>
+      </div>
+    </header>
+
+    <!-- 主内容区域 -->
+    <main class="flex-1 flex p-6 bg-light-2">
+      <!-- 左侧预览区域 -->
+      <div class="w-1/2 bg-white rounded-2xl p-6 shadow-lg mr-6 flex flex-col">
+        <h2 class="text-xl font-bold mb-4 flex items-center">
+          <i class="fa fa-file-text-o text-primary mr-2"></i>数据文件预览
+        </h2>
+        
+        <!-- 初始状态提示 -->
+        <div id="file-preview" class="text-center py-12 text-dark-2 flex-1 flex flex-col items-center justify-center">
+          <i class="fa fa-file-code-o text-6xl mb-4 text-light-1"></i>
+          <p>请在右侧选择一个HDF5文件进行预览</p>
+          <p class="text-sm mt-2">支持查看文件结构、多通道信号波形和基本统计信息</p>
+        </div>
+
+        <!-- 数据预览区域 -->
+        <div id="data-preview" class="hidden flex-1 flex flex-col">
+          <div class="border-b border-light-1 pb-4 mb-4">
+            <h3 class="font-bold text-lg" id="preview-filename">data_20251107_1430.hdf5</h3>
+            <div class="flex flex-wrap gap-2 mt-2">
+              <span class="bg-primary/10 text-primary text-xs px-2 py-1 rounded" id="preview-createTime">创建时间: 2025-11-07 14:30:22</span>
+              <span class="bg-primary/10 text-primary text-xs px-2 py-1 rounded" id="preview-size">文件大小: 128.5 MB</span>
+              <span class="bg-primary/10 text-primary text-xs px-2 py-1 rounded">sEMG: 16通道 × 10000采样点</span>
+              <span class="bg-primary/10 text-primary text-xs px-2 py-1 rounded">IMU: 9通道 × 10000采样点</span>
+            </div>
+          </div>
+
+          <!-- 信号图表预览窗口 -->
+          <div class="mb-6 flex-1 min-h-[300px]">
+            <h4 class="font-bold mb-3">多通道信号预览</h4>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 h-full">
+              <!-- sEMG信号图表 -->
+              <div class="bg-light-2 p-3 rounded-lg h-full">
+                <h5 class="text-sm font-medium mb-2">sEMG信号 (16通道)</h5>
+                <div class="w-full h-[200px]">
+                  <canvas id="semg-chart"></canvas>
+                </div>
+              </div>
+              <!-- IMU信号图表 -->
+              <div class="bg-light-2 p-3 rounded-lg h-full">
+                <h5 class="text-sm font-medium mb-2">IMU信号 (9通道)</h5>
+                <div class="w-full h-[200px]">
+                  <canvas id="imu-chart"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 文件结构 -->
+          <div class="mb-4 flex-1 overflow-auto">
+            <h4 class="font-bold mb-2">文件结构</h4>
+            <div class="pl-4 border-l-2 border-primary/30">
+              <div class="flex items-center py-1">
+                <i class="fa fa-folder text-warning mr-2"></i>
+                <span>root</span>
+              </div>
+              <div class="pl-6 border-l-2 border-light-1">
+                <div class="flex items-center py-1">
+                  <i class="fa fa-folder text-warning mr-2"></i>
+                  <span>sEMG (16通道)</span>
+                </div>
+                <div class="pl-6 border-l-2 border-light-1">
+                  <div class="flex items-center py-1">
+                    <i class="fa fa-file text-primary mr-2"></i>
+                    <span>channel_01 (10000×1)</span>
+                  </div>
+                  <div class="flex items-center py-1">
+                    <i class="fa fa-file text-primary mr-2"></i>
+                    <span>channel_02 (10000×1)</span>
+                  </div>
+                  <div class="flex items-center py-1 text-primary">
+                    <i class="fa fa-ellipsis-h mr-2"></i>
+                    <span>... 其余14个通道</span>
+                  </div>
+                </div>
+                <div class="flex items-center py-1">
+                  <i class="fa fa-folder text-warning mr-2"></i>
+                  <span>IMU (9通道)</span>
+                </div>
+                <div class="pl-6 border-l-2 border-light-1">
+                  <div class="flex items-center py-1">
+                    <i class="fa fa-file text-primary mr-2"></i>
+                    <span>accelerometer (10000×3)</span>
+                  </div>
+                  <div class="flex items-center py-1">
+                    <i class="fa fa-file text-primary mr-2"></i>
+                    <span>gyroscope (10000×3)</span>
+                  </div>
+                  <div class="flex items-center py-1">
+                    <i class="fa fa-file text-primary mr-2"></i>
+                    <span>magnetometer (10000×3)</span>
+                  </div>
+                </div>
+                <div class="flex items-center py-1">
+                  <i class="fa fa-folder text-warning mr-2"></i>
+                  <span>metadata</span>
+                </div>
+                <div class="pl-6 border-l-2 border-light-1">
+                  <div class="flex items-center py-1">
+                    <i class="fa fa-file text-primary mr-2"></i>
+                    <span>device_info</span>
+                  </div>
+                  <div class="flex items-center py-1">
+                    <i class="fa fa-file text-primary mr-2"></i>
+                    <span>gesture_labels</span>
+                  </div>
+                  <div class="flex items-center py-1">
+                    <i class="fa fa-file text-primary mr-2"></i>
+                    <span>calibration_data</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 数据统计摘要 -->
+          <div class="flex-1">
+            <h4 class="font-bold mb-2">数据统计摘要</h4>
+            <div class="grid grid-cols-2 gap-4">
+              <div class="bg-light-2 p-3 rounded-lg">
+                <div class="text-sm text-dark-2">sEMG信号</div>
+                <div class="text-lg font-bold" id="stats-semgRange">±2.56 mV</div>
+                <div class="text-xs text-dark-2">采样率: 1000 Hz | 带宽: 20-500 Hz</div>
+              </div>
+              <div class="bg-light-2 p-3 rounded-lg">
+                <div class="text-sm text-dark-2">IMU - 加速度</div>
+                <div class="text-lg font-bold" id="stats-imuAccRange">±1.25 g</div>
+                <div class="text-xs text-dark-2">采样率: 200 Hz | 量程: ±8g</div>
+              </div>
+              <div class="bg-light-2 p-3 rounded-lg">
+                <div class="text-sm text-dark-2">IMU - 角速度</div>
+                <div class="text-lg font-bold" id="stats-imuGyroRange">±15.3 °/s</div>
+                <div class="text-xs text-dark-2">采样率: 200 Hz | 量程: ±2000°/s</div>
+              </div>
+              <div class="bg-light-2 p-3 rounded-lg">
+                <div class="text-sm text-dark-2">数据完整性</div>
+                <div class="text-lg font-bold text-success" id="stats-completeness">100%</div>
+                <div class="text-xs text-dark-2">无缺失 | 无异常值 | 无噪声</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧文件管理器 -->
+      <div class="w-1/2 bg-white rounded-2xl p-6 shadow-lg overflow-auto">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="text-xl font-bold flex items-center">
+            <i class="fa fa-folder-open text-primary mr-2"></i>采集文件列表
+          </h2>
+          <div class="flex items-center space-x-2">
+            <button class="btn-hover text-sm text-primary">
+              <i class="fa fa-sort-amount-asc mr-1"></i>排序
+            </button>
+            <button class="btn-hover text-sm text-primary">
+              <i class="fa fa-trash-o mr-1"></i>删除选中
+            </button>
+          </div>
+        </div>
+
+        <!-- 文件列表（将通过API动态加载） -->
+        <div class="space-y-2" id="file-list">
+          <!-- 这里将由JS动态填充 -->
+        </div>
+
+        <!-- 分页 -->
+        <div class="flex justify-center mt-6">
+          <nav class="flex items-center space-x-1">
+            <button class="btn-hover w-8 h-8 rounded flex items-center justify-center text-dark-2">
+              <i class="fa fa-angle-left"></i>
+            </button>
+            <button class="w-8 h-8 rounded flex items-center justify-center bg-primary text-white">1</button>
+            <button class="btn-hover w-8 h-8 rounded flex items-center justify-center text-dark-2">2</button>
+            <button class="btn-hover w-8 h-8 rounded flex items-center justify-center text-dark-2">3</button>
+            <button class="btn-hover w-8 h-8 rounded flex items-center justify-center text-dark-2">
+              <i class="fa fa-angle-right"></i>
+            </button>
+          </nav>
+        </div>
+      </div>
+    </main>
+</div>
+
+
+<!-- 3.2 后台界面显示左半部分逻辑 -->
+<script>
 // 添加CSS样式
 const signalStyles = `
     .channel-chart {
@@ -1698,6 +1559,75 @@ if (!document.querySelector('#signal-styles')) {
     // 每秒更新时间
     setInterval(updateCurrentTime, 1000);
     updateCurrentTime();
-  </script>
+</script>
+
+
+<!--  所有按钮页面切换点击逻辑 -->
+<script>
+    // 页面切换逻辑
+    const pages = document.querySelectorAll('.page');
+    const initialPage = document.getElementById('initial-page');
+    const collectPage = document.getElementById('collect-page');
+    const backendPage = document.getElementById('backend-page');
+
+    // 初始界面按钮
+    document.getElementById('collect-btn').addEventListener('click', () => {
+      switchPage(collectPage);
+    });
+
+    document.getElementById('backend-btn').addEventListener('click', () => {
+      switchPage(backendPage);
+      // 加载文件列表
+      loadFileList();
+    });
+
+    // 返回按钮
+    document.getElementById('back-to-initial').addEventListener('click', () => {
+      switchPage(initialPage);
+      resetCollectPage();
+    });
+
+    document.getElementById('back-to-initial-2').addEventListener('click', () => {
+      switchPage(initialPage);
+    });
+
+    // 页面切换函数
+    function switchPage(targetPage) {
+      pages.forEach(page => {
+        page.classList.add('hidden');
+        page.classList.remove('active');
+      });
+      targetPage.classList.remove('hidden');
+      targetPage.classList.add('active', 'animate-fade');
+    }
+</script>
+
+
+
+<!--  刷新首页的底部状态栏 -->
+<script>
+    // 1. 从后端API获取动态设备状态
+    async function fetchDeviceStatus() {
+      try {
+        const response = await fetch('/api/device-status');
+        const data = await response.json();
+        
+        // 更新蓝牙状态
+        document.getElementById('bluetooth-db').textContent = data.bluetooth.db;
+        document.getElementById('bluetooth-strength').style.width = `${data.bluetooth.strength}%`;
+        
+        // 更新传输吞吐量
+        document.getElementById('throughput-value').textContent = data.throughput.value;
+        document.getElementById('throughput-bar').style.width = `${data.throughput.percent}%`;
+      } catch (error) {
+        console.error('获取设备状态失败：', error);
+      }
+    }
+
+    // 每2秒更新一次设备状态
+    setInterval(fetchDeviceStatus, 2000);
+    fetchDeviceStatus(); // 初始加载
+</script>
+
 </body>
 </html>

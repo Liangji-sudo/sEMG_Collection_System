@@ -76,8 +76,12 @@ class DeviceSync extends EventEmitter {
     // 处理接收到的数据
     handleData(data) {
         try {
+            // 数据包的计数
             this.packetCount++;
+
+            // 统计总的字节数量
             this.totalBytesReceived += data.length;
+
             // 获取高精度时间戳
             const timestamp = this.getHighPrecisionTimestamp();
             
@@ -87,7 +91,7 @@ class DeviceSync extends EventEmitter {
             this.lastInterval = interval;
             
             // 解析EMG数据
-            const dataString = data.toString();
+            const dataString = data.toString(); //一个数据包，可能会包含多组emg
             const emgValues = this.parseEMGData(dataString);
             
             if (emgValues && emgValues.length === 16) {
@@ -102,18 +106,16 @@ class DeviceSync extends EventEmitter {
                     channels: emgValues,
                     timestamp: timestamp,
                     packetCount: this.packetCount,
-                    interval: interval,
-                    rawData: dataString
+                    interval: interval
                 };
                 
                 // 触发事件（保持向后兼容）
-                this.emit('emgData', emgDataPacket);
+                //this.emit('emgData', emgDataPacket);
                 
                 // 发送到实时引擎
                 realtimeEngine.receiveEMGData(emgDataPacket);
                 
                 // 打印数据包信息
-                //console.log('handleData = ',dataString,timestamp, this.packetCount);
                 if (this.packetCount % 100 === 0) {
                     this.printDataInfo();
                 }
@@ -164,7 +166,6 @@ class DeviceSync extends EventEmitter {
         return this.currentThroughput;
     }
 
-
     // 解析EMG数据包格式
     parseEMGData(dataString) {
         try {
@@ -175,7 +176,7 @@ class DeviceSync extends EventEmitter {
                 return null;
             }
             
-            // 处理多行数据
+            // 处理多行数据， 只取第一行，剩下的因为实时性，全部抛弃
             if (cleanString.includes('\n')) {
                 const lines = cleanString.split('\n').filter(line => line.trim().length > 0);
                 for (let i = lines.length - 1; i >= 0; i--) {
@@ -237,16 +238,6 @@ class DeviceSync extends EventEmitter {
                 this.emgData[i].shift();
             }
         }
-    }
-
-    // 获取最新的EMG数据
-    getLatestEMGData() {
-        return this.lastValues;
-    }
-
-    // 获取EMG数据历史
-    getEMGDataHistory() {
-        return this.emgData;
     }
 
     // 获取高精度时间戳

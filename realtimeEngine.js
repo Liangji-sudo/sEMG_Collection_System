@@ -192,7 +192,7 @@ class RealtimeEngine extends EventEmitter {
         });
     }
 
-    // 发送控制命令到前端
+    // 发送控制命令到前端, 未使用
     sendControlCommand(command, data = {}) {
         const commandPacket = {
             type: 'control_command',

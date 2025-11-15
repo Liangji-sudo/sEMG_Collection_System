@@ -7,9 +7,11 @@ const PORT = process.env.PORT || 3000;
 
 // 引入设备协同模块
 const deviceSync = require('./deviceSync');
+
+// 引入实时引擎模块
 const realtimeEngine = require('./realtimeEngine');
 
-// 中间件配置
+// 中间件配置， 用于给前端获取数据的接口
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -22,8 +24,8 @@ app.get('/api/device-status', (req, res) => {
     // 原有的模拟数据
     const bluetoothDb = Math.floor(Math.random() * 30) - 70;
     const bluetoothStrength = Math.max(0, Math.min(100, 100 - (bluetoothDb + 70) * 3.33));
-    //const throughput = (Math.random() * 1.5 + 2.5).toFixed(2);
 
+    // 设备协同模块提供的传输数据量
     const throughput = (deviceSync.getCurrentThroughput()/1000).toFixed(4);
     const throughputPercent = throughput/10;
 
@@ -63,8 +65,8 @@ app.get('/api/device-status', (req, res) => {
 });
 
 
-
-// 文件列表API
+// 文件列表API， 模拟数据 
+// TODO
 app.get('/api/files', (req, res) => {
     const files = [
         {
@@ -92,7 +94,9 @@ app.get('/api/files', (req, res) => {
     res.json(files);
 });
 
-// 文件预览API
+
+// 文件预览API， 模拟数据
+// TODO
 app.get('/api/preview-file/:filename', (req, res) => {
     const { filename } = req.params;
     
@@ -122,10 +126,12 @@ app.get('/api/preview-file/:filename', (req, res) => {
     });
 });
 
+
 // 所有路由都指向index.html（支持前端路由）
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
+
 
 // 自动打开浏览器函数
 function openBrowser() {
