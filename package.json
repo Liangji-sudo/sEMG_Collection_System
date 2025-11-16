@@ -2,19 +2,22 @@
   "name": "data-collection-system",
   "version": "1.0.0",
   "description": "Node.js 数据采集系统界面",
-  "main": "server.js",
+  "main": "main.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js"
+    "start": "electron .",
+    "dev": "nodemon server.js",
+    "package": "electron-packager . 数据采集系统 --platform=win32 --arch=x64 --out=dist --overwrite"
   },
   "dependencies": {
     "@serialport/parser-readline": "^11.0.1",
     "cors": "^2.8.5",
-    "express": "^4.19.2",
+    "express": "^4.21.2",
     "serialport": "^13.0.0",
     "ws": "^8.18.3"
   },
   "devDependencies": {
+    "electron": "^39.2.0",
+    "electron-packager": "^17.1.2",
     "nodemon": "^3.1.4"
   }
 }
