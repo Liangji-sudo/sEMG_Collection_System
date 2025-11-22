@@ -31,7 +31,7 @@ class DeviceSync extends EventEmitter {
                 console.log('正在初始化串口连接...');
                 
                 this.port = new SerialPort({
-                    path: '/dev/pts/12',
+                    path: '/dev/pts/5',
                     baudRate: 921600,
                     dataBits: 8,
                     stopBits: 1,
@@ -285,7 +285,7 @@ class DeviceSync extends EventEmitter {
                         console.error('关闭串口时发生错误:', error);
                         this.emit('error', error);
                     } else {
-                        console.log('设备协同模块已关闭');
+                        console.log('【设备协同模块已关闭】');
                         this.isConnected = false;
                         this.emit('disconnected');
                     }
@@ -344,6 +344,6 @@ deviceSync.on('disconnected', () => {
 // 模块信息
 console.log('DeviceSync模块加载完成');
 console.log('支持16通道EMG数据实时采集');
-console.log('串口配置: /dev/pts/12 @ 921600 baud');
+console.log('串口配置: /dev/pts/5 @ 921600 baud');
 
 module.exports = deviceSync;

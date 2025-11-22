@@ -97,7 +97,13 @@
       border-radius: 10px;
       transition: all 1s ease-in-out;
     }
+
+    
   </style>
+
+      <!-- ... -->
+    <link rel="stylesheet" href="/dygraph.min.css" />
+    <script src="/dygraph.min.js"></script>
 </head>
 <body class="font-inter bg-light-2 text-dark min-h-screen overflow-x-hidden">
   <!-- 初始界面 -->
@@ -237,6 +243,9 @@
         <div class="text-dark-2 text-sm">
             <span id="collect-time">2025-11-08 15:30:45</span>
         </div>
+
+
+
     </header>
 
     <!-- 主内容区域 -->
@@ -344,6 +353,7 @@
 </div>
 
 
+
 <!-- 2.2 采集界面左右模块的实现逻辑 -->
 <script>
 // ==================== 全局变量 ====================
@@ -360,6 +370,8 @@ const EMGDisplayModule = {
 
     isInitialized: false, // 初始化标志
     isConnected: false, // 连接状态标志
+    graphs: {}, // 存储16个通道的Dygraphs实例
+    dataSeries: {}, // 存储每个通道的数据系列
 
     // 初始化信号显示
     initialize() {
@@ -388,34 +400,20 @@ const EMGDisplayModule = {
         this.isConnected = false; // 重置标志
     },
 
-// 修改EMGDisplayModule的initializeCompactEMGDisplay方法
-initializeCompactEMGDisplay() {
-    const grid = document.getElementById('signal-grid');
-    const noSignal = document.getElementById('no-signal-message');
-    
-    if (!grid) {
-        console.error('无法找到signal-grid元素');
-        return;
-    }
-    
-    // 清空现有内容
-    if(noSignal == null){
-      console.log('before noSignal is null');
-    }else{
-      console.log('before noSignal is not null');
-    }
-    grid.innerHTML = '';
-    if(noSignal == null){
-      console.log('noSignal is null');
-    }else{
-      console.log('noSignal is not null');
-    }
-    //noSignal.classList.add('hidden');
-    
-    // 确保容器可见后再创建图表（解决隐藏元素尺寸为0的问题）
-    setTimeout(() => {
-        // 创建16个紧凑通道
-        console.log('liangji start setTimeout draw');
+   // 初始化信号显示（使用Dygraphs）
+    initializeCompactEMGDisplay() {
+        const grid = document.getElementById('signal-grid');
+        const noSignal = document.getElementById('no-signal-message');
+        
+        if (!grid) {
+            console.error('无法找到signal-grid元素');
+            return;
+        }
+        
+        // 清空现有内容
+        grid.innerHTML = '';
+        
+        // 为每个通道创建图表容器（替换原有的canvas）
         for (let i = 0; i < 16; i++) {
             const channelDiv = document.createElement('div');
             channelDiv.className = 'bg-white rounded p-2 border border-gray-200';
@@ -424,27 +422,153 @@ initializeCompactEMGDisplay() {
                     <span class="text-xs font-medium text-gray-700">通道 ${i + 1}</span>
                     <span class="text-xs font-mono bg-blue-100 text-blue-700 px-2 py-1 rounded" id="ch${i + 1}-value">0mV</span>
                 </div>
-                <canvas id="emg-channel-${i + 1}" class="w-full h-8 bg-gray-50 border border-gray-300 rounded"></canvas>
+                <div id="emg-channel-${i + 1}" class="w-full h-24 bg-gray-50 border border-gray-300 rounded"></div>
             `;
             grid.appendChild(channelDiv);
             
-            // 初始化画布
-            const canvas = document.getElementById(`emg-channel-${i + 1}`);
-            if (!canvas) {
-                console.error(`无法找到emg-channel-${i + 1}画布元素`);
-                continue;
-            }
-            const ctx = canvas.getContext('2d');
+            // 初始化数据系列
+            this.dataSeries[i + 1] = [];
             
-            // 修复canvas尺寸问题（使用CSS设置的尺寸）
-            canvas.width = canvas.clientWidth;
-            canvas.height = 32;  // 固定高度，与CSS中的h-8保持一致
-            
-            // 绘制初始网格
-            this.drawScientificGrid(ctx, canvas.width, canvas.height);
+            // 延迟创建图表以确保DOM已准备好
+            setTimeout(() => {
+                this.createChannelGraph(i + 1);
+            }, 0);
         }
-    }, 0);  // 在下一帧执行，确保DOM已更新
-},
+    },
+    
+    // 为单个通道创建Dygraphs图表
+    createChannelGraph(channel) {
+        const container = document.getElementById(`emg-channel-${channel}`);
+        if (!container) {
+            console.error(`无法找到emg-channel-${channel}容器`);
+            return;
+        }
+        
+        // 初始空数据
+        const initialData = [];
+        
+        // 创建Dygraphs实例
+        this.graphs[channel] = new Dygraph(
+            container,
+            initialData,
+            {
+                labels: ['时间', '信号值(mV)'],
+                width: container.clientWidth,
+                height: 96, // 对应h-24样式
+                axisLabelFontSize: 10,
+                drawPoints: false,
+                strokeWidth: 1.5,
+                strokeColor: '#3b82f6',
+                backgroundColor: '#f8f9fa',
+                gridLineColor: '#e5e7eb',
+                axes: {
+                    x: {
+                        show: false // 隐藏X轴，只显示相对变化
+                    },
+                    y: {
+                        axisLabelWidth: 30,
+                        valueFormatter: (v) => v.toFixed(7)
+                    }
+                },
+                valueRange: [-1000, 1000], // 初始Y轴范围
+                autoResize: true
+            }
+        );
+    },
+    
+    // 更新单个通道数据（替换原canvas绘图逻辑）
+    updateEMGChannel(channel, value) {
+        const valueDisplay = document.getElementById(`ch${channel}-value`);
+        if (valueDisplay) {
+            valueDisplay.textContent = `${value.toFixed(7)}mV`;
+        }
+        
+        // 使用时间戳作为X轴坐标
+        const now = Date.now();
+        
+        // 添加新数据点
+        this.dataSeries[channel].push([now, value]);
+        
+        // 限制数据点数量（保持最新的100个点，可调整）
+        /*
+        const maxPoints = 100;
+        if (this.dataSeries[channel].length > maxPoints) {
+            this.dataSeries[channel] = this.dataSeries[channel].slice(-maxPoints);
+        }
+        */
+
+        // 优化方案：保留较多数据点以产生压缩感，但避免无限增长
+        const maxPoints = 5000; // 保留最近5000个点
+        if (this.dataSeries[channel].length > maxPoints) {
+            this.dataSeries[channel] = this.dataSeries[channel].slice(-maxPoints);
+        }
+
+        
+        // 更新图表
+        if (this.graphs[channel]) {
+            this.graphs[channel].updateOptions({
+                file: this.dataSeries[channel],
+                //valueRange: this.calculateDynamicRange(this.dataSeries[channel])
+            });
+        }
+    },
+    
+    // 计算动态Y轴范围（优化显示效果）
+    calculateDynamicRange(data) {
+      //return [-1000, 1000];
+      
+        if (data.length === 0) return [-1000, 1000];
+        
+        const values = data.map(point => point[1]);
+        const min = Math.min(...values);
+        const max = Math.max(...values);
+        
+        // 增加10%的边距，避免数据贴边
+        const padding = (max - min) * 0.1 || 100;
+        return [min - padding, max + padding];
+        
+    },
+    
+    // 修改清空通道方法（适配Dygraphs）
+    clearAllChannels() {
+        for (let i = 1; i <= 16; i++) {
+            // 清空数据系列
+            this.dataSeries[i] = [];
+            
+            // 重置显示值
+            const valueDisplay = document.getElementById(`ch${i}-value`);
+            if (valueDisplay) {
+                valueDisplay.textContent = '0mV';
+            }
+            
+            // 重置图表
+            if (this.graphs[i]) {
+                this.graphs[i].updateOptions({
+                    file: [],
+                    valueRange: [-100, 100]
+                });
+            }
+        }
+        
+        // 重置统计信息（保持原有逻辑）
+        document.getElementById('packet-count').textContent = '0';
+        document.getElementById('sample-rate').textContent = '0';
+        document.getElementById('signal-range').textContent = '±0mV';
+        packetCounter = 0;
+        debugCounter = 0;
+    },
+
+
+
+
+
+
+
+
+
+
+
+
 
     // 绘制科学网格
     drawScientificGrid(ctx, width, height) {
@@ -475,6 +599,7 @@ initializeCompactEMGDisplay() {
         ctx.stroke();
     },
 
+  /*
     // 更新通道数据
     updateEMGChannel(channel, value) {
         const canvas = document.getElementById(`emg-channel-${channel}`);
@@ -502,7 +627,7 @@ initializeCompactEMGDisplay() {
         // 重绘信号
         this.drawScientificSignal(ctx, canvas.width, canvas.height, canvas._data);
     },
-
+*/
     // 绘制科学信号线
     drawScientificSignal(ctx, width, height, data) {
         // 先绘制网格
@@ -591,60 +716,72 @@ initializeCompactEMGDisplay() {
     },
 
     // WebSocket连接
-    connectToRealtimeEngine() {
-
-        if (this.isConnected) {
-            console.log('已有活跃连接，忽略重复调用。');
-            return;
-        }
-        try {
-            console.log('new websocket !!!!!!!!!!!!!!!!!');
-            emgWebSocket = new WebSocket('ws://localhost:8080');
+ connectToRealtimeEngine() {
+    if (this.isConnected) {
+        console.log('已有活跃连接，忽略重复调用。');
+        return;
+    }
+    try {
+        // 记录开始等待连接的时间戳
+        const connectionStartTime = Date.now();
+        console.log(`开始尝试连接，时间戳: ${connectionStartTime}`);
+        console.log('new websocket !!!!!!!!!!!!!!!!!， start wait for onopen');
+        
+        emgWebSocket = new WebSocket('ws://localhost:8080');
+        
+        emgWebSocket.onopen = () => {
+            // 记录连接成功的时间戳
+            const connectionSuccessTime = Date.now();
+            // 计算连接耗时（毫秒）
+            const connectionDuration = connectionSuccessTime - connectionStartTime;
             
-            emgWebSocket.onopen = () => {
-                console.log('✅ 已连接到实时引擎');
-                this.isConnected = true; // 开始连接，设置标志
-                this.updateConnectionStatus('已连接');
-            };
+            console.log('✅ 已连接到实时引擎');
+            // 打印时间统计信息
+            console.log(`连接耗时: ${connectionDuration}ms`);
+            console.log(`开始等待时间戳: ${connectionStartTime}`);
+            console.log(`连接成功时间戳: ${connectionSuccessTime}`);
             
-            emgWebSocket.onmessage = (event) => {
-                if (isPaused) return;
-                
-                try {
-                    const packet = JSON.parse(event.data);
-                    if (packet.type === 'emg_data') {
-                        packetCounter++;
-                        this.updateAllEMGChannels(packet.data);
-                        
-                        // 隐藏"等待信号数据"消息
-                        const noSignalMessage = document.getElementById('no-signal-message');
-                        if (noSignalMessage) {
-                            noSignalMessage.classList.add('hidden');
-                        }
+            this.isConnected = true;
+            this.updateConnectionStatus('已连接');
+        };
+        
+        emgWebSocket.onmessage = (event) => {
+            if (isPaused) return;
+            
+            try {
+                const packet = JSON.parse(event.data);
+                if (packet.type === 'emg_data') {
+                    packetCounter++;
+                    this.updateAllEMGChannels(packet.data);
+                    
+                    const noSignalMessage = document.getElementById('no-signal-message');
+                    if (noSignalMessage) {
+                        noSignalMessage.classList.add('hidden');
                     }
-                } catch (error) {
-                    console.error('❌ 解析数据失败:', error);
                 }
-            };
-            
-            emgWebSocket.onerror = (error) => {
-                console.error('❌ WebSocket连接错误:', error);
-                this.isConnected = false; // 连接关闭，重置标志
-                this.updateConnectionStatus('连接错误');
-            };
-            
-            emgWebSocket.onclose = () => {
-                console.log('🔌 连接已关闭，3秒后重连...');
-                this.updateConnectionStatus('重新连接中...');
-                this.isConnected = false; // 连接关闭，重置标志
-                setTimeout(() => this.connectToRealtimeEngine(), 3000);
-            };
-            
-        } catch (error) {
-            console.error('❌ 创建WebSocket连接失败:', error);
-            this.updateConnectionStatus('连接失败');
-        }
-    },
+            } catch (error) {
+                console.error('❌ 解析数据失败:', error);
+            }
+        };
+        
+        emgWebSocket.onerror = (error) => {
+            console.error('❌ WebSocket连接错误:', error);
+            this.isConnected = false;
+            this.updateConnectionStatus('连接错误');
+        };
+        
+        emgWebSocket.onclose = () => {
+            console.log('🔌 连接已关闭，3秒后重连...');
+            this.updateConnectionStatus('重新连接中...');
+            this.isConnected = false;
+            setTimeout(() => this.connectToRealtimeEngine(), 1000);
+        };
+        
+    } catch (error) {
+        console.error('❌ 创建WebSocket连接失败:', error);
+        this.updateConnectionStatus('连接失败');
+    }
+},
 
     // 更新连接状态
     updateConnectionStatus(status) {
@@ -685,6 +822,7 @@ initializeCompactEMGDisplay() {
         });
     },
 
+    /*
     // 清空所有通道
     clearAllChannels() {
         for (let i = 1; i <= 16; i++) {
@@ -709,6 +847,8 @@ initializeCompactEMGDisplay() {
         packetCounter = 0;
         debugCounter = 0;
     },
+*/
+
 
     // 过滤通道显示
     filterChannels(filter) {

@@ -10,6 +10,7 @@
   "dependencies": {
     "@serialport/parser-readline": "^11.0.1",
     "cors": "^2.8.5",
+    "dygraphs": "^2.2.1",
     "express": "^4.19.2",
     "serialport": "^13.0.0",
     "ws": "^8.18.3"
