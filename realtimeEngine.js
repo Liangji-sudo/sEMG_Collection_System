@@ -170,27 +170,36 @@ class RealtimeEngine extends EventEmitter {
 
     // 停止实时引擎
     stop() {
-        return new Promise((resolve) => {
-            this.isRunning = false;
-            this.stopDataBroadcast();
+    return new Promise((resolve) => {
+        this.isRunning = false;
+        this.stopDataBroadcast();
 
-            // 关闭所有客户端连接
-            this.clients.forEach(client => {
-                client.close();
-            });
-            this.clients.clear();
-
-            // 关闭WebSocket服务器
-            if (this.wss) {
-                this.wss.close(() => {
-                    console.log('实时引擎已停止');
-                    resolve();
-                });
-            } else {
-                resolve();
+        // 强制关闭所有客户端（设置code=1001表示正常退出，避免等待）
+        this.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.close(1001, '服务器关闭'); // 带状态码的强制关闭
             }
         });
-    }
+        this.clients.clear(); // 立即清空集合，避免残留
+
+        // 关闭服务器时设置超时，避免无限等待
+        if (this.wss) {
+            const closeTimeout = setTimeout(() => {
+                console.warn('服务器关闭超时，强制退出');
+                resolve();
+            }, 3000); // 3秒超时
+
+            this.wss.close(() => {
+                clearTimeout(closeTimeout); // 成功关闭则清除超时
+                console.log('【实时引擎已停止】');
+                resolve();
+            });
+        } else {
+            resolve();
+        }
+    });
+}
+
 
     // 发送控制命令到前端, 未使用
     sendControlCommand(command, data = {}) {

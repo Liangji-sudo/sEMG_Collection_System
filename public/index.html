@@ -364,19 +364,20 @@ let packetCounter = 0;
 let dataBuffer = [];
 let debugCounter = 0;
 let lastDataTime = Date.now();
-
 // ==================== 左侧EMG信号显示模块 ====================
 const EMGDisplayModule = {
-
-    isInitialized: false, // 初始化标志
-    isConnected: false, // 连接状态标志
-    graphs: {}, // 存储16个通道的Dygraphs实例
-    dataSeries: {}, // 存储每个通道的数据系列
+    isInitialized: false,       // 初始化标志
+    isConnected: false,         // 连接状态标志
+    isConnecting: false,        // 连接中标志
+    isPaused: false,            // 数据接收暂停标志（模块内维护）
+    graphs: {},                 // 存储16个通道的Dygraphs实例
+    dataSeries: {},             // 存储每个通道的数据系列
+    emgWebSocket: null,         // WebSocket实例（模块内维护）
+    reconnectTimer: null,       // 重连定时器
+    packetCounter: 0,           // 数据包计数器（模块内维护）
 
     // 初始化信号显示
     initialize() {
-
-        // 如果已经初始化过，直接返回
         if (this.isInitialized) {
             console.log('EMG模块已初始化，跳过重复执行。');
             return;
@@ -387,8 +388,9 @@ const EMGDisplayModule = {
         this.setupSignalControls();
         this.connectToRealtimeEngine();
 
-        this.isInitialized = true; // 标记为已初始化
+        this.isInitialized = true;
     },
+
 
         // 在 cleanup 或 reset 时，需要将标志重置为 false
     cleanup() {
@@ -715,79 +717,140 @@ const EMGDisplayModule = {
         if (lastUpdate) lastUpdate.textContent = new Date().toLocaleTimeString();
     },
 
-    // WebSocket连接
- connectToRealtimeEngine() {
-    if (this.isConnected) {
-        console.log('已有活跃连接，忽略重复调用。');
-        return;
-    }
-    try {
-        // 记录开始等待连接的时间戳
-        const connectionStartTime = Date.now();
-        console.log(`开始尝试连接，时间戳: ${connectionStartTime}`);
-        console.log('new websocket !!!!!!!!!!!!!!!!!， start wait for onopen');
-        
-        emgWebSocket = new WebSocket('ws://localhost:8080');
-        
-        emgWebSocket.onopen = () => {
-            // 记录连接成功的时间戳
-            const connectionSuccessTime = Date.now();
-            // 计算连接耗时（毫秒）
-            const connectionDuration = connectionSuccessTime - connectionStartTime;
-            
-            console.log('✅ 已连接到实时引擎');
-            // 打印时间统计信息
-            console.log(`连接耗时: ${connectionDuration}ms`);
-            console.log(`开始等待时间戳: ${connectionStartTime}`);
-            console.log(`连接成功时间戳: ${connectionSuccessTime}`);
-            
-            this.isConnected = true;
-            this.updateConnectionStatus('已连接');
-        };
-        
-        emgWebSocket.onmessage = (event) => {
-            if (isPaused) return;
-            
-            try {
-                const packet = JSON.parse(event.data);
-                if (packet.type === 'emg_data') {
-                    packetCounter++;
-                    this.updateAllEMGChannels(packet.data);
-                    
-                    const noSignalMessage = document.getElementById('no-signal-message');
-                    if (noSignalMessage) {
-                        noSignalMessage.classList.add('hidden');
-                    }
-                }
-            } catch (error) {
-                console.error('❌ 解析数据失败:', error);
-            }
-        };
-        
-        emgWebSocket.onerror = (error) => {
-            console.error('❌ WebSocket连接错误:', error);
-            this.isConnected = false;
-            this.updateConnectionStatus('连接错误');
-        };
-        
-        emgWebSocket.onclose = () => {
-            console.log('🔌 连接已关闭，3秒后重连...');
-            this.updateConnectionStatus('重新连接中...');
-            this.isConnected = false;
-            setTimeout(() => this.connectToRealtimeEngine(), 1000);
-        };
-        
-    } catch (error) {
-        console.error('❌ 创建WebSocket连接失败:', error);
-        this.updateConnectionStatus('连接失败');
-    }
-},
 
-    // 更新连接状态
+    // WebSocket连接管理
+    connectToRealtimeEngine() {
+        // 阻止重复连接
+        if (this.isConnecting || this.isConnected) {
+            console.log(`[EMG连接] 无需重复连接 - 连接中: ${this.isConnecting}, 已连接: ${this.isConnected}`);
+            return;
+        }
+
+        // 清除现有重连定时器
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+
+        try {
+            this.isConnecting = true;
+            const connectionStartTime = Date.now();
+            console.log(`[EMG连接] 开始连接 (${new Date().toISOString()})，时间戳: ${connectionStartTime}`);
+
+            // 关闭可能存在的旧连接
+            if (this.emgWebSocket) {
+                this.emgWebSocket.close(1001, '替换为新连接');
+                this.emgWebSocket = null;
+            }
+
+            // 创建新连接（与后端realtimeEngine.js的8080端口对应）
+            this.emgWebSocket = new WebSocket('ws://localhost:8080');
+
+            // 连接超时保护（5秒）
+            const connectionTimeout = setTimeout(() => {
+                if (this.isConnecting) {
+                    console.error('[EMG连接] 超时未建立连接（>5秒）');
+                    this.emgWebSocket?.close(1006, '连接超时');
+                    this.handleConnectionError('连接超时');
+                }
+            }, 5000);
+
+            // 连接成功回调
+            this.emgWebSocket.onopen = () => {
+                clearTimeout(connectionTimeout);
+                const duration = Date.now() - connectionStartTime;
+                
+                this.isConnecting = false;
+                this.isConnected = true;
+                this.updateConnectionStatus('已连接');
+                
+                console.log(`[EMG连接] 成功（耗时 ${duration}ms）`);
+            };
+
+            // 消息接收处理
+            this.emgWebSocket.onmessage = (event) => {
+                if (this.isPaused) return;
+
+                try {
+                    const packet = JSON.parse(event.data);
+                    
+                    // 处理连接确认消息（与后端realtimeEngine的connection_established对应）
+                    if (packet.type === 'connection_established') {
+                        console.log(`[EMG消息] 服务器确认: ${packet.message}`);
+                        return;
+                    }
+                    
+                    // 处理EMG数据（与后端realtimeEngine的emg_data对应）
+                    if (packet.type === 'emg_data') {
+                        this.packetCounter++;
+                        this.updateAllEMGChannels(packet.data);
+                        
+                        // 隐藏无信号提示
+                        const noSignalEl = document.getElementById('no-signal-message');
+                        if (noSignalEl) noSignalEl.classList.add('hidden');
+                    }
+                } catch (error) {
+                    console.error('[EMG消息] 解析失败:', error);
+                }
+            };
+
+            // 错误处理
+            this.emgWebSocket.onerror = (error) => {
+                clearTimeout(connectionTimeout);
+                console.error('[EMG连接] 错误:', error);
+                this.handleConnectionError('连接错误');
+            };
+
+            // 关闭处理
+            this.emgWebSocket.onclose = (event) => {
+                clearTimeout(connectionTimeout);
+                console.log(`[EMG连接] 关闭（代码: ${event.code}，原因: ${event.reason || '无'}）`);
+
+                this.isConnecting = false;
+                this.isConnected = false;
+                this.emgWebSocket = null;
+
+                // 正常关闭（1000）或主动替换（1001）不重连，其他情况重连
+                const shouldReconnect = !([1000, 1001].includes(event.code));
+                if (shouldReconnect) {
+                    this.updateConnectionStatus('重新连接中...');
+                    this.reconnectTimer = setTimeout(() => {
+                        this.connectToRealtimeEngine();
+                    }, 3000);
+                } else {
+                    this.updateConnectionStatus('已断开（正常关闭）');
+                }
+            };
+
+        } catch (error) {
+            console.error('[EMG连接] 创建失败:', error);
+            this.handleConnectionError('创建连接失败');
+        }
+    },
+
+    // 连接错误统一处理
+    handleConnectionError(reason) {
+        this.isConnecting = false;
+        this.isConnected = false;
+        this.emgWebSocket = null;
+        this.updateConnectionStatus(reason);
+
+        // 安排重连（避免重复触发）
+        if (!this.reconnectTimer) {
+            this.reconnectTimer = setTimeout(() => {
+                this.connectToRealtimeEngine();
+            }, 3000);
+        }
+    },
+
+    // 更新连接状态显示
     updateConnectionStatus(status) {
-        const statusElement = document.getElementById('connection-status');
-        if (statusElement) {
-            statusElement.textContent = status;
+        const statusEl = document.getElementById('connection-status');
+        if (statusEl) {
+            statusEl.textContent = status;
+            // 可添加状态样式区分（成功/错误/重连）
+            statusEl.className = status.includes('已连接') ? 'status-connected' :
+                                 status.includes('错误') ? 'status-error' : 'status-reconnecting';
         }
     },
 
