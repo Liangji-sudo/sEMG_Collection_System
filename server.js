@@ -196,7 +196,12 @@ async function startServer() {
             console.log('设备状态API: http://localhost:' + PORT + '/api/device-status');
             
             // 自动打开浏览器（可选）
-            openBrowser();
+            // openBrowser();
+
+            // 新代码：仅在非 Electron 环境下自动打开浏览器
+            if (!process.env.ELECTRON_MODE) {
+            openBrowser(); // 非 Electron 启动时（如 npm start 单独运行服务）才打开浏览器
+            }
         });
         
         return server;

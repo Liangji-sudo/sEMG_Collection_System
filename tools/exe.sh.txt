@@ -1,0 +1,31 @@
+# install Electron
+npm install electron --save-dev
+
+# install package tool
+npm install electron-packager --save-dev
+
+# ensure your server.js and package.json "start"
+
+npm start
+
+
+
+
+# packageto exe
+npm run package
+
+# 1. if npm run package, change mirror
+# 设置 Electron 镜像为淘宝源（临时生效，仅当前终端窗口）
+$env:ELECTRON_MIRROR = "https://npmmirror.com/mirrors/electron/"
+
+# 再次尝试打包
+npm run package
+
+
+# 2. 如果任然失败，清除 npm 中可能错误的 electron 镜像配置
+npm config delete electron_mirror
+npm config delete ELECTRON_MIRROR
+
+# 重新设置镜像并打包
+$env:ELECTRON_MIRROR = "https://npmmirror.com/mirrors/electron/"
+npm run package

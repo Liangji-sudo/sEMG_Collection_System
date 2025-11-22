@@ -31,7 +31,7 @@ class DeviceSync extends EventEmitter {
                 console.log('正在初始化串口连接...');
                 
                 this.port = new SerialPort({
-                    path: '/dev/pts/5',
+                    path: 'COM4',
                     baudRate: 921600,
                     dataBits: 8,
                     stopBits: 1,
