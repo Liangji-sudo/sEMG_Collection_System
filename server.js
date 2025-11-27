@@ -197,6 +197,9 @@ async function startServer() {
             
             // 自动打开浏览器（可选）
             // openBrowser();
+	    if(!process.env.ELECTRON_MODE){
+		openBrowser();
+	    }
 
             // 新代码：仅在非 Electron 环境下自动打开浏览器
             if (!process.env.ELECTRON_MODE) {
