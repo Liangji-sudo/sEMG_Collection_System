@@ -1,12 +1,13 @@
 // deviceSync.js
-const { SerialPort } = require('serialport');
+const { spawn } = require('child_process');
 const EventEmitter = require('events');
 const realtimeEngine = require('./realtimeEngine');
+const path = require('path');
 
 class DeviceSync extends EventEmitter {
     constructor() {
         super();
-        this.port = null;
+        this.pythonProcess = null; // Python子进程
         this.packetCount = 0;
         this.lastTimestamp = 0;
         this.isConnected = false;
@@ -24,107 +25,94 @@ class DeviceSync extends EventEmitter {
         this.currentThroughput = 0;     // 当前吞吐量（字节/秒）
     }
 
-    // 初始化串口连接
+    // 初始化Python进程连接
     async initialize() {
         return new Promise((resolve, reject) => {
             try {
-                console.log('正在初始化串口连接...');
+                console.log('正在启动蓝牙数据脚本...');
                 
-                this.port = new SerialPort({
-                    path: 'COM4',
-                    baudRate: 921600,
-                    dataBits: 8,
-                    stopBits: 1,
-                    parity: 'none'
-                }, (err) => {
-                    if (err) {
-                        console.error('创建串口实例失败:', err.message);
-                        reject(err);
-                    }
-                });
-
-                this.port.on('open', () => {
-                    console.log('虚拟串口 /dev/pts/12 已打开（921600波特率）');
+                // 启动Python子进程，连接固定设备
+                this.pythonProcess = spawn('python', [path.join(__dirname, 'scan-connect.py')]);
+                
+                this.pythonProcess.on('spawn', () => {
+                    console.log('蓝牙数据脚本已启动');
                     this.isConnected = true;
                     this.startTime = Date.now();
                     resolve();
                 });
 
-                this.port.on('data', (data) => {
+                // 接收Python脚本输出的数据
+                this.pythonProcess.stdout.on('data', (data) => {
                     this.handleData(data);
                 });
 
-                this.port.on('error', (error) => {
-                    console.error('串口错误:', error.message);
-                    this.isConnected = false;
-                    this.emit('error', error);
+                // 处理Python脚本错误输出
+                this.pythonProcess.stderr.on('data', (data) => {
+                    console.error('Python脚本错误:', data.toString());
                 });
 
-                this.port.on('close', () => {
-                    console.log('串口连接已关闭');
+                this.pythonProcess.on('error', (error) => {
+                    console.error('Python进程错误:', error.message);
+                    this.isConnected = false;
+                    this.emit('error', error);
+                    reject(error);
+                });
+
+                this.pythonProcess.on('close', (code) => {
+                    console.log(`Python进程已退出，退出码: ${code}`);
                     this.isConnected = false;
                     this.emit('disconnected');
                 });
 
             } catch (error) {
-                console.error('初始化串口时发生错误:', error);
+                console.error('初始化Python进程时发生错误:', error);
                 reject(error);
             }
         });
     }
 
-    // 处理接收到的数据
+    // 处理接收到的数据（更新为解析JSON格式）
     handleData(data) {
         try {
-            // 数据包的计数
             this.packetCount++;
-
-            // 统计总的字节数量
             this.totalBytesReceived += data.length;
-
-            // 获取高精度时间戳
             const timestamp = this.getHighPrecisionTimestamp();
-            
-            // 计算与上一包的时间间隔（毫秒）
             const interval = this.lastTimestamp > 0 ? 
                 (parseFloat(timestamp) - parseFloat(this.lastTimestamp)) * 1000 : 0;
             this.lastInterval = interval;
             
-            // 解析EMG数据
-            const dataString = data.toString(); //一个数据包，可能会包含多组emg
-            const emgValues = this.parseEMGData(dataString);
+            const dataString = data.toString().trim();
+            if (!dataString) return;
             
-            if (emgValues && emgValues.length === 16) {
-                // 更新最新的通道值
-                this.lastValues = emgValues;
+            // 解析JSON数据
+            const emgData = JSON.parse(dataString);
+            
+            // 检查是否为emg类型且包含frames数据
+            if (emgData.type === 'emg' && emgData.frames && emgData.frames.length > 0) {
+                // 取第一组数据并转换（除以1e9）
+                const firstFrame = emgData.frames[0];
+                const emgValues = firstFrame.map(value => value / 1e9);
                 
-                // 更新EMG数据缓存
-                this.updateEMGData(emgValues, timestamp);
-                
-                // 构建数据包
-                const emgDataPacket = {
-                    channels: emgValues,
-                    timestamp: timestamp,
-                    packetCount: this.packetCount,
-                    interval: interval
-                };
-                
-                // 触发事件（保持向后兼容）
-                //this.emit('emgData', emgDataPacket);
-                
-                // 发送到实时引擎
-                realtimeEngine.receiveEMGData(emgDataPacket);
-                
-                // 打印数据包信息
-                if (this.packetCount % 100 === 0) {
-                    this.printDataInfo();
+                if (emgValues.length === 16) {
+                    this.lastValues = emgValues;
+                    this.updateEMGData(emgValues, timestamp);
+                    
+                    const emgDataPacket = {
+                        channels: emgValues,
+                        timestamp: timestamp,
+                        packetCount: this.packetCount,
+                        interval: interval
+                    };
+                    
+                    realtimeEngine.receiveEMGData(emgDataPacket);
+                    
+                    if (this.packetCount % 100 === 0) {
+                        this.printDataInfo();
+                    }
                 }
             }
             
-            // 计算数据速率
             this.updateDataRate();
-            
-            // 更新上次时间戳
             this.lastTimestamp = timestamp;
             this.lastDataTime = Date.now();
             
@@ -134,92 +122,29 @@ class DeviceSync extends EventEmitter {
         }
     }
 
-
-        // 新增：计算并返回当前每秒传输的数据量（字节/秒）
+    // 计算当前吞吐量
     getCurrentThroughput() {
         const currentTime = Date.now();
         
-        // 首次调用时初始化基准值
         if (!this.lastThroughputCheckTime) {
             this.lastThroughputCheckTime = currentTime;
             this.lastBytesCount = this.totalBytesReceived;
             return 0;
         }
         
-        // 计算时间差（毫秒）
         const timeDiffMs = currentTime - this.lastThroughputCheckTime;
         if (timeDiffMs <= 0) {
-            return this.currentThroughput; // 避免除以零
+            return this.currentThroughput;
         }
         
-        // 计算字节差和时间差（转换为秒）
         const bytesDiff = this.totalBytesReceived - this.lastBytesCount;
         const timeDiffSec = timeDiffMs / 1000;
-        
-        // 计算吞吐量（字节/秒）
         this.currentThroughput = bytesDiff / timeDiffSec;
         
-        // 更新基准值，用于下次计算
         this.lastThroughputCheckTime = currentTime;
         this.lastBytesCount = this.totalBytesReceived;
         
         return this.currentThroughput;
-    }
-
-    // 解析EMG数据包格式
-    parseEMGData(dataString) {
-        try {
-            const cleanString = dataString.trim();
-            
-            // 空数据检查
-            if (cleanString.length === 0) {
-                return null;
-            }
-            
-            // 处理多行数据， 只取第一行，剩下的因为实时性，全部抛弃
-            if (cleanString.includes('\n')) {
-                const lines = cleanString.split('\n').filter(line => line.trim().length > 0);
-                for (let i = lines.length - 1; i >= 0; i--) {
-                    const values = this.parseSingleLine(lines[i]);
-                    if (values && values.length === 16) {
-                        return values;
-                    }
-                }
-                return null;
-            }
-            
-            // 处理单行数据
-            return this.parseSingleLine(cleanString);
-            
-        } catch (error) {
-            console.error('解析EMG数据失败:', error);
-            return null;
-        }
-    }
-
-    // 解析单行数据
-    parseSingleLine(line) {
-        const cleanLine = line.trim();
-        
-        // CSV格式
-        if (cleanLine.includes(',')) {
-            const values = cleanLine.split(',').map(val => {
-                const num = parseFloat(val.trim());
-                return isNaN(num) ? 0 : num;
-            });
-            return values.length === 16 ? values : null;
-        }
-        
-        // 空格分隔格式
-        if (cleanLine.includes(' ')) {
-            const values = cleanLine.split(/\s+/).map(val => {
-                const num = parseFloat(val.trim());
-                return isNaN(num) ? 0 : num;
-            });
-            return values.length === 16 ? values : null;
-        }
-        
-        return null;
     }
 
     // 更新EMG数据缓存
@@ -227,13 +152,11 @@ class DeviceSync extends EventEmitter {
         const currentTime = Date.now();
         
         for (let i = 0; i < values.length; i++) {
-            // 添加新数据点
             this.emgData[i].push({
                 value: values[i],
                 timestamp: currentTime
             });
             
-            // 限制数据点数
             if (this.emgData[i].length > this.maxDataPoints) {
                 this.emgData[i].shift();
             }
@@ -259,7 +182,7 @@ class DeviceSync extends EventEmitter {
 
     // 打印数据信息
     printDataInfo() {
-        //console.log(`📦 数据包 #${this.packetCount.toString().padStart(6)} | 间隔: ${this.lastInterval.toFixed(3).padStart(8)}ms | 速率: ${this.dataRate.toFixed(2).padStart(6)} 包/秒`);
+        console.log(`📦 数据包 #${this.packetCount.toString().padStart(6)} | 间隔: ${this.lastInterval.toFixed(3).padStart(8)}ms | 速率: ${this.dataRate.toFixed(2).padStart(6)} 包/秒`);
     }
 
     // 获取模块状态
@@ -279,25 +202,19 @@ class DeviceSync extends EventEmitter {
     // 关闭连接
     async close() {
         return new Promise((resolve) => {
-            if (this.port && this.port.isOpen) {
-                this.port.close((error) => {
-                    if (error) {
-                        console.error('关闭串口时发生错误:', error);
-                        this.emit('error', error);
-                    } else {
-                        console.log('【设备协同模块已关闭】');
-                        this.isConnected = false;
-                        this.emit('disconnected');
-                    }
-                    resolve();
-                });
+            if (this.pythonProcess) {
+                this.pythonProcess.kill();
+                this.pythonProcess = null;
+                this.isConnected = false;
+                console.log('【蓝牙数据进程已关闭】');
+                this.emit('disconnected');
+                resolve();
             } else {
-                console.log('串口未打开，无需关闭');
+                console.log('蓝牙进程未启动，无需关闭');
                 resolve();
             }
         });
     }
-
 
     // 重置模块状态
     reset() {
@@ -313,18 +230,17 @@ class DeviceSync extends EventEmitter {
 
     // 检查连接状态
     checkConnection() {
-        return this.isConnected && this.port && this.port.isOpen;
+        return this.isConnected && this.pythonProcess !== null;
     }
 
     // 获取连接信息
     getConnectionInfo() {
         return {
             isConnected: this.isConnected,
-            portPath: '/dev/pts/12',
-            baudRate: 921600,
-            dataBits: 8,
-            stopBits: 1,
-            parity: 'none'
+            source: '蓝牙设备',
+            deviceMac: 'dc:b4:d9:1f:52:be',
+            scriptName: 'scan-connect.py',
+            dataFormat: 'JSON格式，包含5组16通道数据'
         };
     }
 }
@@ -332,7 +248,6 @@ class DeviceSync extends EventEmitter {
 // 创建单例实例
 const deviceSync = new DeviceSync();
 
-// 错误处理事件
 deviceSync.on('error', (error) => {
     console.error('设备协同模块错误:', error.message);
 });
@@ -341,9 +256,8 @@ deviceSync.on('disconnected', () => {
     console.log('设备连接已断开');
 });
 
-// 模块信息
 console.log('DeviceSync模块加载完成');
-console.log('支持16通道EMG数据实时采集');
-console.log('串口配置: /dev/pts/5 @ 921600 baud');
+console.log('支持16通道EMG蓝牙数据实时接收');
+console.log('连接设备MAC: dc:b4:d9:1f:52:be');
 
 module.exports = deviceSync;
