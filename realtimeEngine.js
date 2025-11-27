@@ -5,22 +5,39 @@ const EventEmitter = require('events');
 class RealtimeEngine extends EventEmitter {
     constructor() {
         super();
+        // 实时引擎websocket服务器，用于向各个模块，前端广播各自需要的数据
         this.wss = null;
         this.clients = new Set();
         this.isRunning = false;
         this.dataBuffer = [];
         this.maxBufferSize = 1000;
         this.broadcastInterval = null;
+
+        // ===== 新增：Python WebSocket 客户端配置 =====
+        this.ble_client = null; // 连接 Python 的 WebSocket 客户端实例
+        this.ble_clientUrl = 'ws://localhost:8766'; // Python 服务端的 WebSocket 地址（替换为你的实际地址）
+        this.reconnectInterval = 3000; // 重连间隔（3秒）
+        this.maxReconnectTimes = 3;
+        this.currentReconnectTimes = 0; // 当前重连次数
+        this.reconnectTimer = null; // 重连计时器
+
+        this.connectTimeoutTimer = null;
+
     }
 
     // 启动实时引擎
     start(port = 8080) {
         return new Promise((resolve, reject) => {
             try {
+                //启动realtimeEngine 广播服务器
                 this.wss = new WebSocket.Server({ port });
                 
+                this.connectTimeoutTimer = setTimeout(() => {
+                    this.ble_client_connect();
+                }, 1000); // 延迟 5000 毫秒（5秒）
+
                 this.wss.on('connection', (ws) => {
-                    console.log('前端WebSocket连接已建立');
+                    console.log('[realtimeEngine] 前端client连接已建立');
                     this.clients.add(ws);
                     
                     // 发送连接确认和当前状态
@@ -30,19 +47,21 @@ class RealtimeEngine extends EventEmitter {
                         timestamp: Date.now()
                     });
                     // 打印连接确认消息
-                    console.log(`[${new Date().toISOString()}] 发送连接确认给前端:`, JSON.parse(connectMsg));
+                    console.log(`[realtimeEngine] [${new Date().toISOString()}] 发送连接确认给前端:`, JSON.parse(connectMsg));
                     ws.send(connectMsg);
 
+
                     // 发送缓冲的最新数据
+                    
                     this.sendBufferedData(ws);
 
                     ws.on('close', () => {
-                        console.log('前端WebSocket连接已关闭');
+                        console.log('[realtimeEngine] 前端WebSocket连接已关闭');
                         this.clients.delete(ws);
                     });
 
                     ws.on('error', (error) => {
-                        console.error('WebSocket错误:', error);
+                        console.error('[realtimeEngine] WebSocket错误:', error);
                         this.clients.delete(ws);
                     });
                 });
@@ -62,14 +81,96 @@ class RealtimeEngine extends EventEmitter {
                     reject(error);
                 });
 
+                //启动realtimeEngine 的 ble_client  
+                //realtimeEngine.ble_client_connect();
+
             } catch (error) {
-                console.error('启动实时引擎失败:', error);
+                console.error('[realtimeEngine] 启动实时引擎失败:', error);
                 reject(error);
             }
         });
     }
 
-    // 接收来自设备协同模块的EMG数据
+
+    // 提供方法：作为client连接ble_python服务器
+    ble_client_connect() {
+        //关闭当前已有的连接
+        if (this.ble_client) {
+                this.ble_client.close();
+                this.ble_client = null;
+            }
+        try {
+            // 创建新连接
+            this.ble_client = new WebSocket(this.ble_clientUrl);
+            console.log("[realtimeEngine] create ble_client successful");
+
+            // 连接成功回调
+            this.ble_client.onopen = () => {
+                console.log(`[realtimeEngine] ble_server连接成功`);
+                this.currentReconnectTimes = 0; // 重置重连次数
+                clearTimeout(this.reconnectTimer);
+                clearTimeout(this.connectTimeoutTimer);
+            };
+
+            // 消息接收处理
+            this.ble_client.onmessage = (event) => {
+                try {
+                    const packet = JSON.parse(event.data);
+                    
+                    // 处理连接确认消息（与后端realtimeEngine的connection_established对应）
+                    if (packet.type === 'emg') {
+                        //console.log(`[realtimeEngine] 来自ble_server的emg消息: ${packet.raw_data}`);
+                        return;
+                    }
+                } catch (error) {
+                    console.error('[realtimeEngine] ble_server的emg消息解析失败:', error);
+                }
+            };
+
+            // 错误处理
+            this.ble_client.onerror = (error) => {
+                console.error('[realtimeEngine] 错误:', error);
+                this.handleReconnect(); // 触发重连
+            };
+
+            // 关闭处理
+            this.ble_client.onclose = (event) => {
+                //clearTimeout(connectionTimeout);
+                console.log(`[realtimeEngine] ble_server 连接关闭：code=${code}, reason=${reason.toString()}`);
+                // 非主动关闭（code !== 1000）且未达到最大重连次数时重连
+                if (code !== 1000) {
+                    this.handleReconnect();
+                }
+            };
+
+        } catch (error) {
+            console.error('[realtimeEngine] realtimeEngine创建失败:', error);
+            this.handleReconnect('创建连接失败');
+        }
+    }
+
+
+/**
+   * 断线重连逻辑
+   */
+  handleReconnect() {
+    // 检查是否达到最大重连次数
+    if (this.maxReconnectTimes > 0 && this.currentReconnectTimes >= this.maxReconnectTimes) {
+      console.error(`[realtimeEngine] ❌ 已达到最大重连次数（${this.maxReconnectTimes}），停止重连`);
+      return;
+    }
+
+    this.currentReconnectTimes++;
+    console.log(`[realtimeEngine] 🔄 正在进行第 ${this.currentReconnectTimes} 次重连目标服务器...`);
+
+    // 延迟重连（避免频繁连接）
+    this.reconnectTimer = setTimeout(() => {
+      this.connectTargetServer();
+    }, this.reconnectInterval);
+  }
+
+
+    // 接受来自ble_server数据，并即时广播出去
     receiveEMGData(emgData) {
         if (!this.isRunning) return;
 
@@ -114,7 +215,7 @@ class RealtimeEngine extends EventEmitter {
                 try {
                     client.send(message);
                 } catch (error) {
-                    console.error('发送数据到客户端失败:', error);
+                    console.error('[realtimeEngine] 发送数据到客户端失败:', error);
                     this.clients.delete(client);
                 }
             }
@@ -197,6 +298,14 @@ class RealtimeEngine extends EventEmitter {
         } else {
             resolve();
         }
+
+        // 关闭目标 Client 连接（主动关闭，不触发重连）
+        if (this.targetClient) {
+            this.targetClient.close(1000, '代理关闭');
+            this.targetClient = null;
+        }
+        // 清除重连计时器
+        clearTimeout(this.reconnectTimer);
     });
 }
 

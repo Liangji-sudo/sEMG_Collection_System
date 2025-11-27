@@ -152,81 +152,411 @@
       </div>
     </main>
 
-    <!-- 底部设备状态区域 -->
-    <footer class="w-full p-6 bg-white shadow-inner">
-      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-6">
-        <!-- 蓝牙状态 -->
-        <div class="bg-light-2 p-4 rounded-lg">
-          <div class="flex items-center justify-between mb-2">
-            <span class="font-medium">蓝牙连接</span>
-            <span class="flex items-center text-success">
-              <i class="fa fa-check-circle mr-1"></i>已连接
-            </span>
-          </div>
-          <div class="w-full bg-light-1 rounded-full h-2">
-            <div id="bluetooth-strength" class="bg-success h-2 rounded-full" style="width: 92%"></div>
-          </div>
-          <div class="text-xs text-dark-2 mt-1">信号强度: <span id="bluetooth-db">-58</span>dBm</div>
-        </div>
+ <!-- 底部设备状态区域 -->
+<footer class="w-full p-6 bg-white shadow-inner">
+  <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-6">
+ 
 
-        <!-- 设备电量 -->
-        <div class="bg-light-2 p-4 rounded-lg">
-          <div class="flex items-center justify-between mb-2">
-            <span class="font-medium">设备电量</span>
-            <span class="flex items-center text-success">
-              <i class="fa fa-battery-three-quarters mr-1"></i>78%
-            </span>
-          </div>
-          <div class="w-full bg-light-1 rounded-full h-2">
-            <div class="bg-warning h-2 rounded-full" style="width: 78%"></div>
-          </div>
-          <div class="text-xs text-dark-2 mt-1">预计可用: 5.2小时</div>
-        </div>
 
-        <!-- 相机连接 -->
-        <div class="bg-light-2 p-4 rounded-lg">
-          <div class="flex items-center justify-between mb-2">
-            <span class="font-medium">相机状态</span>
-            <span class="flex items-center text-success">
-              <i class="fa fa-check-circle mr-1"></i>已连接
-            </span>
-          </div>
-          <div class="flex items-center justify-between text-xs text-dark-2 mt-3">
-            <span>型号: Sony IMX586</span>
-            <span class="text-primary animate-pulse-slow">运行中</span>
-          </div>
-        </div>
 
-        <!-- 存储状态 -->
-        <div class="bg-light-2 p-4 rounded-lg">
-          <div class="flex items-center justify-between mb-2">
-            <span class="font-medium">存储容量</span>
-            <span class="flex items-center text-dark-2">
-              <i class="fa fa-hdd-o mr-1"></i>42%
-            </span>
-          </div>
-          <div class="w-full bg-light-1 rounded-full h-2">
-            <div class="bg-primary h-2 rounded-full" style="width: 42%"></div>
-          </div>
-          <div class="text-xs text-dark-2 mt-1">已用: 87.3GB / 总: 208GB</div>
-        </div>
-
-        <!-- 实时信号传输吞吐量 -->
-        <div class="bg-light-2 p-4 rounded-lg">
-          <div class="flex items-center justify-between mb-2">
-            <span class="font-medium">传输吞吐量</span>
-            <span class="flex items-center text-primary animate-pulse-slow">
-              <i class="fa fa-exchange mr-1"></i>实时
-            </span>
-          </div>
-          <div class="w-full bg-light-1 rounded-full h-2">
-            <div id="throughput-bar" class="bg-primary h-2 rounded-full" style="width: 75%"></div>
-          </div>
-          <div class="text-xs text-dark-2 mt-1">当前: <span id="throughput-value">3.24</span> kb/s</div>
-        </div>
-      </div>
-    </footer>
+    <!-- 蓝牙状态（极致缩小版，修复按钮大小不一致问题） -->
+<div class="bg-light-2 p-3 rounded-lg">
+  <div class="flex items-center justify-between mb-1.5">
+    <span class="font-medium text-[10px]">蓝牙连接</span>
+    <!-- 蓝牙连接状态显示 -->
+    <span id="bluetooth-connect-status" class="flex items-center text-danger text-[9px]">
+      <i class="fa fa-times-circle mr-0.25"></i>未连
+    </span>
   </div>
+
+  <!-- 极致缩小：蓝牙控制区域（统一按钮大小） -->
+  <div class="flex flex-col sm:flex-row gap-2 items-center" style="
+    --unified-w: 80px; /* 统一宽度 */
+    --unified-h: 24px; /* 统一高度 */
+    --scan-bg: #165DFF; /* 扫描按钮背景色（主蓝） */
+    --connect-bg: #41ac5a; /* 连接按钮背景色（成功绿） */
+    --select-bg: #E0F7FA; /* 下拉框自定义背景色（浅青） */
+    --border-color: #B2EBF2; /* 下拉框边框色（对应浅青） */
+    --text-color: #263238; /* 下拉框文字色（深灰） */
+  ">
+
+
+    <!-- 扫描按钮（蓝色背景+白色文字） -->
+    <button id="scanBtn" style="
+      width: var(--unified-w);
+      height: var(--unified-h);
+      padding: 0 8px;
+      font-size: 14px;
+      border-radius: 6px;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+      background-color: var(--scan-bg); /* 自定义背景色 */
+      color: white; /* 文字/图标颜色 */
+      border: none;
+      cursor: pointer;
+    ">
+      <i class="fa fa-search" style="margin-right: 4px;"></i>扫描
+    </button>
+
+    <!-- 连接按钮（绿色背景+白色文字，默认禁用） -->
+    <button id="connectBtn" disabled style="
+      width: var(--unified-w);
+      height: var(--unified-h);
+      padding: 0 8px;
+      font-size: 14px;
+      border-radius: 6px;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+      background-color: var(--connect-bg); /* 自定义背景色 */
+      color: white; /* 文字/图标颜色 */
+      border: none;
+      cursor: not-allowed;
+      opacity: 0.6; /* 禁用时半透明 */
+    ">
+      <i class="fa fa-link" style="margin-right: 4px;"></i>连接
+    </button>
+
+    <!-- 设备下拉框（自定义浅青背景+深灰文字） -->
+    <select id="deviceList" disabled style="
+      width: var(--unified-w);
+      height: var(--unified-h);
+      padding: 0 24px 0 8px;
+      font-size: 14px;
+      border-radius: 6px;
+      line-height: 1;
+      border: 1px solid var(--border-color); /* 对应背景色的边框 */
+      background-color: var(--select-bg); /* 自定义背景色（非白色） */
+      color: var(--text-color); /* 文字颜色 */
+      appearance: none;
+      background-image: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2212%22 height=%228%22 fill=%22%23263238%22><path d=%22M6 8L0 2h12L6 8z%22/></svg>');
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      cursor: not-allowed;
+      opacity: 0.6;
+      outline: none;
+    ">
+      <option value="">扫后选</option>
+    </select>
+    
+  </div>
+
+  <!-- 信号强度进度条（更细） -->
+  <div class="w-full bg-light-1 rounded-full h-1">
+    <div id="bluetooth-strength" class="bg-danger h-1 rounded-full" style="width: 0%"></div>
+  </div>
+  <div class="text-[9px] text-dark-2 mt-0.5 line-clamp-1 flex items-center gap-1">
+    <span>信号: <span id="bluetooth-db">--</span>dBm</span>
+    <span>|</span>
+    <span>状态: <span id="bluetooth-status-desc">未扫</span></span>
+  </div>
+</div>
+
+
+
+
+
+
+    <!-- 设备电量（保持不变） -->
+    <div class="bg-light-2 p-4 rounded-lg">
+      <div class="flex items-center justify-between mb-2">
+        <span class="font-medium">设备电量</span>
+        <span class="flex items-center text-success">
+          <i class="fa fa-battery-three-quarters mr-1"></i>78%
+        </span>
+      </div>
+      <div class="w-full bg-light-1 rounded-full h-2">
+        <div class="bg-warning h-2 rounded-full" style="width: 78%"></div>
+      </div>
+      <div class="text-xs text-dark-2 mt-1">预计可用: 5.2小时</div>
+    </div>
+
+    <!-- 相机连接（保持不变） -->
+    <div class="bg-light-2 p-4 rounded-lg">
+      <div class="flex items-center justify-between mb-2">
+        <span class="font-medium">相机状态</span>
+        <span class="flex items-center text-success">
+          <i class="fa fa-check-circle mr-1"></i>已连接
+        </span>
+      </div>
+      <div class="flex items-center justify-between text-xs text-dark-2 mt-3">
+        <span>型号: Sony IMX586</span>
+        <span class="text-primary animate-pulse-slow">运行中</span>
+      </div>
+    </div>
+
+    <!-- 存储状态（保持不变） -->
+    <div class="bg-light-2 p-4 rounded-lg">
+      <div class="flex items-center justify-between mb-2">
+        <span class="font-medium">存储容量</span>
+        <span class="flex items-center text-dark-2">
+          <i class="fa fa-hdd-o mr-1"></i>42%
+        </span>
+      </div>
+      <div class="w-full bg-light-1 rounded-full h-2">
+        <div class="bg-primary h-2 rounded-full" style="width: 42%"></div>
+      </div>
+      <div class="text-xs text-dark-2 mt-1">已用: 87.3GB / 总: 208GB</div>
+    </div>
+
+    <!-- 实时信号传输吞吐量（保持不变） -->
+    <div class="bg-light-2 p-4 rounded-lg">
+      <div class="flex items-center justify-between mb-2">
+        <span class="font-medium">传输吞吐量</span>
+        <span class="flex items-center text-primary animate-pulse-slow">
+          <i class="fa fa-exchange mr-1"></i>实时
+        </span>
+      </div>
+      <div class="w-full bg-light-1 rounded-full h-2">
+        <div id="throughput-bar" class="bg-primary h-2 rounded-full" style="width: 75%"></div>
+      </div>
+      <div class="text-xs text-dark-2 mt-1">当前: <span id="throughput-value">3.24</span> kb/s</div>
+    </div>
+  </div>
+</footer>
+ </div>
+
+
+<!-- 新增：WebSocket通信逻辑 -->
+<script>
+// 全局状态管理
+const bluetoothState = {
+  isConnected: false,
+  currentMac: '',
+  isScanning: false,
+  isConnecting: false
+};
+
+// 建立WebSocket连接（使用8766端口避免冲突）
+const ws = new WebSocket('ws://localhost:8766');
+
+// DOM元素
+const scanBtn = document.getElementById('scanBtn');
+const connectBtn = document.getElementById('connectBtn');
+const deviceList = document.getElementById('deviceList');
+const bluetoothConnectStatus = document.getElementById('bluetooth-connect-status');
+const bluetoothStrength = document.getElementById('bluetooth-strength');
+const bluetoothDb = document.getElementById('bluetooth-db');
+const bluetoothStatusDesc = document.getElementById('bluetooth-status-desc');
+
+// 初始化状态
+function initBluetoothUI() {
+  updateConnectButton('connect', false);
+  deviceList.disabled = true;
+  bluetoothStrength.style.width = '0%';
+  bluetoothStrength.className = 'bg-danger h-2 rounded-full';
+}
+
+// 更新连接按钮状态
+function updateConnectButton(type, disabled = false) {
+  switch(type) {
+    case 'connect':
+      connectBtn.innerHTML = '<i class="fa fa-link mr-1"></i>连接';
+      connectBtn.className = 'px-3 py-1 text-sm bg-success text-white rounded hover:bg-success/90 transition-colors';
+      connectBtn.disabled = disabled;
+      break;
+    case 'connecting':
+      connectBtn.innerHTML = '<i class="fa fa-spinner fa-spin mr-1"></i>连接中';
+      connectBtn.className = 'px-3 py-1 text-sm bg-gray-400 text-white rounded cursor-not-allowed';
+      connectBtn.disabled = true;
+      break;
+    case 'disconnect':
+      connectBtn.innerHTML = '<i class="fa fa-unlink mr-1"></i>断开';
+      connectBtn.className = 'px-3 py-1 text-sm bg-danger text-white rounded hover:bg-danger/90 transition-colors';
+      connectBtn.disabled = disabled;
+      break;
+    case 'reconnect':
+      connectBtn.innerHTML = '<i class="fa fa-refresh mr-1"></i>重连';
+      connectBtn.className = 'px-3 py-1 text-sm bg-warning text-white rounded hover:bg-warning/90 transition-colors';
+      connectBtn.disabled = disabled;
+      break;
+  }
+}
+
+// 更新蓝牙连接状态显示
+function updateBluetoothStatus(isConnected, mac = '', rssi = '--') {
+  bluetoothState.isConnected = isConnected;
+  bluetoothState.currentMac = mac;
+
+  if (isConnected) {
+    bluetoothConnectStatus.innerHTML = '<i class="fa fa-check-circle mr-1"></i>已连接';
+    bluetoothConnectStatus.className = 'flex items-center text-success';
+    bluetoothStatusDesc.textContent = `已连接设备: ${mac}`;
+    bluetoothDb.textContent = rssi;
+    
+    // 根据RSSI更新信号强度（-30dBm最佳，-100dBm最差）
+    let strengthPercent = 0;
+    if (rssi !== '--' && !isNaN(rssi)) {
+      rssi = parseInt(rssi);
+      if (rssi >= -50) strengthPercent = 100;
+      else if (rssi >= -70) strengthPercent = 75;
+      else if (rssi >= -85) strengthPercent = 50;
+      else if (rssi >= -100) strengthPercent = 25;
+      
+      bluetoothStrength.className = strengthPercent >= 50 ? 
+        'bg-success h-2 rounded-full' : 
+        strengthPercent >= 25 ? 'bg-warning h-2 rounded-full' : 'bg-danger h-2 rounded-full';
+    }
+    bluetoothStrength.style.width = `${strengthPercent}%`;
+    updateConnectButton('disconnect');
+  } else {
+    bluetoothConnectStatus.innerHTML = '<i class="fa fa-times-circle mr-1"></i>未连接';
+    bluetoothConnectStatus.className = 'flex items-center text-danger';
+    bluetoothStatusDesc.textContent = mac ? `连接失败: ${mac}` : '未扫描设备';
+    bluetoothDb.textContent = '--';
+    bluetoothStrength.style.width = '0%';
+    bluetoothStrength.className = 'bg-danger h-2 rounded-full';
+  }
+}
+
+// 扫描按钮点击事件
+scanBtn.addEventListener('click', () => {
+  if (bluetoothState.isScanning) return;
+  
+  bluetoothState.isScanning = true;
+  scanBtn.innerHTML = '<i class="fa fa-spinner fa-spin mr-1"></i>扫描中';
+  scanBtn.disabled = true;
+  deviceList.innerHTML = '<option value="">扫描中...</option>';
+  deviceList.disabled = true;
+  bluetoothStatusDesc.textContent = '正在扫描蓝牙设备...';
+  
+  // 发送扫描指令
+  ws.send(JSON.stringify({ action: 'scan' }));
+});
+
+// 连接/断开按钮点击事件
+connectBtn.addEventListener('click', () => {
+  const selectedMac = deviceList.value;
+  
+  if (bluetoothState.isConnected) {
+    // 断开连接
+    updateConnectButton('connecting');
+    bluetoothStatusDesc.textContent = '正在断开连接...';
+    ws.send(JSON.stringify({ 
+      action: 'disconnect', 
+      mac: bluetoothState.currentMac 
+    }));
+  } else {
+    if (!selectedMac) {
+      alert('请先选择要连接的蓝牙设备');
+      return;
+    }
+    
+    // 连接设备
+    updateConnectButton('connecting');
+    bluetoothStatusDesc.textContent = `正在连接设备: ${selectedMac}...`;
+    ws.send(JSON.stringify({ 
+      action: 'connect', 
+      mac: selectedMac 
+    }));
+  }
+});
+
+// 设备列表变更事件（切换设备后重置按钮状态）
+deviceList.addEventListener('change', () => {
+  if (deviceList.value && !bluetoothState.isConnected) {
+    updateConnectButton('connect');
+  }
+});
+
+// WebSocket消息处理
+ws.onmessage = (event) => {
+  try {
+    const data = JSON.parse(event.data);
+    console.log('收到服务器消息:', data);
+    
+    switch(data.action) {
+      case 'scan_result':
+        // 处理扫描结果
+        bluetoothState.isScanning = false;
+        scanBtn.innerHTML = '<i class="fa fa-search mr-1"></i>扫描';
+        scanBtn.disabled = false;
+        
+        if (data.devices && data.devices.length > 0) {
+          // 填充设备列表
+          deviceList.innerHTML = '<option value="">请选择设备</option>';
+          data.devices.forEach(device => {
+            const option = document.createElement('option');
+            option.value = device.mac;
+            option.textContent = `${device.name || '未知设备'} (${device.mac})`;
+            deviceList.appendChild(option);
+          });
+          deviceList.disabled = false;
+          bluetoothStatusDesc.textContent = `找到${data.devices.length}个蓝牙设备`;
+          
+          // 如果之前有连接过的设备，自动选中
+          if (bluetoothState.currentMac && data.devices.some(d => d.mac === bluetoothState.currentMac)) {
+            deviceList.value = bluetoothState.currentMac;
+          }
+        } else {
+          deviceList.innerHTML = '<option value="">未找到设备</option>';
+          deviceList.disabled = true;
+          bluetoothStatusDesc.textContent = '未找到任何蓝牙设备';
+          updateConnectButton('connect', true);
+        }
+        break;
+        
+      case 'connect_result':
+        // 处理连接结果
+        if (data.success) {
+          // 连接成功
+          updateBluetoothStatus(true, data.mac, data.rssi || '--');
+        } else {
+          // 连接失败
+          updateBluetoothStatus(false, data.mac);
+          updateConnectButton('reconnect');
+          bluetoothStatusDesc.textContent = `连接失败: ${data.message || '未知错误'}`;
+        }
+        break;
+        
+      case 'disconnect_result':
+        // 处理断开结果
+        updateBluetoothStatus(false);
+        updateConnectButton('connect', !deviceList.value);
+        bluetoothStatusDesc.textContent = data.success ? '已断开连接' : '断开失败';
+        break;
+        
+      case 'device_status':
+        // 实时更新设备状态（如信号强度、电量）
+        if (data.mac === bluetoothState.currentMac && bluetoothState.isConnected) {
+          bluetoothDb.textContent = data.rssi || bluetoothDb.textContent;
+          // 可扩展：更新电量显示
+          // batteryElement.textContent = data.battery || '78%';
+        }
+        break;
+    }
+  } catch (error) {
+    console.error('解析WebSocket消息失败:', error);
+  }
+};
+
+// WebSocket连接状态处理
+ws.onopen = () => {
+  console.log('WebSocket连接成功');
+  initBluetoothUI();
+};
+
+ws.onclose = () => {
+  console.log('WebSocket连接断开');
+  bluetoothStatusDesc.textContent = '通信断开，请刷新页面';
+  scanBtn.disabled = true;
+  deviceList.disabled = true;
+  updateConnectButton('connect', true);
+};
+
+ws.onerror = (error) => {
+  console.error('WebSocket错误:', error);
+  bluetoothStatusDesc.textContent = '通信错误';
+};
+
+// 页面加载初始化
+window.addEventListener('load', initBluetoothUI);
+</script>
 
 
 
@@ -355,6 +685,7 @@
 
 
 <!-- 2.2 采集界面左右模块的实现逻辑 -->
+
 <script>
 // ==================== 全局变量 ====================
 let emgWebSocket = null;
@@ -1081,7 +1412,9 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 </script>
 
+
 <!--  2.3 采集界面右半部分采集逻辑流程 -->
+
 <script>
     // 2. 采集界面逻辑
     const taskIntro = document.getElementById('task-intro');
@@ -1089,9 +1422,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const countdownArea = document.getElementById('countdown-area');
     const collectingArea = document.getElementById('collecting-area');
     const startCollectBtn = document.getElementById('start-collect');
-    const skipAnimationBtn = document.getElementById('skip-animation');
-    const prevGestureBtn = document.getElementById('prev-gesture');
-    const nextGestureBtn = document.getElementById('next-gesture');
+    //const skipAnimationBtn = document.getElementById('skip-animation');
+    //const prevGestureBtn = document.getElementById('prev-gesture');
+    //const nextGestureBtn = document.getElementById('next-gesture');
     const restartCollectBtn = document.getElementById('restart-collect');
     const countdownEl = document.getElementById('countdown');
     const currentAnimationTitle = document.getElementById('current-animation-title');
@@ -1160,24 +1493,28 @@ document.addEventListener('DOMContentLoaded', function() {
     startCollectBtn.addEventListener('click', () => {
       taskIntro.classList.add('hidden');
       gestureAnimation.classList.remove('hidden');
-      skipAnimationBtn.classList.remove('hidden');
+      //skipAnimationBtn.classList.remove('hidden');
       startCollectBtn.classList.add('hidden');
       updateGestureAnimation(0);
     });
 
     // 跳过动画
+    /*
     skipAnimationBtn.addEventListener('click', () => {
       gestureAnimation.classList.add('hidden');
       skipAnimationBtn.classList.add('hidden');
       countdownArea.classList.remove('hidden');
       startCountdown();
     });
+    */
 
     // 上一个手势
+    /*
     prevGestureBtn.addEventListener('click', () => {
       currentGestureIndex = Math.max(0, currentGestureIndex - 1);
       updateGestureAnimation(currentGestureIndex);
     });
+    */
 
     // 下一个手势
     nextGestureBtn.addEventListener('click', () => {
@@ -1185,7 +1522,7 @@ document.addEventListener('DOMContentLoaded', function() {
       
       if (currentGestureIndex === gestures.length - 1) {
         gestureAnimation.classList.add('hidden');
-        skipAnimationBtn.classList.add('hidden');
+        //skipAnimationBtn.classList.add('hidden');
         countdownArea.classList.remove('hidden');
         startCountdown();
       } else {
@@ -1301,7 +1638,7 @@ document.addEventListener('DOMContentLoaded', function() {
       countdownArea.classList.add('hidden');
       collectingArea.classList.add('hidden');
       startCollectBtn.classList.remove('hidden');
-      skipAnimationBtn.classList.add('hidden');
+      //skipAnimationBtn.classList.add('hidden');
 
       EMGDisplayModule.cleanup();
       
@@ -1533,6 +1870,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 
 <!-- 3.2 后台界面显示左半部分逻辑 -->
+ 
 <script>
 // 添加CSS样式
 const signalStyles = `
@@ -1765,7 +2103,10 @@ if (!document.querySelector('#signal-styles')) {
 </script>
 
 
+
+
 <!--  所有按钮页面切换点击逻辑 -->
+
 <script>
     // 页面切换逻辑
     const pages = document.querySelectorAll('.page');
@@ -1808,6 +2149,7 @@ if (!document.querySelector('#signal-styles')) {
 
 
 <!--  刷新首页的底部状态栏 -->
+
 <script>
     // 1. 从后端API获取动态设备状态
     async function fetchDeviceStatus() {
@@ -1831,6 +2173,8 @@ if (!document.querySelector('#signal-styles')) {
     setInterval(fetchDeviceStatus, 2000);
     fetchDeviceStatus(); // 初始加载
 </script>
+
+
 
 </body>
 </html>

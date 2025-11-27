@@ -1,4 +1,7 @@
-// server.js
+/*
+server.js
+负责启动采集模式的所有模块，包括（deviceSync, ble_server, realtimeEngine, taskManager, storage）
+*/ 
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -181,27 +184,23 @@ function setupGracefulShutdown() {
 async function startServer() {
     try {
 
-        // 启动实时引擎
-        await realtimeEngine.start(8080);
 
-        // 先启动设备协同模块
-        console.log('正在启动设备协同模块...');
-        await deviceSync.initialize();
-        console.log('设备协同模块启动成功');
+        // 启动realtimeEngine模块
+        await realtimeEngine.start(8080);
+        console.log('[server.js] realtimeEngine 启动成功');
         
-        // 然后启动HTTP服务器
+
+        // 启动deviceSync模块（deviceSync启动ble_server模块）
+        await deviceSync.initialize();
+        console.log('[server.js] deviceSync 启动成功');
+        
+        // 启动HTTP服务器
         const server = app.listen(PORT, () => {
             console.log(`数据采集系统已启动，访问地址：http://localhost:${PORT}`);
             //console.log('EMG数据API: http://localhost:' + PORT + '/api/emg-data');
             console.log('设备状态API: http://localhost:' + PORT + '/api/device-status');
             
-            // 自动打开浏览器（可选）
-            // openBrowser();
-	    if(!process.env.ELECTRON_MODE){
-		openBrowser();
-	    }
-
-            // 新代码：仅在非 Electron 环境下自动打开浏览器
+            //仅在非 Electron 环境下自动打开浏览器
             if (!process.env.ELECTRON_MODE) {
             openBrowser(); // 非 Electron 启动时（如 npm start 单独运行服务）才打开浏览器
             }
