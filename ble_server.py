@@ -16,7 +16,7 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', line_bufferin
 
 # 全局配置（针对Windows优化）
 CONNECT_TIMEOUT = 30.0  # 延长连接超时到30秒（默认10秒太短）
-SCAN_TIMEOUT =5.0     # 延长扫描超时
+SCAN_TIMEOUT =2.0     # 延长扫描超时
 MAX_RETRIES = 3         # 连接重试次数
 RETRY_DELAY = 2.0       # 重试间隔（秒）
 
