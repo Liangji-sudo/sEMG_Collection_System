@@ -104,6 +104,7 @@ async def connect_bluetooth_device(mac_address, websocket):
                 continue
             
             debug_log(f"找到设备: {device.name or '未知设备'} | MAC: {device.address}")
+            #debug_log(f"liangji++++++++设备的RSSI值: {device.advertisement_data.rssi}")
             
             async with BleakClient(device) as client:
                 if client.is_connected:
@@ -140,14 +141,17 @@ async def connect_bluetooth_device(mac_address, websocket):
                             "service_info": service_info
                         }
                     else:
+                        # 查找扫描结果中的设备信息
+                        device_info = next((dev for dev in server_state["scan_results"] if dev["mac"] == mac_address.upper()), None)
+
                         final_result = {
                             "success": True,
                             "message": "连接并订阅成功",
                             "mac": mac_address,
-                            "rssi": device.rssi if hasattr(device, 'rssi') else None,
+                            "rssi": device_info["rssi"],
                             "service_info": service_info
                         }
-                    
+
                     #发送成功蓝牙连接结果到deviceSync
                     await websocket.send(json.dumps({
                         "action": "connect_result",

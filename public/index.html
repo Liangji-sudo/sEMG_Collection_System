@@ -2164,10 +2164,6 @@ if (!document.querySelector('#signal-styles')) {
         const response = await fetch('/api/device-status');
         const data = await response.json();
         
-        // 更新蓝牙状态
-        document.getElementById('bluetooth-db').textContent = data.bluetooth.db;
-        document.getElementById('bluetooth-strength').style.width = `${data.bluetooth.strength}%`;
-        
         // 更新传输吞吐量
         document.getElementById('throughput-value').textContent = data.throughput.value;
         document.getElementById('throughput-bar').style.width = `${data.throughput.percent}%`;
