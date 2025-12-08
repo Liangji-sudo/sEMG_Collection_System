@@ -162,8 +162,6 @@ async def connect_bluetooth_device(mac_address, websocket):
                     try:
                         debug_log("设备连接成功，一直接受数据，直到点击断开连接")
                         # 只要蓝牙连接还存在，该接受后台任务就一直存在，指导ble_server收到disconnect,并清除server_state["bluetooth_client"]
-                        #while server_state["bluetooth_client"]:
-                        #while client.is_connected:
                         while(server_state["notification_subscribed"]):
                             await asyncio.sleep(1)
 
@@ -220,17 +218,32 @@ async def connect_bluetooth_device(mac_address, websocket):
 # 蓝牙数据处理回调函数
 def handle_bluetooth_notification(sender, data):
     try:
+        # 将原始数据转换为大写的十六进制字符串
         hex_data = data.hex().upper()
-        timestamp = asyncio.get_event_loop().time()
         
+        # 数据的固定部分：7个字节头和1个字节校验尾
+        header_len = 7 * 2  # 7个字节，每个字节2个十六进制字符
+        footer_len = 2  # 1个字节校验位，每个字节2个十六进制字符
+        
+        # 提取中间的 5 组 32 字节数据
+        emg_data = hex_data[header_len:-footer_len]
+        
+        # 确保提取的 EMG 数据是 5 组 32 字节
+        # 5组32字节，每组32字节为64个十六进制字符
+        emg_data_groups = [emg_data[i:i+64] for i in range(0, len(emg_data), 64)]
+        
+        if len(emg_data_groups) != 5:
+            raise ValueError("EMG 数据组数不匹配，应该是 5 组每组 32 字节")
+        
+        # 打包成最终的输出
+        timestamp = asyncio.get_event_loop().time()
         output = {
             "type": "emg",
             "timestamp": timestamp,
-            "raw_data": hex_data
-            #"sender_uuid": str(sender)
+            "raw_data": emg_data_groups  # 只保留 5 组 32 字节的 EMG 数据
         }
         
-        # 广播转发给WebSocket客户端
+        # 广播转发给 WebSocket 客户端
         if server_state["connected_client"]:
             asyncio.create_task(
                 server_state["connected_client"].send(json.dumps(output))
@@ -240,6 +253,7 @@ def handle_bluetooth_notification(sender, data):
         error_msg = f"处理蓝牙数据失败: {str(e)}"
         debug_log(error_msg)
         debug_log(traceback.format_exc())
+
 
 # 断开蓝牙连接
 async def disconnect_bluetooth_device(websocket):

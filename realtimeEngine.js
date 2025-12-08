@@ -34,7 +34,7 @@ class RealtimeEngine extends EventEmitter {
                 
                 this.connectTimeoutTimer = setTimeout(() => {
                     this.ble_client_connect();
-                }, 1000); // 延迟 5000 毫秒（5秒）
+                }, 1000); // 延迟 1000 毫秒（1秒）
 
                 this.wss.on('connection', (ws) => {
                     console.log('[realtimeEngine] 前端client连接已建立');
@@ -53,7 +53,7 @@ class RealtimeEngine extends EventEmitter {
 
                     // 发送缓冲的最新数据
                     
-                    this.sendBufferedData(ws);
+                    //this.sendBufferedData(ws);
 
                     ws.on('close', () => {
                         console.log('[realtimeEngine] 前端WebSocket连接已关闭');
@@ -71,7 +71,7 @@ class RealtimeEngine extends EventEmitter {
                     this.isRunning = true;
                     
                     // 启动数据广播
-                    this.startDataBroadcast();
+                    //this.startDataBroadcast();
                     
                     resolve();
                 });
@@ -90,6 +90,72 @@ class RealtimeEngine extends EventEmitter {
             }
         });
     }
+
+
+    // 接受来自ble_server数据，并即时广播出去
+ receiveEMGData(emgData) {
+    if (!this.isRunning) return;
+
+    try {
+        // 获取 raw_data，假设它是一个包含多个十六进制字符串的数组
+        let rawData = emgData.raw_data;
+
+        // 打印 rawData 的类型和内容
+        //console.log("rawData type:", typeof rawData);  // 打印类型
+        //console.log("Raw Data Array: ", rawData);  // 打印原始数据（数组）
+
+        // 确保 rawData 是数组类型，且包含 5 组数据
+        if (!Array.isArray(rawData)) {
+            console.error("[realtimeEngine] rawData 不是一个数组");
+            return;
+        }
+
+        //console.log("EMG Data Groups: ", rawData);  // 调试输出原始的5组数据
+
+        // 确保是 5 组数据
+        if (rawData.length !== 5) {
+            console.error('[realtimeEngine] emg 数据组数不匹配，应该是 5 组');
+            return;
+        }
+
+        // 统计包的数量（即32字节包的个数）
+        const packetCount = rawData.length;
+
+        // 基于时间戳进行递增，每个包间隔 0.5ms
+        let timestamp = emgData.timestamp;  // 初始时间戳
+
+        // 遍历每一组数据并构建对应的包
+        rawData.forEach((groupData, index) => {
+            // 解析 groupData：将每两个字符（1个字节）转化为一个 uint16_t（2字节）
+            const channels = [];
+            for (let i = 0; i < groupData.length; i += 4) {  // 每4个字符（即2个字节）为1个 uint16_t
+                // 从 groupData 提取 4 个字符并转为整数
+                const channelValue = parseInt(groupData.slice(i, i + 4), 16); // 每2字节转为 uint16_t
+                channels.push(channelValue/1000);// /1000 模拟实际大小
+            }
+
+            //console.log("Parsed Channels: ", channels); // 输出解析后的通道数据
+
+            // 构建数据包
+            const dataPacket = {
+                type: 'emg_data',
+                data: {
+                    channels: channels,  // 将解析后的 16 个通道数据放入 channels
+                    timestamp: timestamp + index * 0.0005,  // 每组时间戳递增0.5ms
+                    packetCount: packetCount,
+                    interval: null // 现在不需要interval，可以以后加
+                },
+                serverTime: Date.now()  // 当前服务器时间
+            };
+
+            // 广播给所有客户端
+            this.broadcastToClients(dataPacket);
+        });
+
+    } catch (error) {
+        console.error('[realtimeEngine] 处理EMG数据时发生错误:', error);
+    }
+}
 
 
     // 提供方法：作为client连接ble_python服务器
@@ -120,6 +186,7 @@ class RealtimeEngine extends EventEmitter {
                     // 处理连接确认消息（与后端realtimeEngine的connection_established对应）
                     if (packet.type === 'emg') {
                         //console.log(`[realtimeEngine] 来自ble_server的emg消息: ${packet.raw_data}`);
+                        this.receiveEMGData(packet);
                         return;
                     }
                 } catch (error) {
@@ -170,28 +237,7 @@ class RealtimeEngine extends EventEmitter {
   }
 
 
-    // 接受来自ble_server数据，并即时广播出去
-    receiveEMGData(emgData) {
-        if (!this.isRunning) return;
-
-        // 构建数据包
-        const dataPacket = {
-            type: 'emg_data',
-            data: {
-                channels: emgData.channels,
-                timestamp: emgData.timestamp,
-                packetCount: emgData.packetCount,
-                interval: emgData.interval
-            },
-            serverTime: Date.now()
-        };
-
-        // 添加到缓冲区
-        this.addToBuffer(dataPacket);
-
-        // 立即广播给所有客户端
-        this.broadcastToClients(dataPacket);
-    }
+ 
 
     // 添加到数据缓冲区
     addToBuffer(dataPacket) {
@@ -223,40 +269,29 @@ class RealtimeEngine extends EventEmitter {
     }
 
     // 发送缓冲数据给新连接的客户端
-    sendBufferedData(ws) {
-        if (this.dataBuffer.length === 0) return;
+    // sendBufferedData(ws) {
+    //     if (this.dataBuffer.length === 0) return;
 
-        // 发送最近的一些数据点（例如最后50个）
-        const recentData = this.dataBuffer.slice(-50);
-        //console.log(`[${new Date().toISOString()}] 向新连接客户端发送缓冲数据 (共 ${recentData.length} 条)`);
+    //     // 发送最近的一些数据点（例如最后50个）
+    //     const recentData = this.dataBuffer.slice(-50);
+    //     //console.log(`[${new Date().toISOString()}] 向新连接客户端发送缓冲数据 (共 ${recentData.length} 条)`);
         
-        recentData.forEach((dataPacket, index) => {
-            if (ws.readyState === WebSocket.OPEN) {
-                // 打印单条缓冲数据
-                //console.log(`  缓冲数据 #${index + 1}:`, JSON.stringify(dataPacket, null, 2));
-                ws.send(JSON.stringify(dataPacket));
-            }
-        });
-    }
-
-    // 启动定时数据广播（如果需要批量发送）
-    startDataBroadcast() {
-        // 如果希望批量发送数据，可以启用这个定时器
-        // this.broadcastInterval = setInterval(() => {
-        //     if (this.dataBuffer.length > 0) {
-        //         const latestData = this.dataBuffer[this.dataBuffer.length - 1];
-        //         this.broadcastToClients(latestData);
-        //     }
-        // }, 50); // 每50ms发送一次
-    }
+    //     recentData.forEach((dataPacket, index) => {
+    //         if (ws.readyState === WebSocket.OPEN) {
+    //             // 打印单条缓冲数据
+    //             //console.log(`  缓冲数据 #${index + 1}:`, JSON.stringify(dataPacket, null, 2));
+    //             ws.send(JSON.stringify(dataPacket));
+    //         }
+    //     });
+    // }
 
     // 停止数据广播
-    stopDataBroadcast() {
-        if (this.broadcastInterval) {
-            clearInterval(this.broadcastInterval);
-            this.broadcastInterval = null;
-        }
-    }
+    // stopDataBroadcast() {
+    //     if (this.broadcastInterval) {
+    //         clearInterval(this.broadcastInterval);
+    //         this.broadcastInterval = null;
+    //     }
+    // }
 
     // 获取引擎状态
     getStatus() {
@@ -273,7 +308,7 @@ class RealtimeEngine extends EventEmitter {
     stop() {
     return new Promise((resolve) => {
         this.isRunning = false;
-        this.stopDataBroadcast();
+        //this.stopDataBroadcast();
 
         // 强制关闭所有客户端（设置code=1001表示正常退出，避免等待）
         this.clients.forEach(client => {
