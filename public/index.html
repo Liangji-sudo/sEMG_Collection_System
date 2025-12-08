@@ -713,6 +713,7 @@ const EMGDisplayModule = {
     emgWebSocket: null,         // WebSocket实例（模块内维护）
     reconnectTimer: null,       // 重连定时器
     packetCounter: 0,           // 数据包计数器（模块内维护）
+    windowPoints: 300,          // 窗口内固定显示的点数（可调整）
 
     // 初始化信号显示
     initialize() {
@@ -729,8 +730,7 @@ const EMGDisplayModule = {
         this.isInitialized = true;
     },
 
-
-        // 在 cleanup 或 reset 时，需要将标志重置为 false
+    // 在 cleanup 或 reset 时，需要将标志重置为 false
     cleanup() {
         console.log('🧹 清理EMG信号显示资源');
         // ... 清理逻辑 ...
@@ -740,7 +740,7 @@ const EMGDisplayModule = {
         this.isConnected = false; // 重置标志
     },
 
-   // 初始化信号显示（使用Dygraphs）
+    // 初始化信号显示（使用Dygraphs）
     initializeCompactEMGDisplay() {
         const grid = document.getElementById('signal-grid');
         const noSignal = document.getElementById('no-signal-message');
@@ -766,7 +766,7 @@ const EMGDisplayModule = {
             `;
             grid.appendChild(channelDiv);
             
-            // 初始化数据系列
+            // 初始化数据系列（使用相对索引而非时间戳）
             this.dataSeries[i + 1] = [];
             
             // 延迟创建图表以确保DOM已准备好
@@ -792,7 +792,7 @@ const EMGDisplayModule = {
             container,
             initialData,
             {
-                labels: ['时间', '信号值(mV)'],
+                labels: ['索引', '信号值(mV)'], // 改为相对索引
                 width: container.clientWidth,
                 height: 96, // 对应h-24样式
                 axisLabelFontSize: 10,
@@ -803,7 +803,8 @@ const EMGDisplayModule = {
                 gridLineColor: '#e5e7eb',
                 axes: {
                     x: {
-                        show: false // 隐藏X轴，只显示相对变化
+                        show: false, // 隐藏X轴
+                        valueRange: [0, this.windowPoints] // X轴固定范围（0到窗口点数）
                     },
                     y: {
                         axisLabelWidth: 30,
@@ -811,52 +812,49 @@ const EMGDisplayModule = {
                     }
                 },
                 valueRange: [-1000, 1000], // 初始Y轴范围
-                autoResize: true
+                autoResize: true,
+                // 关键：禁用X轴自动缩放，保持固定窗口
+                xAxisRange: [0, this.windowPoints]
             }
         );
     },
     
-    // 更新单个通道数据（替换原canvas绘图逻辑）
+    // 更新单个通道数据（核心修复：实现固定窗口平移效果）
     updateEMGChannel(channel, value) {
         const valueDisplay = document.getElementById(`ch${channel}-value`);
         if (valueDisplay) {
             valueDisplay.textContent = `${value.toFixed(7)}mV`;
         }
         
-        // 使用时间戳作为X轴坐标
-        const now = Date.now();
+        // 1. 获取当前数据系列
+        const series = this.dataSeries[channel];
+        // 2. 新数据点的索引 = 当前数据长度（相对索引）
+        const newIndex = series.length;
+        // 3. 添加新数据点
+        series.push([newIndex, value]);
         
-        // 添加新数据点
-        this.dataSeries[channel].push([now, value]);
-        
-        // 限制数据点数量（保持最新的100个点，可调整）
-        /*
-        const maxPoints = 100;
-        if (this.dataSeries[channel].length > maxPoints) {
-            this.dataSeries[channel] = this.dataSeries[channel].slice(-maxPoints);
+        // 4. 核心逻辑：保持窗口内固定点数
+        if (series.length > this.windowPoints) {
+            // 移除最旧的点（实现向左平移）
+            series.shift();
+            // 重新计算所有点的索引（保证X轴始终从0到windowPoints）
+            for (let i = 0; i < series.length; i++) {
+                series[i][0] = i;
+            }
         }
-        */
-
-        // 优化方案：保留较多数据点以产生压缩感，但避免无限增长
-        const maxPoints = 5000; // 保留最近5000个点
-        if (this.dataSeries[channel].length > maxPoints) {
-            this.dataSeries[channel] = this.dataSeries[channel].slice(-maxPoints);
-        }
-
         
-        // 更新图表
+        // 5. 更新图表
         if (this.graphs[channel]) {
             this.graphs[channel].updateOptions({
-                file: this.dataSeries[channel],
-                //valueRange: this.calculateDynamicRange(this.dataSeries[channel])
+                file: series,
+                // 强制X轴范围保持不变
+                xAxisRange: [0, this.windowPoints]
             });
         }
     },
     
     // 计算动态Y轴范围（优化显示效果）
     calculateDynamicRange(data) {
-      //return [-1000, 1000];
-      
         if (data.length === 0) return [-1000, 1000];
         
         const values = data.map(point => point[1]);
@@ -866,7 +864,6 @@ const EMGDisplayModule = {
         // 增加10%的边距，避免数据贴边
         const padding = (max - min) * 0.1 || 100;
         return [min - padding, max + padding];
-        
     },
     
     // 修改清空通道方法（适配Dygraphs）
@@ -885,7 +882,8 @@ const EMGDisplayModule = {
             if (this.graphs[i]) {
                 this.graphs[i].updateOptions({
                     file: [],
-                    valueRange: [-100, 100]
+                    valueRange: [-1000, 1000],
+                    xAxisRange: [0, this.windowPoints]
                 });
             }
         }
@@ -898,19 +896,7 @@ const EMGDisplayModule = {
         debugCounter = 0;
     },
 
-
-
-
-
-
-
-
-
-
-
-
-
-    // 绘制科学网格
+    // 绘制科学网格（保留原有逻辑，未使用）
     drawScientificGrid(ctx, width, height) {
         ctx.clearRect(0, 0, width, height);
         
@@ -939,36 +925,7 @@ const EMGDisplayModule = {
         ctx.stroke();
     },
 
-  /*
-    // 更新通道数据
-    updateEMGChannel(channel, value) {
-        const canvas = document.getElementById(`emg-channel-${channel}`);
-        const valueDisplay = document.getElementById(`ch${channel}-value`);
-        
-        if (!canvas || !valueDisplay) return;
-        
-        const ctx = canvas.getContext('2d');
-        
-        // 初始化数据数组
-        if (!canvas._data) {
-            canvas._data = [];
-            canvas._maxPoints = Math.floor(canvas.width / 3);
-        }
-        
-        // 更新数值显示
-        valueDisplay.textContent = `${value.toFixed(7)}mV`;
-        
-        // 添加新数据点
-        canvas._data.push(value);
-        if (canvas._data.length > canvas._maxPoints) {
-            canvas._data.shift();
-        }
-        
-        // 重绘信号
-        this.drawScientificSignal(ctx, canvas.width, canvas.height, canvas._data);
-    },
-*/
-    // 绘制科学信号线
+    // 绘制科学信号线（保留原有逻辑，未使用）
     drawScientificSignal(ctx, width, height, data) {
         // 先绘制网格
         this.drawScientificGrid(ctx, width, height);
@@ -1054,7 +1011,6 @@ const EMGDisplayModule = {
         }
         if (lastUpdate) lastUpdate.textContent = new Date().toLocaleTimeString();
     },
-
 
     // WebSocket连接管理
     connectToRealtimeEngine() {
@@ -1223,34 +1179,6 @@ const EMGDisplayModule = {
         });
     },
 
-    /*
-    // 清空所有通道
-    clearAllChannels() {
-        for (let i = 1; i <= 16; i++) {
-            const canvas = document.getElementById(`emg-channel-${i}`);
-            const valueDisplay = document.getElementById(`ch${i}-value`);
-            
-            if (canvas && canvas._data) {
-                canvas._data = [];
-                const ctx = canvas.getContext('2d');
-                this.drawScientificGrid(ctx, canvas.width, canvas.height);
-            }
-            
-            if (valueDisplay) {
-                valueDisplay.textContent = '0mV';
-            }
-        }
-        
-        // 重置统计
-        document.getElementById('packet-count').textContent = '0';
-        document.getElementById('sample-rate').textContent = '0';
-        document.getElementById('signal-range').textContent = '±0mV';
-        packetCounter = 0;
-        debugCounter = 0;
-    },
-*/
-
-
     // 过滤通道显示
     filterChannels(filter) {
         const channels = document.querySelectorAll('[id^="emg-channel-"]');
@@ -1262,119 +1190,6 @@ const EMGDisplayModule = {
             
             canvas.parentElement.style.display = shouldShow ? 'block' : 'none';
         });
-    }
-};
-
-// ==================== 右侧采集流程模块 ====================
-const CollectionModule = {
-    // 初始化采集流程
-    initialize() {
-        console.log('🎬 初始化采集流程');
-        this.setupCollectionControls();
-        this.updateCurrentTime();
-        setInterval(() => this.updateCurrentTime(), 1000);
-    },
-
-    // 设置采集控制
-    setupCollectionControls() {
-        // 开始采集按钮
-        document.getElementById('start-collect').addEventListener('click', () => {
-            this.startCollection();
-        });
-
-        // 停止采集按钮
-        document.getElementById('stop-collect').addEventListener('click', () => {
-            this.stopCollection();
-        });
-
-        // 返回按钮
-        document.getElementById('back-to-initial').addEventListener('click', () => {
-            this.stopCollection();
-            // 这里添加页面切换逻辑
-        });
-    },
-
-    // 开始采集
-    startCollection() {
-        isCollecting = true;
-        console.log('🚀 开始数据采集');
-        
-        // 更新UI状态
-        document.getElementById('start-collect').classList.add('hidden');
-        document.getElementById('stop-collect').classList.remove('hidden');
-        document.getElementById('current-task').textContent = '离散手势采集';
-        document.getElementById('current-gesture').textContent = '拇指上滑';
-        
-        // 更新状态指示器
-        const statusIndicator = document.querySelector('#collecting-area .flex.items-center');
-        if (statusIndicator) {
-            statusIndicator.className = 'flex items-center justify-center text-green-600 mb-4';
-            statusIndicator.innerHTML = '<i class="fa fa-circle animate-pulse mr-2"></i><span class="font-medium">正在录制数据...</span>';
-        }
-
-        // 开始更新进度条
-        this.startProgressBar();
-    },
-
-    // 停止采集
-    stopCollection() {
-        isCollecting = false;
-        console.log('🛑 停止数据采集');
-        
-        // 更新UI状态
-        document.getElementById('start-collect').classList.remove('hidden');
-        document.getElementById('stop-collect').classList.add('hidden');
-        document.getElementById('current-task').textContent = '已停止';
-        document.getElementById('current-gesture').textContent = '-';
-        
-        // 更新状态指示器
-        const statusIndicator = document.querySelector('#collecting-area .flex.items-center');
-        if (statusIndicator) {
-            statusIndicator.className = 'flex items-center justify-center text-red-600 mb-4';
-            statusIndicator.innerHTML = '<i class="fa fa-stop-circle mr-2"></i><span class="font-medium">采集已停止</span>';
-        }
-
-        // 停止进度条
-        clearInterval(this.progressInterval);
-    },
-
-    // 开始更新进度条
-    startProgressBar() {
-        let progress = 0;
-        clearInterval(this.progressInterval);
-        
-        this.progressInterval = setInterval(() => {
-            if (isCollecting) {
-                progress += 0.5;
-                document.getElementById('task-progress').style.width = `${Math.min(progress, 100)}%`;
-                
-                if (progress >= 100) {
-                    // 进度完成，切换到下一个任务
-                    this.nextCollectionTask();
-                    progress = 0;
-                }
-            }
-        }, 100);
-    },
-
-    // 下一个采集任务
-    nextCollectionTask() {
-        // 这里可以添加任务切换逻辑
-        console.log('➡️ 切换到下一个采集任务');
-    },
-
-    // 更新时间显示
-    updateCurrentTime() {
-        const now = new Date();
-        const timeString = now.toLocaleString('zh-CN', {
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit'
-        });
-        document.getElementById('collect-time').textContent = timeString;
     }
 };
 
