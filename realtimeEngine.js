@@ -22,6 +22,7 @@ class RealtimeEngine extends EventEmitter {
         this.reconnectTimer = null; // 重连计时器
 
         this.connectTimeoutTimer = null;
+        this.emg16_packet_count=0;
 
     }
 
@@ -148,8 +149,16 @@ class RealtimeEngine extends EventEmitter {
                 serverTime: Date.now()  // 当前服务器时间
             };
 
-            // 广播给所有客户端
-            this.broadcastToClients(dataPacket);
+            if(this.emg16_packet_count <= 10000)
+            {                   // 广播给所有客户端
+                this.broadcastToClients(dataPacket);
+                this.emg16_packet_count++;
+                console.log('realtimeEngine.js : emg16_package_count = ', this.emg16_packet_count);
+            }
+
+
+            
+
         });
 
     } catch (error) {

@@ -697,8 +697,8 @@ window.addEventListener('load', initBluetoothUI);
 // ==================== 全局变量 ====================
 let emgWebSocket = null;
 let isCollecting = false;
-let isPaused = false;
-let packetCounter = 0;
+let isPaused = false; // 保留全局变量，用于兼容外部可能的调用
+//let packetCounter = 0;
 let dataBuffer = [];
 let debugCounter = 0;
 let lastDataTime = Date.now();
@@ -707,13 +707,13 @@ const EMGDisplayModule = {
     isInitialized: false,       // 初始化标志
     isConnected: false,         // 连接状态标志
     isConnecting: false,        // 连接中标志
-    isPaused: false,            // 数据接收暂停标志（模块内维护）
+    isPaused: false,            // 模块内暂停状态（核心控制）
     graphs: {},                 // 存储16个通道的Dygraphs实例
     dataSeries: {},             // 存储每个通道的数据系列
     emgWebSocket: null,         // WebSocket实例（模块内维护）
     reconnectTimer: null,       // 重连定时器
     packetCounter: 0,           // 数据包计数器（模块内维护）
-    windowPoints: 300,          // 窗口内固定显示的点数（可调整）
+    windowPoints: 500,          // 窗口内固定显示的点数（可调整）
 
     // 初始化信号显示
     initialize() {
@@ -756,7 +756,8 @@ const EMGDisplayModule = {
         // 为每个通道创建图表容器（替换原有的canvas）
         for (let i = 0; i < 16; i++) {
             const channelDiv = document.createElement('div');
-            channelDiv.className = 'bg-white rounded p-2 border border-gray-200';
+            channelDiv.className = 'bg-white rounded p-2 border border-gray-200 channel-item'; // 新增类名用于筛选
+            channelDiv.dataset.channel = i + 1; // 标记通道号
             channelDiv.innerHTML = `
                 <div class="flex justify-between items-center mb-2">
                     <span class="text-xs font-medium text-gray-700">通道 ${i + 1}</span>
@@ -892,7 +893,7 @@ const EMGDisplayModule = {
         document.getElementById('packet-count').textContent = '0';
         document.getElementById('sample-rate').textContent = '0';
         document.getElementById('signal-range').textContent = '±0mV';
-        packetCounter = 0;
+        this.packetCounter = 0;
         debugCounter = 0;
     },
 
@@ -1001,7 +1002,7 @@ const EMGDisplayModule = {
         const signalRange = document.getElementById('signal-range');
         const lastUpdate = document.getElementById('last-update');
         
-        if (packetCount) packetCount.textContent = emgData.packetCount || packetCounter;
+        if (packetCount) packetCount.textContent = this.packetCounter;
         if (sampleRate) sampleRate.textContent = emgData.interval > 0 ? Math.round(1000 / emgData.interval) : 0;
         if (signalRange && emgData.channels) {
             const min = Math.min(...emgData.channels);
@@ -1063,6 +1064,7 @@ const EMGDisplayModule = {
 
             // 消息接收处理
             this.emgWebSocket.onmessage = (event) => {
+                // 关键修复：使用模块内的isPaused状态
                 if (this.isPaused) return;
 
                 try {
@@ -1076,7 +1078,12 @@ const EMGDisplayModule = {
                     
                     // 处理EMG数据（与后端realtimeEngine的emg_data对应）
                     if (packet.type === 'emg_data') {
+                        
                         this.packetCounter++;
+                        if(this.packetCounter % 1000)
+                        {
+                          console.log('index.html client has get 1000 emg_data packet = ', this.packetCounter);
+                        }
                         this.updateAllEMGChannels(packet.data);
                         
                         // 隐藏无信号提示
@@ -1150,45 +1157,50 @@ const EMGDisplayModule = {
 
     // 设置信号控制
     setupSignalControls() {
+        const _this = this; // 保存模块this指向，避免回调中丢失
         // 暂停/继续按钮
         document.getElementById('pause-signal').addEventListener('click', () => {
-            isPaused = !isPaused;
+            // 关键修复：同步模块内isPaused和全局isPaused
+            _this.isPaused = !_this.isPaused;
+            isPaused = _this.isPaused; 
+
             const pauseBtn = document.getElementById('pause-signal');
             
-            if (isPaused) {
+            if (_this.isPaused) {
                 pauseBtn.innerHTML = '<i class="fa fa-play mr-1"></i>继续';
                 pauseBtn.classList.remove('bg-gray-100');
                 pauseBtn.classList.add('bg-green-100', 'text-green-700');
-                this.updateConnectionStatus('已暂停');
+                _this.updateConnectionStatus('已暂停');
             } else {
                 pauseBtn.innerHTML = '<i class="fa fa-pause mr-1"></i>暂停';
                 pauseBtn.classList.remove('bg-green-100', 'text-green-700');
                 pauseBtn.classList.add('bg-gray-100');
-                this.updateConnectionStatus('已连接');
+                _this.updateConnectionStatus('已连接');
             }
         });
 
         // 清空按钮
         document.getElementById('clear-signal').addEventListener('click', () => {
-            this.clearAllChannels();
+            _this.clearAllChannels();
         });
 
         // 通道选择器
         document.getElementById('channel-select').addEventListener('change', (e) => {
-            this.filterChannels(e.target.value);
+            _this.filterChannels(e.target.value);
         });
     },
 
-    // 过滤通道显示
+    // 过滤通道显示（核心修复）
     filterChannels(filter) {
-        const channels = document.querySelectorAll('[id^="emg-channel-"]');
-        channels.forEach((canvas, index) => {
-            const channelNum = index + 1;
+        // 选择所有通道项容器
+        const channelItems = document.querySelectorAll('.channel-item');
+        channelItems.forEach(item => {
+            const channelNum = parseInt(item.dataset.channel);
             const shouldShow = filter === 'all' || 
                 (filter === '1-8' && channelNum <= 8) ||
                 (filter === '9-16' && channelNum >= 9);
             
-            canvas.parentElement.style.display = shouldShow ? 'block' : 'none';
+            item.style.display = shouldShow ? 'block' : 'none';
         });
     }
 };
