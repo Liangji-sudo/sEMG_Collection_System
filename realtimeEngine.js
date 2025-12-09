@@ -2,6 +2,7 @@
 const WebSocket = require('ws');
 const EventEmitter = require('events');
 
+
 class RealtimeEngine extends EventEmitter {
     constructor() {
         super();
@@ -22,7 +23,9 @@ class RealtimeEngine extends EventEmitter {
         this.reconnectTimer = null; // 重连计时器
 
         this.connectTimeoutTimer = null;
-        this.emg16_packet_count=0;
+        this.emg_packet_count=0;
+        this.emg_5_packets_count=0;
+        this.emg_interval = 0.001; //1ms
 
     }
 
@@ -93,12 +96,12 @@ class RealtimeEngine extends EventEmitter {
     }
 
 
-    // 接受来自ble_server数据，并即时广播出去
+    // 接受来自ble_server 的大包数据（5*32）数据，并即时广播出去
  receiveEMGData(emgData) {
     if (!this.isRunning) return;
 
     try {
-        // 获取 raw_data，假设它是一个包含多个十六进制字符串的数组
+        // 获取 raw_data，假设它是一个包含5个十六进制字符串的数组
         let rawData = emgData.raw_data;
 
         // 打印 rawData 的类型和内容
@@ -119,47 +122,65 @@ class RealtimeEngine extends EventEmitter {
             return;
         }
 
-        // 统计包的数量（即32字节包的个数）
-        const packetCount = rawData.length;
+        // 统计小包数量 + 5
+        this.emg_packet_count += rawData.length;
+        this.emg_5_packets_count++;
 
         // 基于时间戳进行递增，每个包间隔 0.5ms
-        let timestamp = emgData.timestamp;  // 初始时间戳
+        //let timestamp = emgData.timestamp;  // 初始时间戳
 
-        // 遍历每一组数据并构建对应的包
-        rawData.forEach((groupData, index) => {
-            // 解析 groupData：将每两个字符（1个字节）转化为一个 uint16_t（2字节）
-            const channels = [];
-            for (let i = 0; i < groupData.length; i += 4) {  // 每4个字符（即2个字节）为1个 uint16_t
-                // 从 groupData 提取 4 个字符并转为整数
-                const channelValue = parseInt(groupData.slice(i, i + 4), 16); // 每2字节转为 uint16_t
-                channels.push(channelValue/1000);// /1000 模拟实际大小
+        let timestamp_array = [emgData.timestamp,
+                        emgData.timestamp + this.emg_interval * 1,
+                        emgData.timestamp + this.emg_interval * 2,
+                        emgData.timestamp + this.emg_interval * 3,
+                        emgData.timestamp + this.emg_interval * 4];
+
+
+        const dataPacket = {
+            type: 'emg_data',
+            data: {
+                big_bag_raw_data: rawData,  // [32byte, 32byte, 32byte, 32byte, 32byte]//大包的rawData[5]数组放入 big_bag_raw_data
+                timestamp: timestamp_array, // [time, time, time, time, time] // 计算好大包内的5组的时间戳
+                packetCount: this.emg_packet_count,
+                interval: null // 现在不需要interval，可以以后加
             }
+            //serverTime: Date.now()  // 当前服务器时间
+        };
 
-            //console.log("Parsed Channels: ", channels); // 输出解析后的通道数据
+        // // 遍历每一组数据并构建对应的包
+        // rawData.forEach((groupData, index) => {
+        //     // 解析 groupData：将每两个字符（1个字节）转化为一个 uint16_t（2字节）
+        //     const channels = [];
+        //     for (let i = 0; i < groupData.length; i += 4) {  // 每4个字符（即2个字节）为1个 uint16_t
+        //         // 从 groupData 提取 4 个字符并转为整数
+        //         const channelValue = parseInt(groupData.slice(i, i + 4), 16); // 每2字节转为 uint16_t
+        //         channels.push(channelValue/1000);// /1000 模拟实际大小
+        //     }
 
-            // 构建数据包
-            const dataPacket = {
-                type: 'emg_data',
-                data: {
-                    channels: channels,  // 将解析后的 16 个通道数据放入 channels
-                    timestamp: timestamp + index * 0.0005,  // 每组时间戳递增0.5ms
-                    packetCount: packetCount,
-                    interval: null // 现在不需要interval，可以以后加
-                },
-                serverTime: Date.now()  // 当前服务器时间
-            };
+        //     //console.log("Parsed Channels: ", channels); // 输出解析后的通道数据
 
-            if(this.emg16_packet_count <= 10000)
-            {                   // 广播给所有客户端
-                this.broadcastToClients(dataPacket);
-                this.emg16_packet_count++;
-                console.log('realtimeEngine.js : emg16_package_count = ', this.emg16_packet_count);
-            }
+        //     // 构建数据包
+        //     const dataPacket = {
+        //         type: 'emg_data',
+        //         data: {
+        //             big_bag_raw_data: channels,  // 将解析后的 16 个通道数据放入 channels
+        //             timestamp: timestamp + index * 0.0005,  // 每组时间戳递增0.5ms
+        //             packetCount: packetCount,
+        //             interval: null // 现在不需要interval，可以以后加
+        //         },
+        //         serverTime: Date.now()  // 当前服务器时间
+        //     };
+
+        // if(this.emg16_packet_count <= 10000)
+        // {                   // 广播给所有客户端
+        this.broadcastToClients(dataPacket);
+        console.log('realtimeEngine.js 发送一个大包，大包统计：小包统计：', this.emg_5_packets_count,this.emg_packet_count);
+        // }
 
 
             
 
-        });
+        // });
 
     } catch (error) {
         console.error('[realtimeEngine] 处理EMG数据时发生错误:', error);
@@ -194,7 +215,7 @@ class RealtimeEngine extends EventEmitter {
                     
                     // 处理连接确认消息（与后端realtimeEngine的connection_established对应）
                     if (packet.type === 'emg') {
-                        //console.log(`[realtimeEngine] 来自ble_server的emg消息: ${packet.raw_data}`);
+                        console.log(`[realtimeEngine] 来自ble_server的emg 大包，大包timestamp : ${packet.timestamp}`);
                         this.receiveEMGData(packet);
                         return;
                     }

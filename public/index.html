@@ -698,7 +698,6 @@ window.addEventListener('load', initBluetoothUI);
 let emgWebSocket = null;
 let isCollecting = false;
 let isPaused = false; // 保留全局变量，用于兼容外部可能的调用
-//let packetCounter = 0;
 let dataBuffer = [];
 let debugCounter = 0;
 let lastDataTime = Date.now();
@@ -712,8 +711,9 @@ const EMGDisplayModule = {
     dataSeries: {},             // 存储每个通道的数据系列
     emgWebSocket: null,         // WebSocket实例（模块内维护）
     reconnectTimer: null,       // 重连定时器
-    packetCounter: 0,           // 数据包计数器（模块内维护）
+    packet_5_Counter: 0,           // 数据大包计数器（模块内维护）
     windowPoints: 500,          // 窗口内固定显示的点数（可调整）
+    prediv: 1000,
 
     // 初始化信号显示
     initialize() {
@@ -761,7 +761,6 @@ const EMGDisplayModule = {
             channelDiv.innerHTML = `
                 <div class="flex justify-between items-center mb-2">
                     <span class="text-xs font-medium text-gray-700">通道 ${i + 1}</span>
-                    <span class="text-xs font-mono bg-blue-100 text-blue-700 px-2 py-1 rounded" id="ch${i + 1}-value">0mV</span>
                 </div>
                 <div id="emg-channel-${i + 1}" class="w-full h-24 bg-gray-50 border border-gray-300 rounded"></div>
             `;
@@ -819,54 +818,138 @@ const EMGDisplayModule = {
             }
         );
     },
-    
-    // 更新单个通道数据（核心修复：实现固定窗口平移效果）
-    updateEMGChannel(channel, value) {
-        const valueDisplay = document.getElementById(`ch${channel}-value`);
-        if (valueDisplay) {
-            valueDisplay.textContent = `${value.toFixed(7)}mV`;
+
+
+    /**
+ * 从emg_data数组中提取指定通道的uint16_t数组
+ * @param {string[]} emg_data - 包含5个64字符16进制字符串的数组
+ * @param {number} i - 通道号（0~15，超出范围抛错）
+ * @returns {number[]} 长度为5的uint16_t数组（每个元素是对应位置的通道i数值）
+ */
+  getChannelUint16Array(emg_data, channel) {
+    // 1. 校验输入合法性
+    if (!Array.isArray(emg_data) || emg_data.length !== 5) {
+        throw new Error('emg_data必须是包含5个元素的数组');
+    }
+    if (typeof channel !== 'number') {
+        throw new Error('通道号i必须是0~15之间的整数');
+    }
+
+    // 2. 初始化结果数组
+    const result = new Array(5);
+
+    // 3. 遍历每个64字符的字符串，解析指定通道的uint16_t
+    emg_data.forEach((hexStr, index) => {
+        // 校验单个字符串长度
+        if (typeof hexStr !== 'string' || hexStr.length !== 64) {
+            throw new Error(`第${index}个元素不是64字符的16进制字符串`);
         }
-        
-        // 1. 获取当前数据系列
-        const series = this.dataSeries[channel];
-        // 2. 新数据点的索引 = 当前数据长度（相对索引）
-        const newIndex = series.length;
-        // 3. 添加新数据点
-        series.push([newIndex, value]);
-        
-        // 4. 核心逻辑：保持窗口内固定点数
-        if (series.length > this.windowPoints) {
-            // 移除最旧的点（实现向左平移）
-            series.shift();
-            // 重新计算所有点的索引（保证X轴始终从0到windowPoints）
-            for (let i = 0; i < series.length; i++) {
-                series[i][0] = i;
-            }
+
+        // 计算该通道在字符串中的起始索引（1通道=4个16进制字符）
+        const startIdx = (channel - 1) * 4;
+        // 截取4个字符（对应2字节=1个uint16_t）
+        const channelHex = hexStr.substring(startIdx, startIdx + 4);
+
+        // 4. 转换为uint16_t（默认小端序，若硬件是大端序则交换字节）
+        // 小端序：低位字节在前，高位字节在后（如 "e332" → 0x32e3）
+        // 大端序：高位字节在前，低位字节在后（如 "e332" → 0xe332）
+        const isLittleEndian = true; // 根据硬件协议调整
+        let uint16Value;
+
+        if (isLittleEndian) {
+            // 小端序处理：拆分高低字节并交换
+            const lowByte = channelHex.substring(2, 4); // 后2字符=低位字节
+            const highByte = channelHex.substring(0, 2); // 前2字符=高位字节
+            uint16Value = parseInt(highByte + lowByte, 16);
+        } else {
+            // 大端序处理：直接解析
+            uint16Value = parseInt(channelHex, 16);
         }
-        
-        // 5. 更新图表
-        if (this.graphs[channel]) {
-            this.graphs[channel].updateOptions({
-                file: series,
-                // 强制X轴范围保持不变
-                xAxisRange: [0, this.windowPoints]
-            });
+
+        // 确保是uint16_t（0~65535）
+        uint16Value = uint16Value & 0xFFFF;
+
+        // 存入结果数组
+        // 除以倍数，放缩到合适范围
+        result[index] = uint16Value / this.prediv;
+
+    });
+
+    return result;
+},
+    
+// 更新单个通道数据（核心修复：实现固定窗口平移效果 + 动态Y轴）
+// 一个大包，针对第channel个通道，一次更新5个时间点的数据
+//this.updateEMGChannel(i + 1, emgData);
+updateEMGChannel(channel, emgData) {
+    //const valueDisplay = document.getElementById(`ch${channel}-value`);
+
+    //因为一次更新5小包数据，所以不显示读数
+    // if (valueDisplay) {
+    //     valueDisplay.textContent = `${value.toFixed(7)}mV`;
+    // }
+    
+    // 1. 获取当前数据系列
+    const series = this.dataSeries[channel];
+    // 2. 新数据点的索引 = 当前数据长度（相对索引）
+    const newIndex = series.length;
+
+    let add_data_array = this.getChannelUint16Array(emgData, channel);
+    // 3. 添加新数据点
+    series.push([newIndex, add_data_array[0]]);
+    series.push([newIndex + 1, add_data_array[1]]);
+    series.push([newIndex + 2, add_data_array[2]]);
+    series.push([newIndex + 3, add_data_array[3]]);
+    series.push([newIndex + 4, add_data_array[4]]);
+
+    // 4. 核心逻辑：保持窗口内固定点数
+    if (series.length > this.windowPoints) {
+        // 移除最旧的点（实现向左平移）
+        // 循环5次，每次删第一个元素
+        for (let i = 0; i < 5; i++) {
+          if (series.length === 0) break; // 避免空数组报错
+          series.shift();
         }
-    },
+
+        // 重新计算所有点的索引（保证X轴始终从0到windowPoints）
+        for (let i = 0; i < series.length; i++) {
+            series[i][0] = i;
+        }
+    }
     
-    // 计算动态Y轴范围（优化显示效果）
-    calculateDynamicRange(data) {
-        if (data.length === 0) return [-1000, 1000];
-        
-        const values = data.map(point => point[1]);
-        const min = Math.min(...values);
-        const max = Math.max(...values);
-        
-        // 增加10%的边距，避免数据贴边
-        const padding = (max - min) * 0.1 || 100;
-        return [min - padding, max + padding];
-    },
+    // 5. 计算动态Y轴范围
+    const yAxisRange = this.calculateDynamicRange(series);
     
+    // 6. 更新图表（包含动态Y轴）
+    if (this.graphs[channel]) {
+        this.graphs[channel].updateOptions({
+            file: series,
+            // 强制X轴范围保持不变
+            xAxisRange: [0, this.windowPoints],
+            // 设置动态计算的Y轴范围
+            yAxisRange: yAxisRange,
+            // 可选：开启Y轴自动缩放（作为备用）
+            autoscaleY: true
+        });
+    }
+},
+
+// 计算动态Y轴范围（优化显示效果）
+calculateDynamicRange(data) {
+    if (data.length === 0) return [-1000, 1000];
+    
+    const values = data.map(point => point[1]);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    
+    // 增加10%的边距，避免数据贴边
+    const padding = (max - min) * 0.1 || 100;
+    // 确保最小值不会大于最大值（处理单值情况）
+    const adjustedMin = min - padding;
+    const adjustedMax = max + padding;
+    
+    return [adjustedMin, adjustedMax];
+},
     // 修改清空通道方法（适配Dygraphs）
     clearAllChannels() {
         for (let i = 1; i <= 16; i++) {
@@ -874,10 +957,10 @@ const EMGDisplayModule = {
             this.dataSeries[i] = [];
             
             // 重置显示值
-            const valueDisplay = document.getElementById(`ch${i}-value`);
-            if (valueDisplay) {
-                valueDisplay.textContent = '0mV';
-            }
+            // const valueDisplay = document.getElementById(`ch${i}-value`);
+            // if (valueDisplay) {
+            //     valueDisplay.textContent = '0mV';
+            // }
             
             // 重置图表
             if (this.graphs[i]) {
@@ -893,7 +976,7 @@ const EMGDisplayModule = {
         document.getElementById('packet-count').textContent = '0';
         document.getElementById('sample-rate').textContent = '0';
         document.getElementById('signal-range').textContent = '±0mV';
-        this.packetCounter = 0;
+        this.packet_5_Counter = 0;
         debugCounter = 0;
     },
 
@@ -959,16 +1042,16 @@ const EMGDisplayModule = {
         ctx.stroke();
     },
 
-    // 更新所有通道
+    // 一个大包更新所有通道
     updateAllEMGChannels(emgData) {
-        if (!emgData || !emgData.channels || emgData.channels.length !== 16) {
+        if (!emgData || !emgData.big_bag_raw_data || emgData.big_bag_raw_data.length !== 5) {
             console.warn('无效的EMG数据');
             return;
         }
         
         // 更新每个通道
         for (let i = 0; i < 16; i++) {
-            this.updateEMGChannel(i + 1, emgData.channels[i]);
+            this.updateEMGChannel(i + 1, emgData.big_bag_raw_data);
         }
         
         // 更新统计信息
@@ -1002,7 +1085,7 @@ const EMGDisplayModule = {
         const signalRange = document.getElementById('signal-range');
         const lastUpdate = document.getElementById('last-update');
         
-        if (packetCount) packetCount.textContent = this.packetCounter;
+        if (packetCount) packetCount.textContent = this.packet_5_Counter; //收到一个大包
         if (sampleRate) sampleRate.textContent = emgData.interval > 0 ? Math.round(1000 / emgData.interval) : 0;
         if (signalRange && emgData.channels) {
             const min = Math.min(...emgData.channels);
@@ -1076,14 +1159,13 @@ const EMGDisplayModule = {
                         return;
                     }
                     
-                    // 处理EMG数据（与后端realtimeEngine的emg_data对应）
+                    // 处理EMG大包数据（一个大包5*32, 每10ms来一个大包）
                     if (packet.type === 'emg_data') {
                         
-                        this.packetCounter++;
-                        if(this.packetCounter % 1000)
-                        {
-                          console.log('index.html client has get 1000 emg_data packet = ', this.packetCounter);
-                        }
+                        this.packet_5_Counter++;
+
+                        console.log('index.html client has get emg_data big packet = ', this.packet_5_Counter);
+
                         this.updateAllEMGChannels(packet.data);
                         
                         // 隐藏无信号提示
