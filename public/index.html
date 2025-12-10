@@ -98,6 +98,20 @@
       transition: all 1s ease-in-out;
     }
 
+    /* 性能监控面板 */
+    .perf-panel {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(0,0,0,0.8);
+      color: #00ff00;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      z-index: 200;
+      max-width: calc(50% - 40px);
+    }
+
     
   </style>
 
@@ -567,7 +581,18 @@ window.addEventListener('load', initBluetoothUI);
 
 
 
+
+
 <!-- 2.1 采集流程界面 -->
+
+<!-- 性能监控 -->
+<div class="perf-panel" id="perf-panel">
+  全局耗时: 0ms<br>
+  指针位置: 0/1000<br>
+  已运行: 0s<br>
+  开启通道: 16/16
+</div>
+
 <div id="collect-page" class="page hidden h-screen flex flex-col">
     <!-- 顶部导航 -->
     <header class="w-full p-4 bg-white shadow-sm flex items-center justify-between">
@@ -580,14 +605,11 @@ window.addEventListener('load', initBluetoothUI);
         <div class="text-dark-2 text-sm">
             <span id="collect-time">2025-11-08 15:30:45</span>
         </div>
-
-
-
     </header>
 
     <!-- 主内容区域 -->
     <main class="flex-1 flex p-4 bg-gray-50">
-        <!-- 左侧：EMG信号显示区域（独立运行） -->
+        <!-- 左侧：EMG信号显示区域（修改为单一大窗口） -->
         <div class="w-1/3 bg-white rounded-lg p-3 mr-4 flex flex-col border border-gray-200">
             <h2 class="text-md font-bold mb-3 flex items-center">
                 <i class="fa fa-line-chart text-primary mr-2"></i>实时EMG信号
@@ -613,12 +635,14 @@ window.addEventListener('load', initBluetoothUI);
                 </div>
             </div>
             
-            <!-- 信号图表网格 -->
-            <div class="grid grid-cols-2 gap-2 flex-1 overflow-y-auto" id="signal-grid">
-                <div class="text-center py-8 text-gray-400" id="no-signal-message">
-                    <i class="fa fa-wave-square text-3xl mb-2"></i>
-                    <p>等待信号数据...</p>
-                </div>
+            <!-- 单一大窗口EMG显示区域（核心修改） -->
+            <div class="flex-1 bg-black rounded-lg relative overflow-hidden" id="emg-big-window">
+                <!-- 全局时间指针 -->
+                <div id="global-time-pointer" style="position: absolute; top: 0; bottom: 0; width: 2px; background: #ff3333; z-index: 100; pointer-events: none; box-shadow: 0 0 5px rgba(255,51,51,0.8);"></div>
+                <div id="pointer-time-label" style="position: absolute; top: 10px; color: #ff3333; font-weight: bold; background: rgba(0,0,0,0.8); padding: 4px 8px; border-radius: 4px; z-index: 101; font-size: 12px;"></div>
+                
+                <!-- 通道Canvas容器（动态生成16个通道Canvas） -->
+                <div id="channels-canvas-container" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></div>
             </div>
             
             <!-- 数据统计 -->
@@ -629,11 +653,12 @@ window.addEventListener('load', initBluetoothUI);
                     <div>信号范围: <span class="font-mono" id="signal-range">±0mV</span></div>
                     <div>更新时间: <span class="font-mono" id="last-update">-</span></div>
                     <div>连接状态: <span class="font-mono" id="connection-status">未连接</span></div>
+                    <div>开启通道: <span class="font-mono" id="active-channels">16/16</span></div>
                 </div>
             </div>
         </div>
 
-        <!-- 右侧：采集流程区域（独立运行） -->
+        <!-- 右侧：采集流程区域（完全保持不变） -->
         <div class="w-2/3 flex flex-col">
             <!-- 进度指示器 -->
             <div class="flex items-center mb-6">
@@ -689,11 +714,10 @@ window.addEventListener('load', initBluetoothUI);
     </main>
 </div>
 
-
-
-<!-- 2.2 采集界面左右模块的实现逻辑 -->
-
+<!-- EMG大窗口核心逻辑脚本（独立抽离到外部） -->
 <script>
+
+
 // ==================== 全局变量 ====================
 let emgWebSocket = null;
 let isCollecting = false;
@@ -701,6 +725,355 @@ let isPaused = false; // 保留全局变量，用于兼容外部可能的调用
 let dataBuffer = [];
 let debugCounter = 0;
 let lastDataTime = Date.now();
+let all_channels_5_data_series = Array.from({ length: 16 }, () => []);
+
+
+// ========== EMG大窗口配置常量 ==========
+const EMG_CONFIG = {
+    CHANNEL_COUNT: 16,          // 总通道数
+    TOTAL_POINTS: 1000,         // 窗口总点数
+    UPDATE_POINTS: 5,           // 每次更新点数（减少渲染开销）
+    EMG_RANGE: 100,             // EMG信号范围(mV)
+    UPDATE_INTERVAL: 10,        // 更新间隔(ms)
+    AMPLITUDE_SCALE: 1.0        // 振幅缩放系数
+};
+
+// ========== 全局状态变量 ==========
+let emgState = {
+    containerWidth: 0,
+    containerHeight: 0,
+    channelHeight: 0,
+    pointWidth: 0,
+    currentPointer: 0,
+    channelCanvases: [],
+    channelStates: Array(EMG_CONFIG.CHANNEL_COUNT).fill(true),
+    isPaused: false,
+    lastUpdateTime: 0,
+    packetCount: 0,
+    sampleRate: 0,
+    signalRange: "±0mV",
+    connectionStatus: "未连接",
+    runtimeStart : Date.now()
+};
+
+    // ===================== 更新性能面板 =====================
+function updatePerfPanel(elapsed = 0) {
+  const runtime = Math.floor((Date.now() - emgState.runtimeStart) / 1000);
+  const openChannels = emgState.channelStates.filter(s => s).length;
+  document.getElementById('perf-panel').innerHTML = 
+    `全局耗时: ${elapsed.toFixed(2)}ms<br>
+      指针位置: ${emgState.currentPointer}/1000<br>
+      已运行: ${runtime}s<br>
+      开启通道: ${openChannels}/16`;
+}
+
+
+// ========== 初始化EMG大窗口 ==========
+function initEMGBigWindow() {
+    // 关键修复1：使用requestAnimationFrame确保DOM完全渲染后再计算尺寸
+    requestAnimationFrame(() => {
+        const emgWindow = document.getElementById('emg-big-window');
+        const canvasContainer = document.getElementById('channels-canvas-container');
+        
+        // 强制刷新布局（解决初始尺寸为0的问题）
+        emgWindow.style.display = 'block';
+        const computedStyle = getComputedStyle(emgWindow);
+        emgState.containerWidth = parseInt(computedStyle.width) || emgWindow.clientWidth;
+        emgState.containerHeight = parseInt(computedStyle.height) || emgWindow.clientHeight;
+        emgState.channelHeight = emgState.containerHeight / EMG_CONFIG.CHANNEL_COUNT;
+        emgState.pointWidth = emgState.containerWidth / EMG_CONFIG.TOTAL_POINTS;
+
+        // 清空原有Canvas
+        canvasContainer.innerHTML = '';
+
+        // 动态创建16个通道Canvas
+        for (let ch = 0; ch < EMG_CONFIG.CHANNEL_COUNT; ch++) {
+            const canvas = document.createElement('canvas');
+            canvas.id = `emg-channel-${ch}`;
+            // 关键修复2：Canvas宽高必须是像素值（而非百分比），匹配容器实际尺寸
+            canvas.width = emgState.containerWidth;
+            canvas.height = emgState.channelHeight;
+            canvas.style.cssText = `
+                position: absolute;
+                top: ${ch * emgState.channelHeight}px;
+                left: 0;
+                width: 100%;
+                height: ${emgState.channelHeight}px;
+                image-rendering: pixelated;
+            `;
+
+            // 初始化Canvas上下文
+            const ctx = canvas.getContext('2d');
+            ctx.imageSmoothingEnabled = false;
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            // 关键修复3：提高线条宽度，确保可见
+            ctx.strokeStyle = `hsl(${(ch * 20) % 360}, 100%, 50%)`; // 更鲜艳的颜色
+            ctx.lineWidth = 1.5; // 加粗线条
+
+            canvasContainer.appendChild(canvas);
+            emgState.channelCanvases.push({ ctx, canvas, channelIndex: ch });
+        }
+
+        // 初始化时间指针（此时尺寸已正确计算）
+        updateTimePointer();
+    });
+
+    // 监听窗口大小变化
+    window.addEventListener('resize', resizeEMGBigWindow);
+}
+
+// ========== 调整EMG窗口尺寸 ==========
+function resizeEMGBigWindow() {
+    const emgWindow = document.getElementById('emg-big-window');
+    // 强制刷新布局
+    const computedStyle = getComputedStyle(emgWindow);
+    emgState.containerWidth = parseInt(computedStyle.width) || emgWindow.clientWidth;
+    emgState.containerHeight = parseInt(computedStyle.height) || emgWindow.clientHeight;
+    emgState.channelHeight = emgState.containerHeight / EMG_CONFIG.CHANNEL_COUNT;
+    emgState.pointWidth = emgState.containerWidth / EMG_CONFIG.TOTAL_POINTS;
+
+    // 更新所有通道Canvas尺寸和位置
+    emgState.channelCanvases.forEach(({ ctx, canvas, channelIndex }) => {
+        canvas.width = emgState.containerWidth;
+        canvas.height = emgState.channelHeight;
+        canvas.style.top = `${channelIndex * emgState.channelHeight}px`;
+        
+        // 重置Canvas背景
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.strokeStyle = `hsl(${(channelIndex * 20) % 360}, 100%, 50%)`;
+        ctx.lineWidth = 1.5;
+    });
+
+    // 更新指针位置
+    updateTimePointer();
+}
+
+// ========== 更新时间指针 ==========
+function updateTimePointer() {
+    const pointer = document.getElementById('global-time-pointer');
+    const label = document.getElementById('pointer-time-label');
+    // 关键修复4：指针位置计算基于实际的pointWidth（避免初始为0）
+    const pointerX = emgState.currentPointer * emgState.pointWidth;
+    
+    // 确保指针在可视区域内
+    if (!isNaN(pointerX) && emgState.containerWidth > 0) {
+        pointer.style.left = `${pointerX}px`;
+        label.style.left = `${pointerX + 5}px`;
+    }
+    label.textContent = `时间点 [${emgState.currentPointer}/${EMG_CONFIG.TOTAL_POINTS}]`;
+}
+
+// ========== 更新EMG数据（局部渲染，仅更新新增点） ==========
+function updateEMGData() {
+    if (emgState.isPaused) return;
+    // 防护：尺寸未初始化时跳过
+    if (emgState.containerWidth === 0 || emgState.containerHeight === 0) return;
+
+    const startTime = performance.now();
+    const startPos = emgState.currentPointer;
+    const endPos = (startPos + EMG_CONFIG.UPDATE_POINTS) % EMG_CONFIG.TOTAL_POINTS;
+    const updatePositions = [];
+
+    // 生成本次需要更新的点位
+    for (let i = 0; i < EMG_CONFIG.UPDATE_POINTS; i++) {
+        updatePositions.push((startPos + i) % EMG_CONFIG.TOTAL_POINTS);
+    }
+
+    // 逐通道更新数据（仅渲染新增点区域）
+    emgState.channelCanvases.forEach(({ ctx, canvas, channelIndex }) => {
+        // 跳过关闭的通道
+        if (!emgState.channelStates[channelIndex]) return;
+
+        ctx.save();
+        // 以通道中线为基准点
+        ctx.translate(0, emgState.channelHeight / 2);
+
+        // 仅更新新增的几个点，减少渲染开销
+        for (let i = 0; i < EMG_CONFIG.UPDATE_POINTS; i++) {
+            const pos = updatePositions[i];
+            const x = pos * emgState.pointWidth;
+
+            // 清空当前点区域（仅清空需要更新的小区域）
+            ctx.clearRect(x, -emgState.channelHeight/2, emgState.pointWidth, emgState.channelHeight);
+
+            // 生成模拟EMG数据（实际使用时替换为真实数据）
+            //const emgValue = (Math.random() * 2 - 1) * EMG_CONFIG.EMG_RANGE * 0.8 * EMG_CONFIG.AMPLITUDE_SCALE;
+            const emgValue = all_channels_5_data_series[channelIndex][i];
+            // 坐标映射，确保波形在通道内可见
+            const y = -(emgValue / EMG_CONFIG.EMG_RANGE) * (emgState.channelHeight / 2 * 0.9); // 负号修正Y轴方向
+            //const y = emgValue;
+            //console.log('liangji get y = ', emgValue);
+
+            // ========== 核心修改：仅绘制单点，移除连线逻辑 ==========
+            // 设置点的填充颜色（与通道线条颜色一致）
+            ctx.fillStyle = ctx.strokeStyle;
+            // 绘制圆形点（增大半径到2px，确保清晰可见）
+            ctx.beginPath();
+            // arc(圆心X, 圆心Y, 半径, 起始角度, 结束角度)
+            ctx.arc(x, y, 1, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 可选优化：添加点的描边，增强视觉效果（如需更醒目可保留）
+            // ctx.strokeStyle = '#ffffff'; // 白色描边
+            // ctx.lineWidth = 0.5;
+            // ctx.stroke();
+        }
+
+        ctx.restore();
+    });
+
+    // 更新指针位置
+    emgState.currentPointer = endPos;
+    updateTimePointer();
+
+    // 更新统计信息
+    updateEMGStats(startTime);
+
+    // 更新性能面板
+    updatePerfPanel(performance.now() - startTime);
+}
+
+// ========== 更新EMG统计信息 ==========
+function updateEMGStats(startTime) {
+    // 更新数据包计数
+    emgState.packetCount++;
+    document.getElementById('packet-count').textContent = emgState.packetCount;
+
+    // 计算采样率（模拟）
+    const cost = performance.now() - startTime;
+    emgState.sampleRate = cost > 0 ? Math.round(1000 / cost) : 0;
+    document.getElementById('sample-rate').textContent = emgState.sampleRate;
+
+    // 更新信号范围
+    emgState.signalRange = `±${EMG_CONFIG.EMG_RANGE}mV`;
+    document.getElementById('signal-range').textContent = emgState.signalRange;
+
+    // 更新最后更新时间
+    const now = new Date();
+    const updateTime = `${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now.getMilliseconds().toString().padStart(3, '0')}`;
+    document.getElementById('last-update').textContent = updateTime;
+
+    // 更新开启通道数
+    const activeChannels = emgState.channelStates.filter(state => state).length;
+    document.getElementById('active-channels').textContent = `${activeChannels}/${EMG_CONFIG.CHANNEL_COUNT}`;
+
+    // 更新连接状态（模拟）
+    emgState.connectionStatus = "已连接";
+    document.getElementById('connection-status').textContent = emgState.connectionStatus;
+}
+
+// ========== 绑定EMG控制事件 ==========
+function bindEMGEvents() {
+    // 暂停/继续按钮
+    /*
+    document.getElementById('pause-signal').addEventListener('click', function() {
+        emgState.isPaused = !emgState.isPaused;
+        this.innerHTML = emgState.isPaused ? 
+            '<i class="fa fa-play mr-1"></i>继续' : 
+            '<i class="fa fa-pause mr-1"></i>暂停';
+    });
+    */
+
+    // 清空按钮
+    document.getElementById('clear-signal').addEventListener('click', function() {
+        emgState.channelCanvases.forEach(({ ctx, canvas }) => {
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        });
+        emgState.currentPointer = 0;
+        updateTimePointer();
+        emgState.packetCount = 0;
+        document.getElementById('packet-count').textContent = 0;
+    });
+
+    // 通道选择下拉框
+    document.getElementById('channel-select').addEventListener('change', function(e) {
+        const value = e.target.value;
+        for (let ch = 0; ch < EMG_CONFIG.CHANNEL_COUNT; ch++) {
+            switch(value) {
+                case 'all':
+                    emgState.channelStates[ch] = true;
+                    break;
+                case '1-8':
+                    emgState.channelStates[ch] = ch < 8;
+                    break;
+                case '9-16':
+                    emgState.channelStates[ch] = ch >= 8;
+                    break;
+            }
+            // 显示/隐藏对应通道Canvas
+            const channelCanvas = document.getElementById(`emg-channel-${ch}`);
+            if (channelCanvas) {
+                channelCanvas.style.display = emgState.channelStates[ch] ? 'block' : 'none';
+            }
+        }
+        // 更新激活通道统计
+        const activeChannels = emgState.channelStates.filter(state => state).length;
+        document.getElementById('active-channels').textContent = `${activeChannels}/${EMG_CONFIG.CHANNEL_COUNT}`;
+    });
+
+    // 采集开始/停止按钮联动（模拟）
+    document.getElementById('start-collect').addEventListener('click', function() {
+        emgState.isPaused = false;
+        document.getElementById('pause-signal').innerHTML = '<i class="fa fa-pause mr-1"></i>暂停';
+        this.classList.add('hidden');
+        document.getElementById('stop-collect').classList.remove('hidden');
+    });
+
+    document.getElementById('stop-collect').addEventListener('click', function() {
+        emgState.isPaused = true;
+        document.getElementById('pause-signal').innerHTML = '<i class="fa fa-play mr-1"></i>继续';
+        this.classList.add('hidden');
+        document.getElementById('start-collect').classList.remove('hidden');
+    });
+}
+
+// ========== 主更新循环 ==========
+// function emgUpdateLoop(timestamp) {
+//     if (timestamp - emgState.lastUpdateTime >= EMG_CONFIG.UPDATE_INTERVAL) {
+//         updateEMGData();
+//         emgState.lastUpdateTime = timestamp;
+//     }
+//     requestAnimationFrame(emgUpdateLoop);
+// }
+
+// ========== 页面加载初始化 ==========
+// 关键修复7：确保采集界面显示后再初始化（解决隐藏元素尺寸为0的问题）
+function initWhenPageVisible() {
+    // 监听采集页面显示事件（如果你的页面切换是通过class控制的）
+    const observer = new MutationObserver((mutations) => {
+        mutations.forEach(mutation => {
+            if (mutation.target.id === 'collect-page' && !mutation.target.classList.contains('hidden')) {
+                initEMGBigWindow();
+                bindEMGEvents();
+                return;
+                // requestAnimationFrame(emgUpdateLoop);
+                // observer.disconnect(); // 只执行一次
+            }
+        });
+    });
+
+    // 观察collect-page的class变化
+    observer.observe(document.getElementById('collect-page'), {
+        attributes: true,
+        attributeFilter: ['class']
+    });
+
+    // 备用：如果页面初始就是显示的
+    const collectPage = document.getElementById('collect-page');
+    if (!collectPage.classList.contains('hidden')) {
+        initEMGBigWindow();
+        bindEMGEvents();
+        updatePerfPanel();
+        return;
+        // requestAnimationFrame(emgUpdateLoop);
+        // observer.disconnect();
+    }
+}
+
+
 // ==================== 左侧EMG信号显示模块 ====================
 const EMGDisplayModule = {
     isInitialized: false,       // 初始化标志
@@ -723,100 +1096,10 @@ const EMGDisplayModule = {
         }
 
         console.log('📊 初始化EMG信号显示');
-        this.initializeCompactEMGDisplay();
-        this.setupSignalControls();
+
         this.connectToRealtimeEngine();
-
+        initWhenPageVisible();
         this.isInitialized = true;
-    },
-
-    // 在 cleanup 或 reset 时，需要将标志重置为 false
-    cleanup() {
-        console.log('🧹 清理EMG信号显示资源');
-        // ... 清理逻辑 ...
-        this.isInitialized = false; // 重置标志
-
-        console.log('🧹 清理EMG websocket 连接标志');
-        this.isConnected = false; // 重置标志
-    },
-
-    // 初始化信号显示（使用Dygraphs）
-    initializeCompactEMGDisplay() {
-        const grid = document.getElementById('signal-grid');
-        const noSignal = document.getElementById('no-signal-message');
-        
-        if (!grid) {
-            console.error('无法找到signal-grid元素');
-            return;
-        }
-        
-        // 清空现有内容
-        grid.innerHTML = '';
-        
-        // 为每个通道创建图表容器（替换原有的canvas）
-        for (let i = 0; i < 16; i++) {
-            const channelDiv = document.createElement('div');
-            channelDiv.className = 'bg-white rounded p-2 border border-gray-200 channel-item'; // 新增类名用于筛选
-            channelDiv.dataset.channel = i + 1; // 标记通道号
-            channelDiv.innerHTML = `
-                <div class="flex justify-between items-center mb-2">
-                    <span class="text-xs font-medium text-gray-700">通道 ${i + 1}</span>
-                </div>
-                <div id="emg-channel-${i + 1}" class="w-full h-24 bg-gray-50 border border-gray-300 rounded"></div>
-            `;
-            grid.appendChild(channelDiv);
-            
-            // 初始化数据系列（使用相对索引而非时间戳）
-            this.dataSeries[i + 1] = [];
-            
-            // 延迟创建图表以确保DOM已准备好
-            setTimeout(() => {
-                this.createChannelGraph(i + 1);
-            }, 0);
-        }
-    },
-    
-    // 为单个通道创建Dygraphs图表
-    createChannelGraph(channel) {
-        const container = document.getElementById(`emg-channel-${channel}`);
-        if (!container) {
-            console.error(`无法找到emg-channel-${channel}容器`);
-            return;
-        }
-        
-        // 初始空数据
-        const initialData = [];
-        
-        // 创建Dygraphs实例
-        this.graphs[channel] = new Dygraph(
-            container,
-            initialData,
-            {
-                labels: ['索引', '信号值(mV)'], // 改为相对索引
-                width: container.clientWidth,
-                height: 96, // 对应h-24样式
-                axisLabelFontSize: 10,
-                drawPoints: false,
-                strokeWidth: 1.5,
-                strokeColor: '#3b82f6',
-                backgroundColor: '#f8f9fa',
-                gridLineColor: '#e5e7eb',
-                axes: {
-                    x: {
-                        show: false, // 隐藏X轴
-                        valueRange: [0, this.windowPoints] // X轴固定范围（0到窗口点数）
-                    },
-                    y: {
-                        axisLabelWidth: 30,
-                        valueFormatter: (v) => v.toFixed(7)
-                    }
-                },
-                valueRange: [-1000, 1000], // 初始Y轴范围
-                autoResize: true,
-                // 关键：禁用X轴自动缩放，保持固定窗口
-                xAxisRange: [0, this.windowPoints]
-            }
-        );
     },
 
 
@@ -877,170 +1160,21 @@ const EMGDisplayModule = {
 
     return result;
 },
-    
+
 // 更新单个通道数据（核心修复：实现固定窗口平移效果 + 动态Y轴）
 // 一个大包，针对第channel个通道，一次更新5个时间点的数据
 //this.updateEMGChannel(i + 1, emgData);
-updateEMGChannel(channel, emgData) {
-    //const valueDisplay = document.getElementById(`ch${channel}-value`);
+    updateEMGChannel(channel, emgData) {
 
-    //因为一次更新5小包数据，所以不显示读数
-    // if (valueDisplay) {
-    //     valueDisplay.textContent = `${value.toFixed(7)}mV`;
-    // }
-    
-    // 1. 获取当前数据系列
-    const series = this.dataSeries[channel];
-    // 2. 新数据点的索引 = 当前数据长度（相对索引）
-    const newIndex = series.length;
+        let add_data_array = this.getChannelUint16Array(emgData, channel);
+        all_channels_5_data_series[channel - 1].push(add_data_array[0],
+                                                    add_data_array[1],
+                                                    add_data_array[2],
+                                                    add_data_array[3],
+                                                    add_data_array[4]);
+        },
 
-    let add_data_array = this.getChannelUint16Array(emgData, channel);
-    // 3. 添加新数据点
-    series.push([newIndex, add_data_array[0]]);
-    series.push([newIndex + 1, add_data_array[1]]);
-    series.push([newIndex + 2, add_data_array[2]]);
-    series.push([newIndex + 3, add_data_array[3]]);
-    series.push([newIndex + 4, add_data_array[4]]);
 
-    // 4. 核心逻辑：保持窗口内固定点数
-    if (series.length > this.windowPoints) {
-        // 移除最旧的点（实现向左平移）
-        // 循环5次，每次删第一个元素
-        for (let i = 0; i < 5; i++) {
-          if (series.length === 0) break; // 避免空数组报错
-          series.shift();
-        }
-
-        // 重新计算所有点的索引（保证X轴始终从0到windowPoints）
-        for (let i = 0; i < series.length; i++) {
-            series[i][0] = i;
-        }
-    }
-    
-    // 5. 计算动态Y轴范围
-    const yAxisRange = this.calculateDynamicRange(series);
-    
-    // 6. 更新图表（包含动态Y轴）
-    if (this.graphs[channel]) {
-        this.graphs[channel].updateOptions({
-            file: series,
-            // 强制X轴范围保持不变
-            xAxisRange: [0, this.windowPoints],
-            // 设置动态计算的Y轴范围
-            yAxisRange: yAxisRange,
-            // 可选：开启Y轴自动缩放（作为备用）
-            autoscaleY: true
-        });
-    }
-},
-
-// 计算动态Y轴范围（优化显示效果）
-calculateDynamicRange(data) {
-    if (data.length === 0) return [-1000, 1000];
-    
-    const values = data.map(point => point[1]);
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    
-    // 增加10%的边距，避免数据贴边
-    const padding = (max - min) * 0.1 || 100;
-    // 确保最小值不会大于最大值（处理单值情况）
-    const adjustedMin = min - padding;
-    const adjustedMax = max + padding;
-    
-    return [adjustedMin, adjustedMax];
-},
-    // 修改清空通道方法（适配Dygraphs）
-    clearAllChannels() {
-        for (let i = 1; i <= 16; i++) {
-            // 清空数据系列
-            this.dataSeries[i] = [];
-            
-            // 重置显示值
-            // const valueDisplay = document.getElementById(`ch${i}-value`);
-            // if (valueDisplay) {
-            //     valueDisplay.textContent = '0mV';
-            // }
-            
-            // 重置图表
-            if (this.graphs[i]) {
-                this.graphs[i].updateOptions({
-                    file: [],
-                    valueRange: [-1000, 1000],
-                    xAxisRange: [0, this.windowPoints]
-                });
-            }
-        }
-        
-        // 重置统计信息（保持原有逻辑）
-        document.getElementById('packet-count').textContent = '0';
-        document.getElementById('sample-rate').textContent = '0';
-        document.getElementById('signal-range').textContent = '±0mV';
-        this.packet_5_Counter = 0;
-        debugCounter = 0;
-    },
-
-    // 绘制科学网格（保留原有逻辑，未使用）
-    drawScientificGrid(ctx, width, height) {
-        ctx.clearRect(0, 0, width, height);
-        
-        // 绘制背景
-        ctx.fillStyle = '#f8f9fa';
-        ctx.fillRect(0, 0, width, height);
-        
-        // 绘制网格线
-        ctx.strokeStyle = '#e5e7eb';
-        ctx.lineWidth = 1;
-        
-        // 水平线
-        for (let i = 0; i <= 4; i++) {
-            const y = i * (height / 4);
-            ctx.beginPath();
-            ctx.moveTo(0, y);
-            ctx.lineTo(width, y);
-            ctx.stroke();
-        }
-        
-        // 零位线（中心线）
-        ctx.strokeStyle = '#9ca3af';
-        ctx.beginPath();
-        ctx.moveTo(0, height / 2);
-        ctx.lineTo(width, height / 2);
-        ctx.stroke();
-    },
-
-    // 绘制科学信号线（保留原有逻辑，未使用）
-    drawScientificSignal(ctx, width, height, data) {
-        // 先绘制网格
-        this.drawScientificGrid(ctx, width, height);
-        
-        if (data.length < 2) return;
-        
-        // 计算动态范围
-        const maxVal = Math.max(...data.map(Math.abs));
-        const range = Math.max(100, maxVal * 1.2);
-        
-        // 绘制信号线
-        ctx.strokeStyle = '#3b82f6';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        
-        const xScale = width / (data.length - 1);
-        
-        for (let i = 0; i < data.length; i++) {
-            const x = i * xScale;
-            const normalizedY = (data[i] + range) / (2 * range);
-            const y = height - (normalizedY * height);
-            
-            if (i === 0) {
-                ctx.moveTo(x, y);
-            } else {
-                ctx.lineTo(x, y);
-            }
-        }
-        
-        ctx.stroke();
-    },
 
     // 一个大包更新所有通道
     updateAllEMGChannels(emgData) {
@@ -1049,10 +1183,14 @@ calculateDynamicRange(data) {
             return;
         }
         
+        all_channels_5_data_series.forEach(subArr => subArr.length = 0);
         // 更新每个通道
         for (let i = 0; i < 16; i++) {
             this.updateEMGChannel(i + 1, emgData.big_bag_raw_data);
         }
+
+        //刷新局部
+        requestAnimationFrame(updateEMGData);
         
         // 更新统计信息
         this.updateStatistics(emgData);
@@ -1164,7 +1302,7 @@ calculateDynamicRange(data) {
                         
                         this.packet_5_Counter++;
 
-                        console.log('index.html client has get emg_data big packet = ', this.packet_5_Counter);
+                        //console.log('index.html client has get emg_data big packet = ', this.packet_5_Counter);
 
                         this.updateAllEMGChannels(packet.data);
                         
@@ -1237,40 +1375,7 @@ calculateDynamicRange(data) {
         }
     },
 
-    // 设置信号控制
-    setupSignalControls() {
-        const _this = this; // 保存模块this指向，避免回调中丢失
-        // 暂停/继续按钮
-        document.getElementById('pause-signal').addEventListener('click', () => {
-            // 关键修复：同步模块内isPaused和全局isPaused
-            _this.isPaused = !_this.isPaused;
-            isPaused = _this.isPaused; 
 
-            const pauseBtn = document.getElementById('pause-signal');
-            
-            if (_this.isPaused) {
-                pauseBtn.innerHTML = '<i class="fa fa-play mr-1"></i>继续';
-                pauseBtn.classList.remove('bg-gray-100');
-                pauseBtn.classList.add('bg-green-100', 'text-green-700');
-                _this.updateConnectionStatus('已暂停');
-            } else {
-                pauseBtn.innerHTML = '<i class="fa fa-pause mr-1"></i>暂停';
-                pauseBtn.classList.remove('bg-green-100', 'text-green-700');
-                pauseBtn.classList.add('bg-gray-100');
-                _this.updateConnectionStatus('已连接');
-            }
-        });
-
-        // 清空按钮
-        document.getElementById('clear-signal').addEventListener('click', () => {
-            _this.clearAllChannels();
-        });
-
-        // 通道选择器
-        document.getElementById('channel-select').addEventListener('change', (e) => {
-            _this.filterChannels(e.target.value);
-        });
-    },
 
     // 过滤通道显示（核心修复）
     filterChannels(filter) {
@@ -1299,7 +1404,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (!EMGDisplayModule.isInitialized) {
                 console.log('📋 采集页面已显示，初始化所有模块');
                 EMGDisplayModule.initialize();
-                CollectionModule.initialize();
+                //CollectionModule.initialize();
             }
         }else {
         // 如果页面被隐藏了，可以在这里执行清理操作
@@ -1327,6 +1432,8 @@ document.addEventListener('DOMContentLoaded', function() {
     observer.observe(collectPage, { attributes: true });
 });
 </script>
+
+
 
 
 <!--  2.3 采集界面右半部分采集逻辑流程 -->
