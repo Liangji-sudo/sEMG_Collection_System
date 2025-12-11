@@ -14,6 +14,10 @@ const deviceSync = require('./deviceSync');
 // 引入实时引擎模块
 const realtimeEngine = require('./realtimeEngine');
 
+// 引入设备协同模块
+const dataStorage = require('./dataStorage');
+
+
 // 中间件配置， 用于给前端获取数据的接口
 app.use(cors());
 app.use(express.json());
@@ -168,6 +172,7 @@ function setupGracefulShutdown() {
         try {
             await deviceSync.close();
             await realtimeEngine.stop();
+            await dataStorage.close();
             console.log('服务器关闭完成');
             process.exit(0);
         } catch (error) {
@@ -193,6 +198,10 @@ async function startServer() {
         // 启动deviceSync模块（deviceSync启动ble_server模块）
         await deviceSync.initialize();
         console.log('[server.js] deviceSync 启动成功');
+
+        // 启动dataStorage模块(dataStorage模块启动storage_server模块)
+        await dataStorage.initialize();
+        console.log('[server.js] dataStorage 启动成功');
         
         // 启动HTTP服务器
         const server = app.listen(PORT, () => {

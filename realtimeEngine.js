@@ -1,20 +1,22 @@
 // realtimeEngine.js
 const WebSocket = require('ws');
 const EventEmitter = require('events');
+// 新版 zeromq (v6+) 适配代码
+const zmq = require('zeromq');
+const { promisify } = require('util');
 
 
 class RealtimeEngine extends EventEmitter {
     constructor() {
         super();
-        // 实时引擎websocket服务器，用于向各个模块，前端广播各自需要的数据
-        this.wss = null;
+        // websocket server，用于index.html client的实时显示
+        this.websocket_server = null;
         this.clients = new Set();
         this.isRunning = false;
         this.dataBuffer = [];
         this.maxBufferSize = 1000;
-        this.broadcastInterval = null;
 
-        // ===== 新增：Python WebSocket 客户端配置 =====
+        // ===== 新增：ble_server 客户端配置 =====
         this.ble_client = null; // 连接 Python 的 WebSocket 客户端实例
         this.ble_clientUrl = 'ws://localhost:8766'; // Python 服务端的 WebSocket 地址（替换为你的实际地址）
         this.reconnectInterval = 3000; // 重连间隔（3秒）
@@ -27,37 +29,46 @@ class RealtimeEngine extends EventEmitter {
         this.emg_5_packets_count=0;
         this.emg_interval = 0.001; //1ms
 
+
+        // ===== 新增：storage_server zetomq连接配置 =====
+        this.storage_server_socket = new zmq.Request();
+        this.storage_server_host = '127.0.0.1';
+        this.storage_server_port = 5555;
+
     }
 
-    // 启动实时引擎
+    // 0.0 启动 realtimeEngine 实时引擎模块
     start(port = 8080) {
         return new Promise((resolve, reject) => {
             try {
-                //启动realtimeEngine 广播服务器
-                this.wss = new WebSocket.Server({ port });
-                
+                /**
+                 * ===== 1. 连接ble_server  =====
+                 */
                 this.connectTimeoutTimer = setTimeout(() => {
-                    this.ble_client_connect();
+                    this.ble_server_connect();
                 }, 1000); // 延迟 1000 毫秒（1秒）
 
-                this.wss.on('connection', (ws) => {
+
+                /**
+                 * ===== 2. 启动realtimeEngine >>> index.html websocket广播服务器 =====
+                 */ 
+                this.websocket_server = new WebSocket.Server({ port });
+
+                //收到index.html client连接请求
+                this.websocket_server.on('connection', (ws) => {
                     console.log('[realtimeEngine] 前端client连接已建立');
                     this.clients.add(ws);
                     
-                    // 发送连接确认和当前状态
+                    // ACK to client : connect_established
                     const connectMsg = JSON.stringify({
                         type: 'connection_established',
                         message: '实时数据连接已建立',
                         timestamp: Date.now()
                     });
-                    // 打印连接确认消息
-                    console.log(`[realtimeEngine] [${new Date().toISOString()}] 发送连接确认给前端:`, JSON.parse(connectMsg));
+
+                    //console.log(`[realtimeEngine] [${new Date().toISOString()}] 发送连接确认给前端:`, JSON.parse(connectMsg));
                     ws.send(connectMsg);
 
-
-                    // 发送缓冲的最新数据
-                    
-                    //this.sendBufferedData(ws);
 
                     ws.on('close', () => {
                         console.log('[realtimeEngine] 前端WebSocket连接已关闭');
@@ -70,23 +81,24 @@ class RealtimeEngine extends EventEmitter {
                     });
                 });
 
-                this.wss.on('listening', () => {
+                this.websocket_server.on('listening', () => {
                     console.log(`实时引擎启动成功，WebSocket服务运行在端口 ${port}`);
                     this.isRunning = true;
-                    
-                    // 启动数据广播
-                    //this.startDataBroadcast();
                     
                     resolve();
                 });
 
-                this.wss.on('error', (error) => {
+                this.websocket_server.on('error', (error) => {
                     console.error('启动WebSocket服务器失败:', error);
                     reject(error);
                 });
 
-                //启动realtimeEngine 的 ble_client  
-                //realtimeEngine.ble_client_connect();
+
+                /**
+                 * ===== 3. 连接storage_server  =====
+                 */
+                this.storage_server_connect();
+
 
             } catch (error) {
                 console.error('[realtimeEngine] 启动实时引擎失败:', error);
@@ -96,100 +108,83 @@ class RealtimeEngine extends EventEmitter {
     }
 
 
-    // 接受来自ble_server 的大包数据（5*32）数据，并即时广播出去
- receiveEMGData(emgData) {
-    if (!this.isRunning) return;
-
-    try {
-        // 获取 raw_data，假设它是一个包含5个十六进制字符串的数组
-        let rawData = emgData.raw_data;
-
-        // 打印 rawData 的类型和内容
-        //console.log("rawData type:", typeof rawData);  // 打印类型
-        //console.log("Raw Data Array: ", rawData);  // 打印原始数据（数组）
-
-        // 确保 rawData 是数组类型，且包含 5 组数据
-        if (!Array.isArray(rawData)) {
-            console.error("[realtimeEngine] rawData 不是一个数组");
-            return;
-        }
-
-        //console.log("EMG Data Groups: ", rawData);  // 调试输出原始的5组数据
-
-        // 确保是 5 组数据
-        if (rawData.length !== 5) {
-            console.error('[realtimeEngine] emg 数据组数不匹配，应该是 5 组');
-            return;
-        }
-
-        // 统计小包数量 + 5
-        this.emg_packet_count += rawData.length;
-        this.emg_5_packets_count++;
-
-        // 基于时间戳进行递增，每个包间隔 0.5ms
-        //let timestamp = emgData.timestamp;  // 初始时间戳
-
-        let timestamp_array = [emgData.timestamp,
-                        emgData.timestamp + this.emg_interval * 1,
-                        emgData.timestamp + this.emg_interval * 2,
-                        emgData.timestamp + this.emg_interval * 3,
-                        emgData.timestamp + this.emg_interval * 4];
-
-
-        const dataPacket = {
-            type: 'emg_data',
-            data: {
-                big_bag_raw_data: rawData,  // [32byte, 32byte, 32byte, 32byte, 32byte]//大包的rawData[5]数组放入 big_bag_raw_data
-                timestamp: timestamp_array, // [time, time, time, time, time] // 计算好大包内的5组的时间戳
-                packetCount: this.emg_packet_count,
-                interval: null // 现在不需要interval，可以以后加
+    // 0.1 websocket广播
+    broadcastToClients(dataPacket) {
+        const message = JSON.stringify(dataPacket);
+        
+        this.clients.forEach((client) => {
+            if (client.readyState === WebSocket.OPEN) {
+                try {
+                    client.send(message);
+                } catch (error) {
+                    console.error('[realtimeEngine] 发送数据到客户端失败:', error);
+                    this.clients.delete(client);
+                }
             }
-            //serverTime: Date.now()  // 当前服务器时间
-        };
-
-        // // 遍历每一组数据并构建对应的包
-        // rawData.forEach((groupData, index) => {
-        //     // 解析 groupData：将每两个字符（1个字节）转化为一个 uint16_t（2字节）
-        //     const channels = [];
-        //     for (let i = 0; i < groupData.length; i += 4) {  // 每4个字符（即2个字节）为1个 uint16_t
-        //         // 从 groupData 提取 4 个字符并转为整数
-        //         const channelValue = parseInt(groupData.slice(i, i + 4), 16); // 每2字节转为 uint16_t
-        //         channels.push(channelValue/1000);// /1000 模拟实际大小
-        //     }
-
-        //     //console.log("Parsed Channels: ", channels); // 输出解析后的通道数据
-
-        //     // 构建数据包
-        //     const dataPacket = {
-        //         type: 'emg_data',
-        //         data: {
-        //             big_bag_raw_data: channels,  // 将解析后的 16 个通道数据放入 channels
-        //             timestamp: timestamp + index * 0.0005,  // 每组时间戳递增0.5ms
-        //             packetCount: packetCount,
-        //             interval: null // 现在不需要interval，可以以后加
-        //         },
-        //         serverTime: Date.now()  // 当前服务器时间
-        //     };
-
-        // if(this.emg16_packet_count <= 10000)
-        // {                   // 广播给所有客户端
-        this.broadcastToClients(dataPacket);
-        console.log('realtimeEngine.js 发送一个大包，大包统计：小包统计：', this.emg_5_packets_count,this.emg_packet_count);
-        // }
-
-
-            
-
-        // });
-
-    } catch (error) {
-        console.error('[realtimeEngine] 处理EMG数据时发生错误:', error);
+        });
     }
-}
+
+    // 0.2 获取realtimeEngine引擎状态
+    getStatus() {
+        return {
+            isRunning: this.isRunning,
+            clientCount: this.clients.size,
+            bufferSize: this.dataBuffer.length,
+            maxBufferSize: this.maxBufferSize,
+            port: this.websocket_server ? this.websocket_server.address().port : null
+        };
+    }
+
+    // 0.3 停止实时引擎
+    stop() {
+        return new Promise((resolve) => {
+            this.isRunning = false;
+            //this.stopDataBroadcast();
+
+            // 强制关闭所有客户端（设置code=1001表示正常退出，避免等待）
+            this.clients.forEach(client => {
+                if (client.readyState === WebSocket.OPEN) {
+                    client.close(1001, '服务器关闭'); // 带状态码的强制关闭
+                }
+            });
+            this.clients.clear(); // 立即清空集合，避免残留
+
+            // 关闭服务器时设置超时，避免无限等待
+            if (this.websocket_server) {
+                const closeTimeout = setTimeout(() => {
+                    console.warn('服务器关闭超时，强制退出');
+                    resolve();
+                }, 3000); // 3秒超时
+
+                this.websocket_server.close(() => {
+                    clearTimeout(closeTimeout); // 成功关闭则清除超时
+                    console.log('【实时引擎已停止】');
+                    resolve();
+                });
+            } else {
+                resolve();
+            }
+
+            // 关闭目标 Client 连接（主动关闭，不触发重连）
+            if (this.targetClient) {
+                this.targetClient.close(1000, '代理关闭');
+                this.targetClient = null;
+            }
+            // 清除重连计时器
+            clearTimeout(this.reconnectTimer);
+        });
+    }
 
 
-    // 提供方法：作为client连接ble_python服务器
-    ble_client_connect() {
+
+
+    /**
+     * 1. ble_server 数据传输部分
+     * 
+     */
+
+    // 1.1 连接ble_server 服务器
+    ble_server_connect() {
         //关闭当前已有的连接
         if (this.ble_client) {
                 this.ble_client.close();
@@ -216,7 +211,7 @@ class RealtimeEngine extends EventEmitter {
                     // 处理连接确认消息（与后端realtimeEngine的connection_established对应）
                     if (packet.type === 'emg') {
                         console.log(`[realtimeEngine] 来自ble_server的emg 大包，大包timestamp : ${packet.timestamp}`);
-                        this.receiveEMGData(packet);
+                        this.attributeEMGData(packet);
                         return;
                     }
                 } catch (error) {
@@ -246,146 +241,113 @@ class RealtimeEngine extends EventEmitter {
         }
     }
 
+    // 1.2 接受来自ble_server 的大包数据（5*32）数据，并即时广播出去
+    attributeEMGData(emgData) {
+        if (!this.isRunning) return;
 
-/**
-   * 断线重连逻辑
-   */
-  handleReconnect() {
-    // 检查是否达到最大重连次数
-    if (this.maxReconnectTimes > 0 && this.currentReconnectTimes >= this.maxReconnectTimes) {
-      console.error(`[realtimeEngine] ❌ 已达到最大重连次数（${this.maxReconnectTimes}），停止重连`);
-      return;
-    }
+        try {
+            // 获取 raw_data，假设它是一个包含5个十六进制字符串的数组
+            let rawData = emgData.raw_data;
 
-    this.currentReconnectTimes++;
-    console.log(`[realtimeEngine] 🔄 正在进行第 ${this.currentReconnectTimes} 次重连目标服务器...`);
+            // 确保 rawData 是数组类型，且包含 5 组数据
+            if (!Array.isArray(rawData)) {
+                console.error("[realtimeEngine] rawData 不是一个数组");
+                return;
+            }
 
-    // 延迟重连（避免频繁连接）
-    this.reconnectTimer = setTimeout(() => {
-      this.connectTargetServer();
-    }, this.reconnectInterval);
-  }
+            // 确保是 5 组数据
+            if (rawData.length !== 5) {
+                console.error('[realtimeEngine] emg 数据组数不匹配，应该是 5 组');
+                return;
+            }
+
+            // 统计小包数量 + 5
+            this.emg_packet_count += rawData.length;
+            this.emg_5_packets_count++;
+
+            // 基于时间戳进行递增，每个包间隔 0.5ms
+            //let timestamp = emgData.timestamp;  // 初始时间戳
+
+            let timestamp_array = [emgData.timestamp,
+                            emgData.timestamp + this.emg_interval * 1,
+                            emgData.timestamp + this.emg_interval * 2,
+                            emgData.timestamp + this.emg_interval * 3,
+                            emgData.timestamp + this.emg_interval * 4];
 
 
- 
-
-    // 添加到数据缓冲区
-    addToBuffer(dataPacket) {
-        this.dataBuffer.push(dataPacket);
-        
-        // 限制缓冲区大小
-        if (this.dataBuffer.length > this.maxBufferSize) {
-            this.dataBuffer.shift();
-        }
-    }
-
-    // 广播数据给所有客户端
-    broadcastToClients(dataPacket) {
-        const message = JSON.stringify(dataPacket);
-        // 打印广播数据（包含时间戳和数据详情）
-        //console.log(`[${new Date().toISOString()}] 广播数据给所有前端 (客户端数量: ${this.clients.size}):`);
-        //console.log(JSON.stringify(dataPacket, null, 2)); // 格式化输出，方便查看结构
-        
-        this.clients.forEach((client) => {
-            if (client.readyState === WebSocket.OPEN) {
-                try {
-                    client.send(message);
-                } catch (error) {
-                    console.error('[realtimeEngine] 发送数据到客户端失败:', error);
-                    this.clients.delete(client);
+            const dataPacket = {
+                type: 'emg_data',
+                data: {
+                    big_bag_raw_data: rawData,  // [32byte, 32byte, 32byte, 32byte, 32byte]//大包的rawData[5]数组放入 big_bag_raw_data
+                    timestamp: timestamp_array, // [time, time, time, time, time] // 计算好大包内的5组的时间戳
+                    packetCount: this.emg_packet_count,
+                    interval: null // 现在不需要interval，可以以后加
                 }
-            }
-        });
+            };
+
+            // 广播出去
+            this.broadcastToClients(dataPacket);
+            console.log('realtimeEngine.js 发送一个大包，大包统计：小包统计：', this.emg_5_packets_count,this.emg_packet_count);
+
+        } catch (error) {
+            console.error('[realtimeEngine] 处理EMG数据时发生错误:', error);
+        }
     }
 
-    // 发送缓冲数据给新连接的客户端
-    // sendBufferedData(ws) {
-    //     if (this.dataBuffer.length === 0) return;
-
-    //     // 发送最近的一些数据点（例如最后50个）
-    //     const recentData = this.dataBuffer.slice(-50);
-    //     //console.log(`[${new Date().toISOString()}] 向新连接客户端发送缓冲数据 (共 ${recentData.length} 条)`);
-        
-    //     recentData.forEach((dataPacket, index) => {
-    //         if (ws.readyState === WebSocket.OPEN) {
-    //             // 打印单条缓冲数据
-    //             //console.log(`  缓冲数据 #${index + 1}:`, JSON.stringify(dataPacket, null, 2));
-    //             ws.send(JSON.stringify(dataPacket));
-    //         }
-    //     });
-    // }
-
-    // 停止数据广播
-    // stopDataBroadcast() {
-    //     if (this.broadcastInterval) {
-    //         clearInterval(this.broadcastInterval);
-    //         this.broadcastInterval = null;
-    //     }
-    // }
-
-    // 获取引擎状态
-    getStatus() {
-        return {
-            isRunning: this.isRunning,
-            clientCount: this.clients.size,
-            bufferSize: this.dataBuffer.length,
-            maxBufferSize: this.maxBufferSize,
-            port: this.wss ? this.wss.address().port : null
-        };
-    }
-
-    // 停止实时引擎
-    stop() {
-    return new Promise((resolve) => {
-        this.isRunning = false;
-        //this.stopDataBroadcast();
-
-        // 强制关闭所有客户端（设置code=1001表示正常退出，避免等待）
-        this.clients.forEach(client => {
-            if (client.readyState === WebSocket.OPEN) {
-                client.close(1001, '服务器关闭'); // 带状态码的强制关闭
-            }
-        });
-        this.clients.clear(); // 立即清空集合，避免残留
-
-        // 关闭服务器时设置超时，避免无限等待
-        if (this.wss) {
-            const closeTimeout = setTimeout(() => {
-                console.warn('服务器关闭超时，强制退出');
-                resolve();
-            }, 3000); // 3秒超时
-
-            this.wss.close(() => {
-                clearTimeout(closeTimeout); // 成功关闭则清除超时
-                console.log('【实时引擎已停止】');
-                resolve();
-            });
-        } else {
-            resolve();
+    // 1.3 断线重连逻辑
+    handleReconnect() {
+        // 检查是否达到最大重连次数
+        if (this.maxReconnectTimes > 0 && this.currentReconnectTimes >= this.maxReconnectTimes) {
+        console.error(`[realtimeEngine] ❌ 已达到最大重连次数（${this.maxReconnectTimes}），停止重连`);
+        return;
         }
 
-        // 关闭目标 Client 连接（主动关闭，不触发重连）
-        if (this.targetClient) {
-            this.targetClient.close(1000, '代理关闭');
-            this.targetClient = null;
-        }
-        // 清除重连计时器
-        clearTimeout(this.reconnectTimer);
-    });
-}
+        this.currentReconnectTimes++;
+        console.log(`[realtimeEngine] 🔄 正在进行第 ${this.currentReconnectTimes} 次重连目标服务器...`);
 
-
-    // 发送控制命令到前端, 未使用
-    sendControlCommand(command, data = {}) {
-        const commandPacket = {
-            type: 'control_command',
-            command: command,
-            data: data,
-            timestamp: Date.now()
-        };
-
-        this.broadcastToClients(commandPacket);
+        // 延迟重连（避免频繁连接）
+        this.reconnectTimer = setTimeout(() => {
+        this.connectTargetServer();
+        }, this.reconnectInterval);
     }
+
+
+
+
+
+
+    // 2.1 连接storage_server
+    storage_server_connect() {
+        try {
+            this.storage_server_socket.connect(`tcp://${this.storage_server_host}:${this.storage_server_port}`);
+            console.log(`已连接到 HDF5 存储服务：${this.storage_server_host}:${this.storage_server_port}`);
+        } catch (err) {
+            throw new Error(`连接失败：${err.message}`);
+        }
+    }
+
+    /**
+     * 发送指令到 Python 服务端（适配新版 API）
+     * @param {string} cmd 指令类型：create/write/close
+     * @param {object} params 指令参数
+     * @returns {Promise<object>} 服务端响应
+     */
+    // 2.2 向storage_server 发送储存指令指令
+    storage_server_sendCommand(cmd, params = {}) {
+        try {
+            // 构造请求数据（JSON 序列化）
+            const request = JSON.stringify({ cmd, params });
+            // 发送数据（新版 send 支持字符串，自动转 Buffer）
+            this.storage_server_socket.send(request);
+
+            // 接收响应（新版需用 iterator 接收，且响应是 Buffer 数组）
+            const [responseBuffer] = this.storage_server_socket.receive();
+            const response = JSON.parse(responseBuffer.toString('utf8'));
+            return response;
+        } catch (err) {
+            throw new Error(`指令发送失败（${cmd}）：${err.message}`);
+        }
+    } 
 }
 
 // 创建单例实例
