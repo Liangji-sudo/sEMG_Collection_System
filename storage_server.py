@@ -34,8 +34,8 @@ class HDF5StorageServer:
         """处理创建 HDF5 文件指令"""
         try:
             # 获取参数（支持自定义文件名、组名）
-            file_name = params.get("file_name", f"sensor_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.h5")
-            group_name = params.get("group_name", "sensor_data")
+            file_name = params.get("file_name")
+            group_name = params.get("group_name")
             self.file_path = os.path.join(os.getcwd(), file_name)
 
             # 检查文件是否已存在
@@ -63,9 +63,9 @@ class HDF5StorageServer:
                 return {"status": "error", "msg": "请先创建 HDF5 文件"}
 
             # 获取写入参数
-            dataset_name = params.get("dataset_name", "sensor_0")
+            dataset_name = params.get("dataset_name")
             data = params.get("data")
-            dtype = params.get("dtype", "float64")
+            dtype = params.get("dtype")
 
             if data is None:
                 return {"status": "error", "msg": "写入数据不能为空"}

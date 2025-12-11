@@ -34,6 +34,8 @@ class RealtimeEngine extends EventEmitter {
         this.storage_server_socket = new zmq.Request();
         this.storage_server_host = '127.0.0.1';
         this.storage_server_port = 5555;
+        this.file_id = 1;
+        this.write_enable = 0;    //1 用于表示当前正在打开文件中
 
     }
 
@@ -289,6 +291,26 @@ class RealtimeEngine extends EventEmitter {
             this.broadcastToClients(dataPacket);
             console.log('realtimeEngine.js 发送一个大包，大包统计：小包统计：', this.emg_5_packets_count,this.emg_packet_count);
 
+            /**
+             * 
+             * test
+             */
+            if(this.emg_5_packets_count == 1)
+            {
+                this.storage_server_create_new_hdf5_file();
+            }
+
+            if(this.emg_5_packets_count >= 100 && this.emg_5_packets_count <= 200)
+            {
+                this.storage_server_write_hdf5_data(dataPacket);
+            }
+
+            if(this.emg_5_packets_count == 1000)
+            {
+                this.storage_server_close_hdf5_file();
+            }
+
+
         } catch (error) {
             console.error('[realtimeEngine] 处理EMG数据时发生错误:', error);
         }
@@ -348,6 +370,159 @@ class RealtimeEngine extends EventEmitter {
             throw new Error(`指令发送失败（${cmd}）：${err.message}`);
         }
     } 
+
+
+    // 2.3 请求storage_server 创建新的文件
+    // 注意：函数必须声明为 async，因为 sendCommand 是异步函数
+    async storage_server_create_new_hdf5_file() {
+        try {
+            if(this.write_enable == 1)
+            {
+                throw new Error(`已经有正在写的文件`);
+            }
+
+            // 1. 生成系统时间戳（毫秒级，避免重复；也可改用秒级：Math.floor(Date.now()/1000)）
+            const timestamp = Date.now(); 
+            // 2. 拼接文件名：hdf5_ + file_id + 时间戳 + .h5
+            const fileName = `./storage/hdf5_${this.file_id}_${timestamp}.h5`;
+
+            // 3. 创建 HDF5 文件
+            console.log('\n=== 第一步：创建 HDF5 文件 ===, id = ', this.file_id);
+            // 关键：异步函数必须加 await，否则 createResponse 是 Promise 对象
+            const createResponse = await this.sendCommand('create', {
+                file_name: fileName, // 使用拼接后的文件名
+                group_name: 'emg_data'
+            });
+            console.log("创建响应：", createResponse);
+
+            if (createResponse.status !== 'success') {
+                throw new Error(`创建文件失败：${createResponse.msg}`);
+            }
+
+            // 可选：返回创建的文件名，方便后续使用
+            this.write_enable = 1;
+            
+            return fileName;
+            
+        } catch (error) {
+            console.error(`创建HDF5文件失败（file_id: ${this.file_id}）：`, error.message);
+            throw error; // 向上抛出错误，让调用方处理
+        }
+    }
+
+    // 2.4 关闭保存
+    async storage_server_close_hdf5_file() {
+        try {
+            if(this.write_enable == 0)
+            {
+                throw new Error(`当前没有文件在写，无需关闭`);
+            }
+
+            // 1. 打印日志（关联 fileId，方便定位）
+            console.log(`\n=== 关闭 HDF5 文件 ===, file_id = ${this.file_id}`);
+
+            // 2. 异步发送关闭指令（await 等待响应）
+            const closeResponse = await this.sendCommand('close');
+
+            // 3. 打印响应结果
+            console.log(`文件 ${this.file_id} 关闭响应：`, closeResponse);
+
+            // 4. 校验关闭结果，失败则主动抛出错误
+            if (closeResponse.status !== 'success' && closeResponse.status !== 'warning') {
+                throw new Error(`文件 ${this.file_id} 关闭失败：${closeResponse.msg}`);
+            }
+
+            // 5. 成功关闭，返回响应结果（供外层调用）
+            this.write_enable = 0;
+            this.file_id++;
+            return closeResponse;
+
+        } catch (error) {
+            // 6. 捕获所有错误（网络超时/指令失败等），打印日志后重新抛出
+            console.error(`关闭 HDF5 文件失败（file_id: ${this.file_id}）：`, error.message);
+            throw error; // 向上抛出，让调用方感知错误（可选择是否抛出）
+        }
+    }
+
+
+        /**
+     * 异步写入单批次传感器数据到 HDF5 文件
+     * @param {string} fileId - 文件ID（用于日志定位，关联对应的HDF5文件）
+     * @param {Array} sensorData - 单批次传感器数据（如 [25.1, 25.2, 25.3]）
+     * @param {Object} [options] - 可选配置项
+     * @param {string} [options.datasetName='temp_sensor_1'] - 数据集名称
+     * @param {string} [options.dtype='float64'] - 数据类型（float64/uint8/int32等）
+     * @returns {Promise<object>} 写入响应结果（包含status/msg/total_count等）
+     * @throws {Error} 参数错误/写入失败时抛出错误
+     */
+    //2.5 写一次数据
+    async storage_server_write_hdf5_data(dataPacket, options = {}) {
+        // 1. 默认配置（可通过options覆盖）
+        const {
+            datasetName = 'rawData',
+            dtype = 'S64'
+        } = options;
+
+        try {
+            // 2. 核心参数校验（提前拦截无效调用）
+            if (!this.file_id || this.write_enable == 0) {
+                throw new Error('写入失败：fileId 不能为空（需关联具体的HDF5文件）');
+            }
+            if (!Array.isArray(dataPacket.data.big_bag_raw_data) || dataPacket.data.big_bag_raw_data.length == 0) {
+                throw new Error(`文件 ${this.file_id} 写入失败：传感器数据必须是非空数组`);
+            }
+
+            // 3. 打印写入日志（关联fileId，方便溯源）
+            console.log(`\n=== 写入 HDF5 数据 ===, file_id = ${this.file_id}`);
+            console.log(`数据集：${datasetName} | 数据类型：${dtype} | 数据条数：${dataPacket.length}`);
+            console.log(`写入数据：`, dataPacket);
+
+            // 4. 异步发送写入指令（await 等待服务端响应）
+            const writeResponse = await this.sendCommand('write', {
+                dataset_name: datasetName,
+                data: dataPacket.data.big_bag_raw_data,
+                dtype: dtype
+            });
+
+            // 5. 校验写入结果，失败则主动抛出错误
+            if (writeResponse.status !== 'success') {
+                throw new Error(`文件 ${this.file_id} 写入失败：${writeResponse.msg || '未知错误'}`);
+            }
+
+            // 6. 打印成功日志并返回响应结果
+            console.log(`文件 ${this.file_id} 写入成功 | 累计数据条数：${writeResponse.total_count}`);
+            return writeResponse;
+
+        } catch (error) {
+            // 7. 捕获所有错误，打印详情后重新抛出（让调用方感知）
+            console.error(`[写入错误] file_id = ${this.file_id}：`, error.message);
+            throw error;
+        }
+    }
+
+    /**
+     * 发送指令到 Python 服务端（适配新版 API）
+     * @param {string} cmd 指令类型：create/write/close
+     * @param {object} params 指令参数
+     * @returns {Promise<object>} 服务端响应
+     */
+    // 2.6 发送指令到服务器
+    async sendCommand(cmd, params = {}) {
+        try {
+            // 构造请求数据（JSON 序列化）
+            const request = JSON.stringify({ cmd, params });
+            // 发送数据（新版 send 支持字符串，自动转 Buffer）
+            await this.storage_server_socket.send(request);
+
+            // 接收响应（新版需用 iterator 接收，且响应是 Buffer 数组）
+            const [responseBuffer] = await this.storage_server_socket.receive();
+            const response = JSON.parse(responseBuffer.toString('utf8'));
+            return response;
+        } catch (err) {
+            throw new Error(`指令发送失败（${cmd}）：${err.message}`);
+        }
+    }
+
 }
 
 // 创建单例实例
