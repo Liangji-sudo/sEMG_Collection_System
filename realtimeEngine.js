@@ -44,7 +44,7 @@ class RealtimeEngine extends EventEmitter {
         return new Promise((resolve, reject) => {
             try {
                 /**
-                 * ===== 1. 连接ble_server  =====
+                 * ===== 1. 连接ble_server，接受数据  =====
                  */
                 this.connectTimeoutTimer = setTimeout(() => {
                     this.ble_server_connect();
@@ -52,7 +52,7 @@ class RealtimeEngine extends EventEmitter {
 
 
                 /**
-                 * ===== 2. 启动realtimeEngine >>> index.html websocket广播服务器 =====
+                 * ===== 2. 启动realtimeEngine >>> index.html websocket广播服务器， 实时显示 =====
                  */ 
                 this.websocket_server = new WebSocket.Server({ port });
 
@@ -97,7 +97,7 @@ class RealtimeEngine extends EventEmitter {
 
 
                 /**
-                 * ===== 3. 连接storage_server  =====
+                 * ===== 3. 连接storage_server ， 数据存储 =====
                  */
                 this.storage_server_connect();
 
@@ -305,10 +305,27 @@ class RealtimeEngine extends EventEmitter {
                 this.storage_server_write_hdf5_data(dataPacket);
             }
 
-            if(this.emg_5_packets_count == 1000)
+            if(this.emg_5_packets_count == 201)
             {
                 this.storage_server_close_hdf5_file();
             }
+
+
+            if(this.emg_5_packets_count == 500)
+            {
+                this.storage_server_create_new_hdf5_file();
+            }
+
+            if(this.emg_5_packets_count >= 501 && this.emg_5_packets_count <= 1500)
+            {
+                this.storage_server_write_hdf5_data(dataPacket);
+            }
+
+            if(this.emg_5_packets_count == 1501)
+            {
+                this.storage_server_close_hdf5_file();
+            }
+
 
 
         } catch (error) {
