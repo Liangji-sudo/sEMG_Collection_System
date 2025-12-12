@@ -8,6 +8,7 @@ import sys
 import io
 from bleak import BleakScanner, BleakClient, BleakError
 import traceback
+import time
 
 # ================= 基础配置（解决编码和超时问题）=================
 # 强制stdout/stderr使用UTF-8编码（解决中文乱码）
@@ -31,6 +32,20 @@ server_state = {
     "connect_task": None # 存储当前连接任务
     #"disconnecting_flag": 0
 }
+
+# 获取秒级时间戳，精确到小数点后9位（纳秒级精度）
+def get_sys_time():
+    # 1. 获取纳秒级整数时间戳
+    ns_timestamp = time.time_ns()
+    # 2. 转换为秒级浮点数（1纳秒 = 1e-9秒）
+    s_timestamp = ns_timestamp / 1_000_000_000.0  # 加.0确保浮点除法
+    # 3. 格式化为小数点后9位（返回字符串/浮点数可选）
+    # 方案1：返回格式化后的字符串（严格9位小数）
+    # return f"{s_timestamp:.9f}"
+    # 方案2：返回浮点数（保留9位小数精度，推荐用于数值计算）
+    return round(s_timestamp, 9)
+
+
 
 # 调试日志函数
 def debug_log(message):
@@ -236,10 +251,11 @@ def handle_bluetooth_notification(sender, data):
             raise ValueError("EMG 数据组数不匹配，应该是 5 组每组 32 字节")
         
         # 打包成最终的输出
-        timestamp = asyncio.get_event_loop().time()
+        #timestamp = asyncio.get_event_loop().time()
+        timestamp = get_sys_time() # 获取秒.9f时间戳
         output = {
-            "type": "emg",
-            "timestamp": timestamp,
+            "type": "emg", #包头
+            "timestamp": timestamp, #大包整包时间戳
             "raw_data": emg_data_groups  # 只保留 5 组 32 字节的 EMG 数据
         }
         

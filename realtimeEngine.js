@@ -248,7 +248,7 @@ class RealtimeEngine extends EventEmitter {
         if (!this.isRunning) return;
 
         try {
-            // 获取 raw_data，假设它是一个包含5个十六进制字符串的数组
+            // 获取 raw_data，假设它是一个包含5个长度64字符串的数组
             let rawData = emgData.raw_data;
 
             // 确保 rawData 是数组类型，且包含 5 组数据
@@ -267,21 +267,22 @@ class RealtimeEngine extends EventEmitter {
             this.emg_packet_count += rawData.length;
             this.emg_5_packets_count++;
 
-            // 基于时间戳进行递增，每个包间隔 0.5ms
-            //let timestamp = emgData.timestamp;  // 初始时间戳
-
+            // 根据大包的时间戳，计算每个小包的时间戳
             let timestamp_array = [emgData.timestamp,
                             emgData.timestamp + this.emg_interval * 1,
                             emgData.timestamp + this.emg_interval * 2,
                             emgData.timestamp + this.emg_interval * 3,
                             emgData.timestamp + this.emg_interval * 4];
 
+            /**
+             * 实时显示广播数据包
+             */
 
             const dataPacket = {
                 type: 'emg_data',
                 data: {
-                    big_bag_raw_data: rawData,  // [32byte, 32byte, 32byte, 32byte, 32byte]//大包的rawData[5]数组放入 big_bag_raw_data
-                    timestamp: timestamp_array, // [time, time, time, time, time] // 计算好大包内的5组的时间戳
+                    big_bag_raw_data: rawData,  // [string64, string64, string64, string64, string64]//大包的rawData[5]数组放入 big_bag_raw_data
+                    timestamp: timestamp_array, // [.9f, .9f, .9f, .9f, .9f] // 计算好大包内的5组的时间戳
                     packetCount: this.emg_packet_count,
                     interval: null // 现在不需要interval，可以以后加
                 }
@@ -291,6 +292,29 @@ class RealtimeEngine extends EventEmitter {
             this.broadcastToClients(dataPacket);
             console.log('realtimeEngine.js 发送一个大包，大包统计：小包统计：', this.emg_5_packets_count,this.emg_packet_count);
 
+            /**
+             * 存储数据包
+             */
+
+            const dataPacket_storage = {
+                type: 'emg_data',
+                data: {
+                    task: null,     //采集任务（discrete/continual1/con2）
+
+                    // data
+                    big_bag_raw_data: rawData,  // [string64, string64, string64, string64, string64]//大包的rawData[5]数组放入 big_bag_raw_data
+                    timestamp: timestamp_array, // [.9f, .9f, .9f, .9f, .9f] // 计算好大包内的5组的时间戳
+
+                    // prompt
+                    prompt_name: null,
+                    prompt_time: 0,
+
+                    // stage
+                    stage_name: null,
+                    stage_start: 0,
+                    stage_end: 0
+                }
+            };
             /**
              * 
              * test
@@ -302,7 +326,7 @@ class RealtimeEngine extends EventEmitter {
 
             if(this.emg_5_packets_count >= 100 && this.emg_5_packets_count <= 200)
             {
-                this.storage_server_write_hdf5_data(dataPacket);
+                this.storage_server_write_hdf5_data(dataPacket_storage);
             }
 
             if(this.emg_5_packets_count == 201)
