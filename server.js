@@ -54,20 +54,6 @@ app.get('/api/device-status', (req, res) => {
     const throughputPercent = throughput/10;
 
     res.json({
-        bluetooth: {
-            connected: true,
-            db: bluetoothDb,
-            strength: bluetoothStrength
-        },
-        battery: {
-            level: 78,
-            remainingTime: '5.2小时'
-        },
-        camera: {
-            connected: true,
-            model: 'Sony IMX586',
-            status: '运行中'
-        },
         // 添加设备协同模块状态
         deviceSync: {
             connected: syncStatus.isConnected,
