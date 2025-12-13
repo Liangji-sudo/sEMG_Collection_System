@@ -23,7 +23,7 @@ DATA_DTYPE = np.dtype([("emg", "<f4", (16,)), ("time", "<f8")])
 TASK_ATTR = "discrete_gestures"
 
 # Prompts/Stages 字符串存储配置（固定长度，避免变长内存问题）
-STR_MAX_LEN = 32  # 足够存储所有手势/阶段名称
+STR_MAX_LEN = 64  # 足够存储所有手势/阶段名称
 NAME_DTYPE = f"S{STR_MAX_LEN}"  # 固定长度字符串
 
 
@@ -50,7 +50,7 @@ class HDF5StorageServer:
 
 
     def create_and_open(self, params):
-        """创建结构并保持文件打开"""
+        """创建结构并保持文件打开（修复isinstance错误 + 补充元属性）"""
         self.file_path = params.get("file_name")
 
         if self.overwrite and os.path.exists(self.file_path):
@@ -59,25 +59,138 @@ class HDF5StorageServer:
         try:
             self.f = h5py.File(self.file_path, "a", libver='latest')
             if "data" not in self.f:
-                # 创建Data数据集
-                self.f.create_dataset(
+                # ===================== 1. 创建Data数据集（带属性） =====================
+                data_ds = self.f.create_dataset(
                     "data", shape=(0,), dtype=DATA_DTYPE,
                     chunks=(10000,), maxshape=(None,), compression=None
-                ).attrs["task"] = TASK_ATTR
+                )
+                # Data数据集的核心属性
+                data_ds.attrs["task"] = TASK_ATTR
+                # 补充Pandas兼容属性
+                data_ds.attrs["CLASS"] = np.bytes_(b'ARRAY')
+                data_ds.attrs["FLAVOR"] = np.bytes_(b'numpy')
+                data_ds.attrs["VERSION"] = np.bytes_(b'2.4')
+                data_ds.attrs["transposed"] = np.uint8(0)
 
-                # 创建Prompts组
+                # ===================== 2. 创建Prompts组（带完整元属性） =====================
                 prompts = self.f.create_group("prompts")
-                prompts.create_dataset("axis0", data=np.array([b"name", b"time"], dtype="S4"))
-                prompts.create_dataset("axis1", shape=(0,), dtype=np.int64, chunks=(1000,), maxshape=(None,))
-                prompts.create_dataset("block0", shape=(0,), dtype=NAME_DTYPE, chunks=(1000,), maxshape=(None,))
-                prompts.create_dataset("block1", shape=(0,), dtype=np.float64, chunks=(1000,), maxshape=(None,))
 
-                # 创建Stages组（预留）
+                # 2.1 prompts/axis0（列名轴：name/time）
+                axis0_ds = prompts.create_dataset(
+                    "axis0", 
+                    data=np.array([b"name", b"time"], dtype="S4"),
+                    dtype="S4"
+                )
+                # 补充axis0的元属性
+                axis0_ds.attrs["CLASS"] = np.bytes_(b'ARRAY')
+                axis0_ds.attrs["FLAVOR"] = np.bytes_(b'numpy')
+                axis0_ds.attrs["TITLE"] = np.bytes_(b'')  # 空标题
+                axis0_ds.attrs["VERSION"] = np.bytes_(b'2.4')
+                axis0_ds.attrs["kind"] = np.bytes_(b'string')
+                axis0_ds.attrs["name"] = np.bytes_(b'N.')
+                axis0_ds.attrs["transposed"] = np.uint8(1)
+
+                # 2.2 prompts/axis1（行索引轴）
+                axis1_ds = prompts.create_dataset(
+                    "axis1", shape=(0,), dtype=np.int64, chunks=(1000,), maxshape=(None,)
+                )
+                # 补充axis1的元属性
+                axis1_ds.attrs["CLASS"] = np.bytes_(b'ARRAY')
+                axis1_ds.attrs["FLAVOR"] = np.bytes_(b'numpy')
+                axis1_ds.attrs["TITLE"] = np.bytes_(b'')
+                axis1_ds.attrs["VERSION"] = np.bytes_(b'2.4')
+                axis1_ds.attrs["kind"] = np.bytes_(b'integer')
+                axis1_ds.attrs["name"] = np.bytes_(b'N.')
+                axis1_ds.attrs["transposed"] = np.uint8(1)
+
+                # 2.3 prompts/block0（name列值）
+                block0_ds = prompts.create_dataset(
+                    "block0", shape=(0,), dtype=NAME_DTYPE, chunks=(1000,), maxshape=(None,)
+                )
+                # 修复：正确判断是否为可变长类型
+                is_vlen = isinstance(NAME_DTYPE, h5py.Datatype) and NAME_DTYPE.vlen is not None
+                # 补充block0的元属性
+                block0_ds.attrs["CLASS"] = np.bytes_(b'VLARRAY' if is_vlen else b'ARRAY')
+                block0_ds.attrs["FLAVOR"] = np.bytes_(b'numpy')
+                block0_ds.attrs["TITLE"] = np.bytes_(b'')
+                block0_ds.attrs["VERSION"] = np.bytes_(b'1.4' if is_vlen else b'2.4')
+                block0_ds.attrs["kind"] = np.bytes_(b'string')
+                block0_ds.attrs["name"] = np.bytes_(b'N.')
+                block0_ds.attrs["transposed"] = np.uint8(1)
+                if is_vlen:
+                    block0_ds.attrs["PSEUDOATOM"] = np.bytes_(b'object')
+
+                # 2.4 prompts/block1（time列值）
+                block1_ds = prompts.create_dataset(
+                    "block1", shape=(0,), dtype=np.float64, chunks=(1000,), maxshape=(None,)
+                )
+                # 补充block1的元属性
+                block1_ds.attrs["CLASS"] = np.bytes_(b'ARRAY')
+                block1_ds.attrs["FLAVOR"] = np.bytes_(b'numpy')
+                block1_ds.attrs["TITLE"] = np.bytes_(b'')
+                block1_ds.attrs["VERSION"] = np.bytes_(b'2.4')
+                block1_ds.attrs["kind"] = np.bytes_(b'float')
+                block1_ds.attrs["name"] = np.bytes_(b'N.')
+                block1_ds.attrs["transposed"] = np.uint8(1)
+
+                # ===================== 3. 创建Stages组（带完整元属性） =====================
                 stages = self.f.create_group("stages")
-                stages.create_dataset("axis0", data=np.array([b"start", b"end", b"name"], dtype="S5"))
-                stages.create_dataset("axis1", shape=(0,), dtype=np.int64, chunks=(100,), maxshape=(None,))
-                stages.create_dataset("block0", shape=(0, 2), dtype=np.float64, chunks=(100, 2), maxshape=(None, 2))
-                stages.create_dataset("block1", shape=(0,), dtype=NAME_DTYPE, chunks=(100,), maxshape=(None,))
+
+                # 3.1 stages/axis0（列名轴：start/end/name）
+                stages_axis0_ds = stages.create_dataset(
+                    "axis0", 
+                    data=np.array([b"start", b"end", b"name"], dtype="S5"),
+                    dtype="S5"
+                )
+                # 补充stages/axis0属性
+                stages_axis0_ds.attrs["CLASS"] = np.bytes_(b'ARRAY')
+                stages_axis0_ds.attrs["FLAVOR"] = np.bytes_(b'numpy')
+                stages_axis0_ds.attrs["TITLE"] = np.bytes_(b'')
+                stages_axis0_ds.attrs["VERSION"] = np.bytes_(b'2.4')
+                stages_axis0_ds.attrs["kind"] = np.bytes_(b'string')
+                stages_axis0_ds.attrs["name"] = np.bytes_(b'N.')
+                stages_axis0_ds.attrs["transposed"] = np.uint8(1)
+
+                # 3.2 stages/axis1（行索引轴）
+                stages_axis1_ds = stages.create_dataset(
+                    "axis1", shape=(0,), dtype=np.int64, chunks=(100,), maxshape=(None,)
+                )
+                # 补充stages/axis1属性
+                stages_axis1_ds.attrs["CLASS"] = np.bytes_(b'ARRAY')
+                stages_axis1_ds.attrs["FLAVOR"] = np.bytes_(b'numpy')
+                stages_axis1_ds.attrs["TITLE"] = np.bytes_(b'')
+                stages_axis1_ds.attrs["VERSION"] = np.bytes_(b'2.4')
+                stages_axis1_ds.attrs["kind"] = np.bytes_(b'integer')
+                stages_axis1_ds.attrs["name"] = np.bytes_(b'N.')
+                stages_axis1_ds.attrs["transposed"] = np.uint8(1)
+
+                # 3.3 stages/block0（start/end时间列）
+                stages_block0_ds = stages.create_dataset(
+                    "block0", shape=(0, 2), dtype=np.float64, chunks=(100, 2), maxshape=(None, 2)
+                )
+                # 补充stages/block0属性
+                stages_block0_ds.attrs["CLASS"] = np.bytes_(b'ARRAY')
+                stages_block0_ds.attrs["FLAVOR"] = np.bytes_(b'numpy')
+                stages_block0_ds.attrs["TITLE"] = np.bytes_(b'')
+                stages_block0_ds.attrs["VERSION"] = np.bytes_(b'2.4')
+                stages_block0_ds.attrs["kind"] = np.bytes_(b'float')
+                stages_block0_ds.attrs["name"] = np.bytes_(b'N.')
+                stages_block0_ds.attrs["transposed"] = np.uint8(1)
+
+                # 3.4 stages/block1（name列值）
+                stages_block1_ds = stages.create_dataset(
+                    "block1", shape=(0,), dtype=NAME_DTYPE, chunks=(100,), maxshape=(None,)
+                )
+                # 补充stages/block1属性
+                stages_block1_ds.attrs["CLASS"] = np.bytes_(b'VLARRAY' if is_vlen else b'ARRAY')
+                stages_block1_ds.attrs["FLAVOR"] = np.bytes_(b'numpy')
+                stages_block1_ds.attrs["TITLE"] = np.bytes_(b'')
+                stages_block1_ds.attrs["VERSION"] = np.bytes_(b'1.4' if is_vlen else b'2.4')
+                stages_block1_ds.attrs["kind"] = np.bytes_(b'string')
+                stages_block1_ds.attrs["name"] = np.bytes_(b'N.')
+                stages_block1_ds.attrs["transposed"] = np.uint8(1)
+                if is_vlen:
+                    stages_block1_ds.attrs["PSEUDOATOM"] = np.bytes_(b'object')
             
             debug_log(f"✅ 文件创建并保持打开: {self.file_path}")
 

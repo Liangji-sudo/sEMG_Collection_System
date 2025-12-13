@@ -79,8 +79,8 @@ async def scan_bluetooth_devices():
         debug_log(f"扫描完成，找到{len(result)}个设备")
         
         # 打印找到的设备列表（方便调试）
-        for dev in result:
-            debug_log(f"  - {dev['name']} | MAC: {dev['mac']} | RSSI: {dev['rssi']}")
+        # for dev in result:
+        #     debug_log(f"  - {dev['name']} | MAC: {dev['mac']} | RSSI: {dev['rssi']}")
         
         # 返回扫描的蓝牙设备列表
         return result
@@ -118,7 +118,7 @@ async def connect_bluetooth_device(mac_address, websocket):
                 await asyncio.sleep(RETRY_DELAY)
                 continue
             
-            debug_log(f"找到设备: {device.name or '未知设备'} | MAC: {device.address}")
+            # debug_log(f"找到设备: {device.name or '未知设备'} | MAC: {device.address}")
             #debug_log(f"liangji++++++++设备的RSSI值: {device.advertisement_data.rssi}")
             
             async with BleakClient(device) as client:

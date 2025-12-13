@@ -2,6 +2,7 @@ import h5py
 import pandas as pd
 import numpy as np
 import os
+import sys
 
 # ===================== 配置项 =====================
 # 匹配写入时的字符串格式
@@ -186,8 +187,20 @@ def full_read_hdf5(file_path, data_print_rows=5, other_print_rows=10):
 
 # ===================== 主函数 =====================
 if __name__ == "__main__":
+    # 1. 检查命令行参数
+    if len(sys.argv) != 2:
+        print("❌ 使用方式错误！正确用法：")
+        print(f"   python {sys.argv[0]} <HDF5文件路径>")
+        print("   示例：python liangji_read.py ../storage/hdf5_1_1765591474009.h5")
+        sys.exit(1)
     # 配置文件路径（与写入脚本的输出文件一致）
-    HDF5_FILE_PATH = "../storage/hdf5_2_1765590901296.h5"
+    HDF5_FILE_PATH = sys.argv[1]
+    
+    # 3. 检查文件是否存在
+    if not os.path.exists(HDF5_FILE_PATH):
+        print(f"❌ 文件不存在: {HDF5_FILE_PATH}")
+        sys.exit(1)
+
     
     # 检查文件是否存在
     if not os.path.exists(HDF5_FILE_PATH):

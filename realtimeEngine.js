@@ -556,7 +556,7 @@ class RealtimeEngine extends EventEmitter {
             }
 
             // 6. 打印成功日志并返回响应结果
-            console.log(`文件 ${this.file_id} 写入成功 | 累计数据条数：${writeResponse.total_count}`);
+            //console.log(`文件 ${this.file_id} 写入成功 | 累计数据条数：${writeResponse.total_count}`);
             return writeResponse;
 
         } catch (error) {
