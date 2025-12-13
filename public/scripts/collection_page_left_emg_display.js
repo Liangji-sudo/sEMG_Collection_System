@@ -586,8 +586,6 @@ const EMGDisplayModule = {
                     
                     // 处理EMG大包数据（一个大包5*32, 每10ms来一个大包）
                     if (packet.type === 'emg_data') {                       
-
-
                         this.updateAllEMGChannels(packet.data);
                         //console.log('interval = ',packet.data.timestamp, this.interval);
                         

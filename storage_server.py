@@ -438,7 +438,7 @@ class HDF5StorageServer:
             while True:
                 # 接收客户端请求（JSON 格式）
                 request = self.socket.recv_json()
-                debug_log(f"\n收到请求：{request['cmd']}")
+                #debug_log(f"\n收到请求：{request['cmd']}")
 
                 # 解析指令类型和参数
                 cmd = request.get("cmd")

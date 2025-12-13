@@ -238,7 +238,7 @@ class RealtimeEngine extends EventEmitter {
                     const packet = JSON.parse(event.data);
                     
                     // 处理连接确认消息（与后端realtimeEngine的connection_established对应）
-                    if (packet.type === 'emg') {
+                    if (packet.type === 'emg_packet') {
                         //console.log(`[realtimeEngine] 来自ble_server的emg 大包，大包timestamp : ${packet.timestamp}`);
                         this.attributeEMGData(packet);
                         return;
@@ -275,31 +275,21 @@ class RealtimeEngine extends EventEmitter {
         if (!this.isRunning) return;
 
         try {
-            // 获取 raw_data，假设它是一个包含5个长度64字符串的数组
-            let rawData = emgData.raw_data;
-
             // 确保 rawData 是数组类型，且包含 5 组数据
-            if (!Array.isArray(rawData)) {
+            if (!Array.isArray(emgData.big_bag_raw_data)) {
                 console.error("[realtimeEngine] rawData 不是一个数组");
                 return;
             }
 
             // 确保是 5 组数据
-            if (rawData.length !== 5) {
+            if (emgData.big_bag_raw_data.length !== 5) {
                 console.error('[realtimeEngine] emg 数据组数不匹配，应该是 5 组');
                 return;
             }
 
             // 统计小包数量 + 5
-            this.emg_packet_count += rawData.length;
+            this.emg_packet_count += 5;
             this.emg_5_packets_count++;
-
-            // 根据大包的时间戳，计算每个小包的时间戳
-            let timestamp_array = [emgData.timestamp,
-                            emgData.timestamp + this.emg_interval * 1,
-                            emgData.timestamp + this.emg_interval * 2,
-                            emgData.timestamp + this.emg_interval * 3,
-                            emgData.timestamp + this.emg_interval * 4];
 
             /**
              * 实时显示广播数据包
@@ -308,8 +298,8 @@ class RealtimeEngine extends EventEmitter {
             const dataPacket = {
                 type: 'emg_data',
                 data: {
-                    big_bag_raw_data: rawData,  // [string64, string64, string64, string64, string64]//大包的rawData[5]数组放入 big_bag_raw_data
-                    timestamp: timestamp_array, // [.9f, .9f, .9f, .9f, .9f] // 计算好大包内的5组的时间戳
+                    big_bag_raw_data: emgData.big_bag_raw_data,  // [string64, string64, string64, string64, string64]//大包的rawData[5]数组放入 big_bag_raw_data
+                    timestamp: emgData.timestamp_array, // [.9f, .9f, .9f, .9f, .9f] // 计算好大包内的5组的时间戳
                     packetCount: this.emg_packet_count,
                     interval: null // 现在不需要interval，可以以后加
                 }
@@ -322,7 +312,7 @@ class RealtimeEngine extends EventEmitter {
             /**
              * 存储 数据包发送逻辑
              */
-            await this.storage_manager(rawData, timestamp_array);
+            await this.storage_manager(emgData.big_bag_raw_data, emgData.timestamp_array);
 
 
         } catch (error) {
