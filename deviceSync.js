@@ -157,6 +157,53 @@ class DeviceSync extends EventEmitter {
             dataFormat: 'JSON格式，包含5组16通道数据'
         };
     }
+
+    /**
+     * 获取程序运行所在磁盘的剩余容量（GB）和剩余占比（%）
+     * @returns {Promise<{freeGB: number, freePercent: number, totalGB: number}|string>} 磁盘信息/错误提示
+     */
+    async getStorageVolumeInfo() {
+        try {
+            // 仅支持 Node.js 环境（浏览器无权限）
+            if (typeof process === 'undefined' || !process.versions?.node) {
+                return "仅支持 Node.js 环境获取磁盘信息";
+            }
+
+            const fs = require('fs').promises;
+            const path = require('path');
+
+            // 获取程序当前运行目录（关键：以此目录定位所在磁盘）
+            const currentDir = process.cwd();
+            // Windows: 取盘符根路径（如 D:\），Linux/macOS: 取根目录 /
+            const diskPath = process.platform === 'win32' 
+                ? path.parse(currentDir).root 
+                : '/';
+
+            // 获取磁盘分区的容量信息（核心：Node.js v22 原生支持）
+            const stat = await fs.statfs(diskPath);
+            const GB_UNIT = 1024 * 1024 * 1024; // 1GB = 1024³ 字节
+
+            // 计算总容量、剩余容量（字节 → GB，保留2位小数）
+            const totalGB = parseFloat((stat.blocks * stat.bsize / GB_UNIT).toFixed(2));
+            const freeGB = parseFloat((stat.bavail * stat.bsize / GB_UNIT).toFixed(2));
+            // 计算剩余占比（保留1位小数）
+            const freePercent = parseFloat(((stat.bavail / stat.blocks) * 100).toFixed(1));
+
+            // 返回核心信息：剩余容量、剩余占比、总容量
+            //console.log(`${freeGB}, ${freePercent}`)
+            return {
+                freeGB,
+                freePercent,
+                totalGB
+            };
+
+        } catch (error) {
+            console.error("获取磁盘信息失败：", error);
+            return `获取失败：${error.message}`;
+        }
+    }
+
+
 }
 
 // 创建单例实例

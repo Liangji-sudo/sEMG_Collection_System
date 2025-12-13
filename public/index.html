@@ -305,15 +305,15 @@
             <!-- 1.3.4 存储状态（保持不变） -->
             <div class="bg-light-2 p-4 rounded-lg">
               <div class="flex items-center justify-between mb-2">
-                <span class="font-medium">存储容量</span>
+                <span class="font-medium">磁盘存储容量</span>
                 <span class="flex items-center text-dark-2">
-                  <i class="fa fa-hdd-o mr-1"></i>42%
+                  <i class="fa fa-hdd-o mr-1"></i> 剩余容量 <span id="storage-volume-percent">0</span> %
                 </span>
               </div>
               <div class="w-full bg-light-1 rounded-full h-2">
-                <div class="bg-primary h-2 rounded-full" style="width: 42%"></div>
+                <div id="storage-volume-bar" class="bg-primary h-2 rounded-full" style="width: 0%"></div>
               </div>
-              <div class="text-xs text-dark-2 mt-1">已用: 87.3GB / 总: 208GB</div>
+              <div class="text-xs text-dark-2 mt-1">剩余: <span id="storage-volume-value">0</span> GB </div>
             </div>
 
 

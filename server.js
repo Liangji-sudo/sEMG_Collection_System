@@ -68,15 +68,6 @@ app.get('/api/device-status', (req, res) => {
             model: 'Sony IMX586',
             status: '运行中'
         },
-        storage: {
-            usedPercent: 42,
-            used: '87.3GB',
-            total: '208GB'
-        },
-        throughput: {
-            value: throughput,
-            percent: throughputPercent
-        },
         // 添加设备协同模块状态
         deviceSync: {
             connected: syncStatus.isConnected,
@@ -117,6 +108,38 @@ app.get('/api/files', (req, res) => {
     ];
     res.json(files);
 });
+
+// 存储空间状态 
+app.get('/api/storage-volume', (req, res) => {
+    (async () => {
+        // 接收函数返回值（核心赋值语句）
+        const diskInfo = await deviceSync.getStorageVolumeInfo();
+
+        // 判断是否获取成功
+        if (typeof diskInfo === 'object' && diskInfo !== null) {
+            // 直接赋值使用
+            const freeGB = diskInfo.freeGB;
+            const freePercent = diskInfo.freePercent;
+
+            res.json({
+                storage: {
+                    free_Percent: freePercent,
+                    volume: freeGB
+                }
+            });
+        } else {
+            // 打印错误信息
+            //console.log(diskInfo);
+            res.json({
+                storage: {
+                    free_Percent: 0,
+                    volume: 0
+                }
+            });
+        }
+    })();
+});
+
 
 
 // 文件预览API， 模拟数据
