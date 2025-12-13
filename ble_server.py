@@ -253,9 +253,10 @@ def handle_bluetooth_notification(sender, data):
         # 打包成最终的输出
         #timestamp = asyncio.get_event_loop().time()
         timestamp = get_sys_time() # 获取秒.9f时间戳
+        #debug_log(timestamp)
         output = {
             "type": "emg", #包头
-            "timestamp": timestamp, #大包整包时间戳
+            "timestamp": timestamp, 
             "raw_data": emg_data_groups  # 只保留 5 组 32 字节的 EMG 数据
         }
         

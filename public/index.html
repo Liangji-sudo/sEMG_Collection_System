@@ -466,10 +466,23 @@
                     <button id="stop-collect" class="bg-red-600 text-white px-6 py-2 rounded font-medium hidden">
                         <i class="fa fa-stop mr-2"></i>停止采集
                     </button>
+
+                    <!-- 所需按钮 -->
+                    <button onclick="sendButtonClick('start')">start</button>
+                    <button onclick="sendButtonClick('stop')">stop</button>
+                    <button onclick="sendButtonClick('prompt1')">prompt1</button>
+                    <button onclick="sendButtonClick('prompt2')">prompt2</button>
+                    <button onclick="sendButtonClick('prompt3')">prompt3</button>
+                    <button onclick="sendButtonClick('prompt4')">prompt4</button>
+                    <button onclick="sendButtonClick('prompt5')">prompt5</button>
                 </div>
+                <!-- #2 右侧 lab.js 控制storage debug -->
+                <script defer src="scripts/collection_page_right_collection_debug.js"></script>
             </div>
         </main>
     </div>
+
+
 
     <!-- #2 左侧 emg 实时显示逻辑 -->
     <script defer src="scripts/collection_page_left_emg_display.js"></script>

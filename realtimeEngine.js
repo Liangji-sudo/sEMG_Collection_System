@@ -4,7 +4,22 @@ const EventEmitter = require('events');
 // 新版 zeromq (v6+) 适配代码
 const zmq = require('zeromq');
 const { promisify } = require('util');
+const express = require('express');
+const cors = require('cors');
+const app = express();
+app.use(cors());
+app.use(express.json());
 
+
+const { discrete_gesture_prompt_name, collection_task_name } = require('./constants.js');
+
+// 简化版（仅Node.js环境，更简洁）
+function getSysTimeNode() {
+    // Node.js v10.7+ 直接提供纳秒级UNIX时间戳
+    const nsTimestamp = process.hrtime.bigint();
+    const sTimestamp = Number(nsTimestamp) / 1000000000.0;
+    return Math.round(sTimestamp * 1000000000) / 1000000000;
+}
 
 class RealtimeEngine extends EventEmitter {
     constructor() {
@@ -37,6 +52,18 @@ class RealtimeEngine extends EventEmitter {
         this.file_id = 1;
         this.write_enable = 0;    //1 用于表示当前正在打开文件中
 
+        // ===== 新增：taskManager 发来的指令（stage start 信号， stage end信号，prompt信号）
+        this.storage_start_flag = 0;
+        this.storage_end_flag = 0;
+        this.prompt_flag = 0;
+        this.buttomname = 0;
+
+        this.prompt_name = null;
+        this.prompt_time = 0;
+
+        this.stage_name = null;
+        this.stage_start = 0;
+        this.stage_end = 0;
     }
 
     // 0.0 启动 realtimeEngine 实时引擎模块
@@ -212,7 +239,7 @@ class RealtimeEngine extends EventEmitter {
                     
                     // 处理连接确认消息（与后端realtimeEngine的connection_established对应）
                     if (packet.type === 'emg') {
-                        console.log(`[realtimeEngine] 来自ble_server的emg 大包，大包timestamp : ${packet.timestamp}`);
+                        //console.log(`[realtimeEngine] 来自ble_server的emg 大包，大包timestamp : ${packet.timestamp}`);
                         this.attributeEMGData(packet);
                         return;
                     }
@@ -290,71 +317,71 @@ class RealtimeEngine extends EventEmitter {
 
             // 广播出去
             this.broadcastToClients(dataPacket);
-            console.log('realtimeEngine.js 发送一个大包，大包统计：小包统计：', this.emg_5_packets_count,this.emg_packet_count);
+            //console.log('realtimeEngine.js 发送一个大包，大包统计：小包统计：', this.emg_5_packets_count,this.emg_packet_count);
 
             /**
-             * 存储数据包
+             * 存储 数据包发送逻辑
              */
-
-            const dataPacket_storage = {
-                type: 'emg_data',
-                data: {
-                    task: null,     //采集任务（discrete/continual1/con2）
-
-                    // data
-                    big_bag_raw_data: rawData,  // [string64, string64, string64, string64, string64]//大包的rawData[5]数组放入 big_bag_raw_data
-                    timestamp: timestamp_array, // [.9f, .9f, .9f, .9f, .9f] // 计算好大包内的5组的时间戳
-
-                    // prompt
-                    prompt_name: null,
-                    prompt_time: 0,
-
-                    // stage
-                    stage_name: null,
-                    stage_start: 0,
-                    stage_end: 0
-                }
-            };
-            /**
-             * 
-             * test
-             */
-            if(this.emg_5_packets_count == 1)
-            {
-                this.storage_server_create_new_hdf5_file();
-            }
-
-            if(this.emg_5_packets_count >= 100 && this.emg_5_packets_count <= 200)
-            {
-                this.storage_server_write_hdf5_data(dataPacket_storage);
-            }
-
-            if(this.emg_5_packets_count == 201)
-            {
-                this.storage_server_close_hdf5_file();
-            }
-
-
-            if(this.emg_5_packets_count == 500)
-            {
-                this.storage_server_create_new_hdf5_file();
-            }
-
-            if(this.emg_5_packets_count >= 501 && this.emg_5_packets_count <= 1500)
-            {
-                this.storage_server_write_hdf5_data(dataPacket);
-            }
-
-            if(this.emg_5_packets_count == 1501)
-            {
-                this.storage_server_close_hdf5_file();
-            }
-
+            this.storage_manager(rawData, timestamp_array);
 
 
         } catch (error) {
             console.error('[realtimeEngine] 处理EMG数据时发生错误:', error);
         }
+    }
+
+    
+
+    // 1.2.1 判断存储逻辑
+    storage_manager(rawData_array, timestamp_array)
+    {
+        if(this.storage_start_flag == 1)
+        {
+            this.storage_start_flag = 0;
+            this.storage_server_create_new_hdf5_file();
+            return;
+        }
+
+        if(this.storage_end_flag == 1)
+        {
+            this.storage_end_flag = 0;
+            this.storage_server_close_hdf5_file();
+            return;
+        }
+
+        let prompt_name_temp = null;
+        let prompt_time_temp = 0;
+        if(this.prompt_flag == 1)
+        {
+            this.prompt_flag = 0;
+            prompt_name_temp = this.prompt_name;
+            prompt_time_temp = this.prompt_time;
+            this.prompt_name = null;
+            this.prompt_time = 0;
+        }
+
+        
+        const dataPacket_storage = {
+            data: {
+                task: 'discrete_gesture',     //采集任务（discrete/continual1/con2）
+
+                // data
+                big_bag_raw_data: rawData_array,  // [string64, string64, string64, string64, string64]//大包的rawData[5]数组放入 big_bag_raw_data
+                timestamp: timestamp_array, // [.9f, .9f, .9f, .9f, .9f] // 计算好大包内的5组的时间戳
+
+                // prompt
+                prompt_name: prompt_name_temp,
+                prompt_time: prompt_time_temp,
+
+                // stage
+                stage_name: null,
+                stage_start: 0,
+                stage_end: 0
+            }
+        };
+
+        this.storage_server_append_hdf5_data(dataPacket_storage);
+        return;
     }
 
     // 1.3 断线重连逻辑
@@ -497,17 +524,13 @@ class RealtimeEngine extends EventEmitter {
      * @throws {Error} 参数错误/写入失败时抛出错误
      */
     //2.5 写一次数据
-    async storage_server_write_hdf5_data(dataPacket, options = {}) {
+    async storage_server_append_hdf5_data(dataPacket, options = {}) {
         // 1. 默认配置（可通过options覆盖）
-        const {
-            datasetName = 'rawData',
-            dtype = 'S64'
-        } = options;
-
         try {
             // 2. 核心参数校验（提前拦截无效调用）
             if (!this.file_id || this.write_enable == 0) {
-                throw new Error('写入失败：fileId 不能为空（需关联具体的HDF5文件）');
+                // throw new Error('写入失败：fileId 不能为空（需关联具体的HDF5文件）');
+                return;
             }
             if (!Array.isArray(dataPacket.data.big_bag_raw_data) || dataPacket.data.big_bag_raw_data.length == 0) {
                 throw new Error(`文件 ${this.file_id} 写入失败：传感器数据必须是非空数组`);
@@ -515,15 +538,17 @@ class RealtimeEngine extends EventEmitter {
 
             // 3. 打印写入日志（关联fileId，方便溯源）
             console.log(`\n=== 写入 HDF5 数据 ===, file_id = ${this.file_id}`);
-            console.log(`数据集：${datasetName} | 数据类型：${dtype} | 数据条数：${dataPacket.length}`);
+            //console.log(`数据集：${datasetName} | 数据类型：${dtype} | 数据条数：${dataPacket.length}`);
             console.log(`写入数据：`, dataPacket);
 
+
+
             // 4. 异步发送写入指令（await 等待服务端响应）
-            const writeResponse = await this.sendCommand('write', {
-                dataset_name: datasetName,
-                data: dataPacket.data.big_bag_raw_data,
-                dtype: dtype
+            const writeResponse = await this.sendCommand('append', {
+                data: dataPacket.data
             });
+
+
 
             // 5. 校验写入结果，失败则主动抛出错误
             if (writeResponse.status !== 'success') {
@@ -563,6 +588,70 @@ class RealtimeEngine extends EventEmitter {
             throw new Error(`指令发送失败（${cmd}）：${err.message}`);
         }
     }
+
+
+
+
+    /**
+     * 
+     *  3.1 接收taskManager (lab.js) 的控制储存起始结束按钮
+     */
+
+    taskManager_get_command(buttomname)
+    {
+        //console.log(`realtimeEngine 收到按钮点击`, buttomname);
+        this.buttomname = buttomname;
+        switch (this.buttomname) {
+            case 'start':
+                this.taskManager_send_start();
+                break;
+            case 'stop':
+                this.taskManager_send_end();
+                break;
+            case 'prompt1':
+                this.taskManager_send_prompt(0);
+                break;
+            case 'prompt2':
+                this.taskManager_send_prompt(1);
+                break;
+            case 'prompt3':
+                this.taskManager_send_prompt(2);
+                break;
+            case 'prompt4':
+                this.taskManager_send_prompt(3);
+                break;
+            case 'prompt5':
+                this.taskManager_send_prompt(4);
+                break;
+            default:
+                break;
+        }
+
+
+    }
+    taskManager_send_start()
+    {
+        //console.log("realtimeEngine storage start");
+        this.storage_start_flag = 1;
+        //this.storage_server_create_new_hdf5_file();
+    }
+
+    taskManager_send_end()
+    {
+        //console.log("realtimeEngine storage end");
+        this.storage_end_flag = 1;
+        //this.storage_server_close_hdf5_file();
+    }
+
+    taskManager_send_prompt(i)
+    {
+        //console.log("realtimeEngine storage prompt = ", discrete_gesture_prompt_name[i]);
+        this.prompt_flag = 1;
+        this.prompt_name = discrete_gesture_prompt_name[i];
+        this.prompt_time = getSysTimeNode();
+        
+    }
+
 
 }
 

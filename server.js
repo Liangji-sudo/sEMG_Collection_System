@@ -23,6 +23,23 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+// ===================== 仅新增这一段（不改动其他代码） =====================
+// 接收前端按钮点击的POST请求
+app.post('/button-click', (req, res) => {
+    // 获取前端传递的按钮名称
+    const buttonName = req.body.buttonName;
+    // 后端打印按钮名称
+    //console.log(`收到按钮点击：${buttonName}`);
+    realtimeEngine.taskManager_get_command(buttonName);
+    // 向前端返回成功响应
+    res.json({ 
+        code: 0, 
+        msg: `成功接收：${buttonName}`,
+        data: { buttonName }
+    });
+});
+// ===================== 新增代码结束 =====================
+
 // API路由 - 获取设备状态
 app.get('/api/device-status', (req, res) => {
     // 获取设备协同模块状态
@@ -230,4 +247,3 @@ startServer().then(server => {
 }).catch(error => {
     console.error('服务器启动失败:', error);
 });
-
