@@ -187,7 +187,7 @@ def full_read_hdf5(file_path, data_print_rows=5, other_print_rows=10):
 # ===================== 主函数 =====================
 if __name__ == "__main__":
     # 配置文件路径（与写入脚本的输出文件一致）
-    HDF5_FILE_PATH = "../storage/hdf5_2_1765588996824.h5"
+    HDF5_FILE_PATH = "../storage/hdf5_2_1765590901296.h5"
     
     # 检查文件是否存在
     if not os.path.exists(HDF5_FILE_PATH):

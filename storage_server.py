@@ -103,29 +103,38 @@ class HDF5StorageServer:
             ds[current_len:new_len] = data
             return len(data)
         
-    def append_prompts(self, df):
-        """直接追加Prompts（无缓存，实时写入）"""
+    def append_prompts(self, np_struct):
+        """追加Prompts（适配numpy结构化数组）"""
         with self.lock:
+            # 1. 空值判断（numpy数组版）
+            if np_struct["name"][0] is None or np_struct["name"][0] == "":
+                return 0
+            
             prompts = self.f["prompts"]
             # 追加索引
             idx_ds = prompts["axis1"]
             current_idx = idx_ds.shape[0]
-            new_idx = np.arange(len(df)) + current_idx
+            new_idx = np.arange(len(np_struct)) + current_idx
             idx_ds.resize(current_idx + len(new_idx), axis=0)
             idx_ds[current_idx:] = new_idx
 
-            # 追加name
+            # 2. 追加name（numpy字符串处理，替代Pandas .str）
             name_ds = prompts["block0"]
-            names = df["name"].astype(str).str.encode('utf-8').astype(NAME_DTYPE)
-            name_ds.resize(name_ds.shape[0]+len(names), axis=0)
+            # numpy数组→字符串→编码→指定 dtype
+            names = np.array([
+                str(name).encode('utf-8') if name is not None else b"" 
+                for name in np_struct["name"]
+            ], dtype=NAME_DTYPE)
+            name_ds.resize(name_ds.shape[0] + len(names), axis=0)
             name_ds[-len(names):] = names
 
-            # 追加time
+            # 3. 追加time（numpy数组取值）
             time_ds = prompts["block1"]
-            times = df["time"].values
-            time_ds.resize(time_ds.shape[0]+len(times), axis=0)
+            times = np_struct["time"]  # numpy数组直接取值
+            time_ds.resize(time_ds.shape[0] + len(times), axis=0)
             time_ds[-len(times):] = times
-            return len(df)
+            
+            return len(np_struct)
         
     def flush(self):
         """刷盘"""
@@ -184,11 +193,20 @@ class HDF5StorageServer:
         return data_struct
 
     def gen_prompt_struct(self, receive_package):
-        """生成1条Prompts数据"""
-        return pd.DataFrame({
-            "name": receive_package['prompt_name'],
-            "time": receive_package['prompt_time']
-        }, index=[0])  # 显式指定索引，强制生成1行数据
+        """生成1条Prompts结构化numpy数组（避免Pandas Series歧义）"""
+        # 提取并处理空值
+        prompt_name = receive_package.get('prompt_name', None)
+        prompt_time = receive_package.get('prompt_time', 0.0)
+        
+        # 转为numpy结构化数组（和data_struct格式对齐，便于HDF5写入）
+        prompt_struct = np.empty(1, dtype=[
+            ("name", object),  # 兼容None/字符串
+            ("time", np.float64)
+        ])
+        prompt_struct["name"][0] = prompt_name
+        prompt_struct["time"][0] = prompt_time
+        
+        return prompt_struct
 
 
 # params.data == dataPacket.data = 
@@ -504,7 +522,7 @@ class HDF5StorageServer:
             while True:
                 # 接收客户端请求（JSON 格式）
                 request = self.socket.recv_json()
-                debug_log(f"\n收到请求：{request}")
+                #debug_log(f"\n收到请求：{request}")
 
                 # 解析指令类型和参数
                 cmd = request.get("cmd")
@@ -514,7 +532,6 @@ class HDF5StorageServer:
                 if cmd == "create":
                     response = self.create_and_open(params)
                 elif cmd == "append":
-                    debug_log('append get')
                     response = self.handle_append(params)
                 elif cmd == "close":
                     response = self.handle_close(params)

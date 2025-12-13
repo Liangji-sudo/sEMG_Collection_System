@@ -537,9 +537,9 @@ class RealtimeEngine extends EventEmitter {
             }
 
             // 3. 打印写入日志（关联fileId，方便溯源）
-            console.log(`\n=== 写入 HDF5 数据 ===, file_id = ${this.file_id}`);
+            //console.log(`\n=== 写入 HDF5 数据 ===, file_id = ${this.file_id}`);
             //console.log(`数据集：${datasetName} | 数据类型：${dtype} | 数据条数：${dataPacket.length}`);
-            console.log(`写入数据：`, dataPacket);
+            //console.log(`写入数据：`, dataPacket);
 
 
 
