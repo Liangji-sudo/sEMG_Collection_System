@@ -271,7 +271,7 @@ class RealtimeEngine extends EventEmitter {
     }
 
     // 1.2 接受来自ble_server 的大包数据（5*32）数据，并即时广播出去
-    attributeEMGData(emgData) {
+    async attributeEMGData(emgData) {
         if (!this.isRunning) return;
 
         try {
@@ -322,7 +322,7 @@ class RealtimeEngine extends EventEmitter {
             /**
              * 存储 数据包发送逻辑
              */
-            this.storage_manager(rawData, timestamp_array);
+            await this.storage_manager(rawData, timestamp_array);
 
 
         } catch (error) {
@@ -333,19 +333,19 @@ class RealtimeEngine extends EventEmitter {
     
 
     // 1.2.1 判断存储逻辑
-    storage_manager(rawData_array, timestamp_array)
+    async storage_manager(rawData_array, timestamp_array)
     {
         if(this.storage_start_flag == 1)
         {
             this.storage_start_flag = 0;
-            this.storage_server_create_new_hdf5_file();
+            await this.storage_server_create_new_hdf5_file();
             return;
         }
 
         if(this.storage_end_flag == 1)
         {
             this.storage_end_flag = 0;
-            this.storage_server_close_hdf5_file();
+            await this.storage_server_close_hdf5_file();
             return;
         }
 
@@ -380,7 +380,7 @@ class RealtimeEngine extends EventEmitter {
             }
         };
 
-        this.storage_server_append_hdf5_data(dataPacket_storage);
+        await this.storage_server_append_hdf5_data(dataPacket_storage);
         return;
     }
 
