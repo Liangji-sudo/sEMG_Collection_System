@@ -237,14 +237,26 @@ class RealtimeEngine extends EventEmitter {
                 try {
                     const packet = JSON.parse(event.data);
                     
-                    // 处理连接确认消息（与后端realtimeEngine的connection_established对应）
+                    // ===== 调试打印：显示从ble_server接收到的数据包 =====
+                    // console.log(`\n[realtimeEngine] ========== 收到 ble_server 数据包 ==========`);
+                    // console.log(`[realtimeEngine] 数据包类型: ${packet.type}`);
+                    // console.log(`[realtimeEngine] 接收时间: ${new Date().toISOString()}`);
+                    // ===== 调试打印结束 =====
+                    
+                    // 处理新格式的数据包 type: "data"（来自双设备版ble_server）
+                    if (packet.type === 'data') {
+                        this.handleBleDataPacket(packet);
+                        return;
+                    }
+                    
+                    // 兼容旧格式 type: "emg_packet"
                     if (packet.type === 'emg_packet') {
-                        //console.log(`[realtimeEngine] 来自ble_server的emg 大包，大包timestamp : ${packet.timestamp}`);
                         this.attributeEMGData(packet);
                         return;
                     }
                 } catch (error) {
                     console.error('[realtimeEngine] ble_server的emg消息解析失败:', error);
+                    console.error('[realtimeEngine] 原始数据:', event.data);
                 }
             };
 
@@ -270,7 +282,99 @@ class RealtimeEngine extends EventEmitter {
         }
     }
 
-    // 1.2 接受来自ble_server 的大包数据（5*32）数据，并即时广播出去
+    // 1.2 处理新格式的BLE数据包 (type: "data", 来自双设备版ble_server)
+    handleBleDataPacket(packet) {
+        if (!this.isRunning) return;
+
+        try {
+            // 提取设备数据（优先使用dev1，如果没有则用dev2）
+            const devData = packet.dev1 || packet.dev2;
+            if (!devData) {
+                // console.log('[realtimeEngine] 无有效设备数据');
+                return;
+            }
+
+            // 提取EMG数据: uv是9帧×16通道的微伏值
+            const emgUv = devData.uv;  // [[ch0,ch1,...,ch15], [...], ...] 9帧
+            const emgRaw = devData.raw; // 原始ADC值
+            
+            // 提取IMU数据: imu[0]是第一个IMU传感器
+            const imuData = devData.imu;  // [[acc,gyr,mag], [acc,gyr,mag]]
+            
+            // 统计信息
+            const stats = devData.s;  // [total_frames, lost_frames]
+            const timestamp = devData.t;
+
+            // 更新包计数
+            const framesInPacket = devData.n || 9;
+            this.emg_packet_count += framesInPacket;
+            this.emg_5_packets_count++;
+
+            /**
+             * 构造广播数据包 - 发送给前端显示
+             * 格式适配前端 waveform.js 的需求
+             */
+            const dataPacket = {
+                type: 'realtime_data',
+                data: {
+                    // EMG数据: 转置为 [通道][帧] 格式，方便前端渲染
+                    // 原始: uv[帧][通道] -> 转换为: emg[通道][帧]
+                    emg: this.transposeEMG(emgUv),
+                    
+                    // IMU数据: 使用第一个IMU传感器的数据
+                    // imu[0] = [[ax,ay,az], [gx,gy,gz], [mx,my,mz]]
+                    imu: imuData && imuData[0] ? {
+                        acc: imuData[0][0],  // [ax, ay, az]
+                        gyr: imuData[0][1],  // [gx, gy, gz]
+                        mag: imuData[0][2]   // [mx, my, mz]
+                    } : null,
+                    
+                    // 元数据
+                    timestamp: timestamp,
+                    packetCount: this.emg_packet_count,
+                    frameIndex: devData.f,
+                    framesInPacket: framesInPacket,
+                    stats: {
+                        total: stats ? stats[0] : 0,
+                        lost: stats ? stats[1] : 0
+                    }
+                }
+            };
+
+            // 广播给前端
+            this.broadcastToClients(dataPacket);
+
+            /**
+             * 存储数据包（如果需要）
+             * 注意：这里需要适配storage_manager的输入格式
+             */
+            // 暂时跳过存储，因为格式不同
+            // await this.storage_manager(emgRaw, [timestamp]);
+
+        } catch (error) {
+            console.error('[realtimeEngine] 处理BLE数据包时发生错误:', error);
+        }
+    }
+
+    // 辅助函数：转置EMG数据 [帧][通道] -> [通道][帧]
+    transposeEMG(uvData) {
+        if (!uvData || uvData.length === 0) return [];
+        
+        const numFrames = uvData.length;      // 9帧
+        const numChannels = uvData[0].length; // 16通道
+        
+        const transposed = [];
+        for (let ch = 0; ch < numChannels; ch++) {
+            const channelData = [];
+            for (let frame = 0; frame < numFrames; frame++) {
+                channelData.push(uvData[frame][ch]);
+            }
+            transposed.push(channelData);
+        }
+        return transposed;
+    }
+
+    // 1.3 接受来自ble_server 的大包数据（5*32）数据，并即时广播出去（旧格式兼容）
     async attributeEMGData(emgData) {
         if (!this.isRunning) return;
 

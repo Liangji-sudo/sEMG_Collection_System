@@ -1,239 +1,651 @@
 /**
+ * bleControl.js - 前端蓝牙控制模块
+ * ==================================
  * 
- *  index.html控制ble_server与esp32-s3 ble蓝牙扫描，连接，断开
+ * 与 ble_server_final.py 的控制端口 (8765) 通信
+ * 用于 index.html 控制蓝牙设备的连接/断开/采集
  * 
+ * 使用方法：
+ *   在 HTML 中引入: <script src="bleControl.js"></script>
+ *   会自动初始化并绑定到页面元素
  */
-// 全局状态管理
-const bluetoothState = {
-  isConnected: false,
-  currentMac: '',
-  isScanning: false,
-  isConnecting: false
-};
 
-// 建立WebSocket连接（使用8766端口避免冲突）
-const ws = new WebSocket('ws://localhost:8766');
+(function() {
+    'use strict';
 
-// DOM元素
-const scanBtn = document.getElementById('scanBtn');
-const connectBtn = document.getElementById('connectBtn');
-const deviceList = document.getElementById('deviceList');
-const bluetoothConnectStatus = document.getElementById('bluetooth-connect-status');
-const bluetoothStrength = document.getElementById('bluetooth-strength');
-const bluetoothDb = document.getElementById('bluetooth-db');
-const bluetoothStatusDesc = document.getElementById('bluetooth-status-desc');
+    // ================= 配置 =================
+    const WS_URL = 'ws://localhost:8764';  // 控制端口
+    const RECONNECT_DELAY = 3000;
+    const HEARTBEAT_INTERVAL = 30000;
 
-// 初始化状态
-function initBluetoothUI() {
-  updateConnectButton('connect', false);
-  deviceList.disabled = true;
-  bluetoothStrength.style.width = '0%';
-  bluetoothStrength.className = 'bg-danger h-2 rounded-full';
-}
-
-// 更新连接按钮状态
-function updateConnectButton(type, disabled = false) {
-  switch(type) {
-    case 'connect':
-      connectBtn.innerHTML = '<i class="fa fa-link mr-1"></i>连接';
-      connectBtn.className = 'px-3 py-1 text-sm bg-success text-white rounded hover:bg-success/90 transition-colors';
-      connectBtn.disabled = disabled;
-      break;
-    case 'connecting':
-      connectBtn.innerHTML = '<i class="fa fa-spinner fa-spin mr-1"></i>连接中';
-      connectBtn.className = 'px-3 py-1 text-sm bg-gray-400 text-white rounded cursor-not-allowed';
-      connectBtn.disabled = true;
-      break;
-    case 'disconnect':
-      connectBtn.innerHTML = '<i class="fa fa-unlink mr-1"></i>断开';
-      connectBtn.className = 'px-3 py-1 text-sm bg-danger text-white rounded hover:bg-danger/90 transition-colors';
-      connectBtn.disabled = disabled;
-      break;
-    case 'reconnect':
-      connectBtn.innerHTML = '<i class="fa fa-refresh mr-1"></i>重连';
-      connectBtn.className = 'px-3 py-1 text-sm bg-warning text-white rounded hover:bg-warning/90 transition-colors';
-      connectBtn.disabled = disabled;
-      break;
-  }
-}
-
-// 更新蓝牙连接状态显示
-function updateBluetoothStatus(isConnected, mac = '', rssi = '--') {
-  bluetoothState.isConnected = isConnected;
-  bluetoothState.currentMac = mac;
-
-  if (isConnected) {
-    bluetoothConnectStatus.innerHTML = '<i class="fa fa-check-circle mr-1"></i>已连接';
-    bluetoothConnectStatus.className = 'flex items-center text-success';
-    bluetoothStatusDesc.textContent = `已连接设备: ${mac}`;
-    bluetoothDb.textContent = rssi;
-    
-    // 根据RSSI更新信号强度（-30dBm最佳，-100dBm最差）
-    let strengthPercent = 0;
-    if (rssi !== '--' && !isNaN(rssi)) {
-      rssi = parseInt(rssi);
-      if (rssi >= -50) strengthPercent = 100;
-      else if (rssi >= -70) strengthPercent = 75;
-      else if (rssi >= -85) strengthPercent = 50;
-      else if (rssi >= -100) strengthPercent = 25;
-      
-      bluetoothStrength.className = strengthPercent >= 50 ? 
-        'bg-success h-2 rounded-full' : 
-        strengthPercent >= 25 ? 'bg-warning h-2 rounded-full' : 'bg-danger h-2 rounded-full';
-    }
-    bluetoothStrength.style.width = `${strengthPercent}%`;
-    updateConnectButton('disconnect');
-  } else {
-    bluetoothConnectStatus.innerHTML = '<i class="fa fa-times-circle mr-1"></i>未连接';
-    bluetoothConnectStatus.className = 'flex items-center text-danger';
-    bluetoothStatusDesc.textContent = mac ? `连接失败: ${mac}` : '未扫描设备';
-    bluetoothDb.textContent = '--';
-    bluetoothStrength.style.width = '0%';
-    bluetoothStrength.className = 'bg-danger h-2 rounded-full';
-  }
-}
-
-// 扫描按钮点击事件
-scanBtn.addEventListener('click', () => {
-  if (bluetoothState.isScanning) return;
-  
-  bluetoothState.isScanning = true;
-  scanBtn.innerHTML = '<i class="fa fa-spinner fa-spin mr-1"></i>扫描中';
-  scanBtn.disabled = true;
-  deviceList.innerHTML = '<option value="">扫描中...</option>';
-  deviceList.disabled = true;
-  bluetoothStatusDesc.textContent = '正在扫描蓝牙设备...';
-  
-  // 发送扫描指令
-  ws.send(JSON.stringify({ action: 'scan' }));
-});
-
-// 连接/断开按钮点击事件
-connectBtn.addEventListener('click', () => {
-  const selectedMac = deviceList.value;
-  
-  if (bluetoothState.isConnected) {
-    // 断开连接
-    updateConnectButton('connecting');
-    bluetoothStatusDesc.textContent = '正在断开连接...';
-    ws.send(JSON.stringify({ 
-      action: 'disconnect', 
-      mac: bluetoothState.currentMac 
-    }));
-  } else {
-    if (!selectedMac) {
-      alert('请先选择要连接的蓝牙设备');
-      return;
-    }
-    
-    // 连接设备
-    updateConnectButton('connecting');
-    bluetoothStatusDesc.textContent = `正在连接设备: ${selectedMac}...`;
-    ws.send(JSON.stringify({ 
-      action: 'connect', 
-      mac: selectedMac 
-    }));
-  }
-});
-
-// 设备列表变更事件（切换设备后重置按钮状态）
-deviceList.addEventListener('change', () => {
-  if (deviceList.value && !bluetoothState.isConnected) {
-    updateConnectButton('connect');
-  }
-});
-
-// WebSocket消息处理
-ws.onmessage = (event) => {
-  try {
-    const data = JSON.parse(event.data);
-    console.log('收到服务器消息:', data);
-    
-    switch(data.action) {
-      case 'scan_result':
-        // 处理扫描结果
-        bluetoothState.isScanning = false;
-        scanBtn.innerHTML = '<i class="fa fa-search mr-1"></i>扫描';
-        scanBtn.disabled = false;
+    // ================= 状态 =================
+    const BleState = {
+        ws: null,
+        connected: false,
+        reconnecting: false,
+        heartbeatTimer: null,
         
-        if (data.devices && data.devices.length > 0) {
-          // 填充设备列表
-          deviceList.innerHTML = '<option value="">请选择设备</option>';
-          data.devices.forEach(device => {
-            const option = document.createElement('option');
-            option.value = device.mac;
-            option.textContent = `${device.name || '未知设备'} (${device.mac})`;
-            deviceList.appendChild(option);
-          });
-          deviceList.disabled = false;
-          bluetoothStatusDesc.textContent = `找到${data.devices.length}个蓝牙设备`;
-          
-          // 如果之前有连接过的设备，自动选中
-          if (bluetoothState.currentMac && data.devices.some(d => d.mac === bluetoothState.currentMac)) {
-            deviceList.value = bluetoothState.currentMac;
-          }
+        // 设备状态
+        devices: {
+            1: { connected: false, streaming: false, mac: null, name: null, rssi: null },
+            2: { connected: false, streaming: false, mac: null, name: null, rssi: null },
+        },
+        
+        // 扫描结果
+        scannedDevices: [],
+        
+        // 回调
+        onStatusChange: null,
+        onDeviceChange: null,
+        onScanResult: null,
+        onError: null,
+    };
+
+    // ================= WebSocket 连接 =================
+    
+    function connect() {
+        if (BleState.ws && BleState.ws.readyState === WebSocket.OPEN) {
+            return;
+        }
+        
+        console.log('[BLE] 连接服务器:', WS_URL);
+        updateServerStatus('connecting');
+        
+        try {
+            BleState.ws = new WebSocket(WS_URL);
+            
+            BleState.ws.onopen = () => {
+                console.log('[BLE] 已连接');
+                BleState.connected = true;
+                BleState.reconnecting = false;
+                updateServerStatus('connected');
+                startHeartbeat();
+            };
+            
+            BleState.ws.onclose = () => {
+                console.log('[BLE] 连接关闭');
+                BleState.connected = false;
+                updateServerStatus('disconnected');
+                stopHeartbeat();
+                scheduleReconnect();
+            };
+            
+            BleState.ws.onerror = (err) => {
+                console.error('[BLE] WebSocket 错误');
+                if (BleState.onError) {
+                    BleState.onError('WebSocket 连接错误');
+                }
+            };
+            
+            BleState.ws.onmessage = (event) => {
+                handleMessage(event.data);
+            };
+            
+        } catch (err) {
+            console.error('[BLE] 连接失败:', err);
+            scheduleReconnect();
+        }
+    }
+    
+    function disconnect() {
+        BleState.reconnecting = false;
+        stopHeartbeat();
+        if (BleState.ws) {
+            BleState.ws.close();
+            BleState.ws = null;
+        }
+    }
+    
+    function scheduleReconnect() {
+        if (BleState.reconnecting) return;
+        BleState.reconnecting = true;
+        console.log(`[BLE] ${RECONNECT_DELAY/1000}秒后重连...`);
+        setTimeout(() => {
+            if (BleState.reconnecting) {
+                connect();
+            }
+        }, RECONNECT_DELAY);
+    }
+    
+    function startHeartbeat() {
+        stopHeartbeat();
+        BleState.heartbeatTimer = setInterval(() => {
+            if (BleState.connected) {
+                send({ action: 'status' });
+            }
+        }, HEARTBEAT_INTERVAL);
+    }
+    
+    function stopHeartbeat() {
+        if (BleState.heartbeatTimer) {
+            clearInterval(BleState.heartbeatTimer);
+            BleState.heartbeatTimer = null;
+        }
+    }
+
+    // ================= 消息处理 =================
+    
+    function send(data) {
+        if (!BleState.ws || BleState.ws.readyState !== WebSocket.OPEN) {
+            console.warn('[BLE] 未连接，无法发送');
+            return false;
+        }
+        BleState.ws.send(JSON.stringify(data));
+        return true;
+    }
+    
+async function handleMessage(rawData) {
+    try {
+        let msg;
+        
+        console.log('liangji start handleMessage');
+        // 支持 MessagePack 和 JSON
+        if (rawData instanceof Blob) {
+            console.log('liangji rawData = Blob');
+            const buffer = await rawData.arrayBuffer();
+            msg = await decodeData(buffer); // 抽离解码逻辑，提高复用性
+        } else if (rawData instanceof ArrayBuffer) {
+            console.log('liangji rawData = ArrayBuffer');
+            msg = await decodeData(rawData);
         } else {
-          deviceList.innerHTML = '<option value="">未找到设备</option>';
-          deviceList.disabled = true;
-          bluetoothStatusDesc.textContent = '未找到任何蓝牙设备';
-          updateConnectButton('connect', true);
+            console.log('liangji rawData = JSON');
+            // 先判断是否是字符串，避免非字符串类型传入 JSON.parse
+            if (typeof rawData === 'string') {
+                msg = JSON.parse(rawData);
+            } else {
+                throw new Error('非字符串类型无法解析为 JSON');
+            }
         }
-        break;
         
-      case 'connect_result':
-        // 处理连接结果
-        if (data.success) {
-          // 连接成功
-          updateBluetoothStatus(true, data.mac, data.rssi || '--');
-        } else {
-          // 连接失败
-          updateBluetoothStatus(false, data.mac);
-          updateConnectButton('reconnect');
-          bluetoothStatusDesc.textContent = `连接失败: ${data.message || '未知错误'}`;
+        console.log('[BLE] 收到:', msg);
+        
+        if (msg.type === 'response') {
+            handleResponse(msg);
+        } else if (msg.type === 'event') {
+            handleEvent(msg);
+        } else if (msg.type === 'welcome') {
+            handleWelcome(msg);
         }
-        break;
         
-      case 'disconnect_result':
-        // 处理断开结果
-        updateBluetoothStatus(false);
-        updateConnectButton('connect', !deviceList.value);
-        bluetoothStatusDesc.textContent = data.success ? '已断开连接' : '断开失败';
-        break;
-        
-      case 'device_status':
-        // 实时更新设备状态（如信号强度、电量）
-        if (data.mac === bluetoothState.currentMac && bluetoothState.isConnected) {
-          bluetoothDb.textContent = data.rssi || bluetoothDb.textContent;
-          // 可扩展：更新电量显示
-          // batteryElement.textContent = data.battery || '78%';
-        }
-        break;
+    } catch (err) {
+        console.error('[BLE] 消息解析错误:', err);
     }
-  } catch (error) {
-    console.error('解析WebSocket消息失败:', error);
-  }
-};
+}
 
-// WebSocket连接状态处理
-ws.onopen = () => {
-  console.log('WebSocket连接成功');
-  initBluetoothUI();
-};
+// 抽离解码逻辑，单独处理 msgpack 和 JSON 降级
+async function decodeData(buffer) {
+    // 1. 优先尝试 msgpack 解码（核心修复：增加 msgpack 解码失败的容错）
+    if (typeof msgpack !== 'undefined' && msgpack?.decode) {
+        try {
+            return msgpack.decode(new Uint8Array(buffer));
+        } catch (msgpackErr) {
+            console.warn('[BLE] msgpack 解码失败，尝试 JSON 解析:', msgpackErr);
+        }
+    } else {
+        console.warn('[BLE] msgpack 库未加载，直接尝试 JSON 解析');
+    }
+    
+    // 2. msgpack 解码失败/库不存在时，降级为 JSON 解析
+    try {
+        const text = new TextDecoder().decode(buffer);
+        return JSON.parse(text);
+    } catch (jsonErr) {
+        throw new Error(`JSON 解析也失败：${jsonErr.message}，原始数据长度：${buffer.byteLength}`);
+    }
+}
+    
+    function handleWelcome(msg) {
+        console.log('[BLE] 欢迎消息:', msg.message);
+        
+        // 更新设备状态
+        if (msg.dev1) updateDeviceState(1, msg.dev1);
+        if (msg.dev2) updateDeviceState(2, msg.dev2);
+        
+        // 更新 UI
+        updateAllUI();
+    }
+    
+    function handleResponse(msg) {
+        const action = msg.action;
+        
+        // 扫描结果
+        if (action === 'scan') {
+            console.log('liangji scan over');
+            if (msg.success) {
+                console.log('liangji scan success');
+                BleState.scannedDevices = msg.devices || [];
+                updateDeviceSelects();
+                showToast(`发现 ${msg.count} 个设备`);
+            } else {
+                console.log('liangji scan fail');
+                showToast('扫描失败: ' + msg.error, 'error');
+            }
+            console.log('liangji updateScanButton');
+            updateScanButton(false);
+        }
+        
+        // 连接结果
+        else if (action.startsWith('connect')) {
+            const deviceId = parseInt(action.slice(-1));
+            
+            if (msg.success === true) {
+                BleState.devices[deviceId] = {
+                    connected: true,
+                    streaming: false,
+                    mac: msg.mac,
+                    name: msg.name,
+                    rssi: msg.rssi,
+                };
+                updateDeviceUI(deviceId);
+                showToast(`设备 ${deviceId} 连接成功`);
+            } else if (msg.success === false) {
+                updateDeviceUI(deviceId);
+                showToast(`设备 ${deviceId} 连接失败: ${msg.error}`, 'error');
+            } else {
+                // 连接中
+                updateDeviceStatus(deviceId, 'connecting');
+            }
+            updateConnectButton(deviceId, msg.success !== null);
+        }
+        
+        // 断开结果
+        else if (action.startsWith('disconnect')) {
+            const deviceId = parseInt(action.slice(-1));
+            
+            if (msg.success) {
+                BleState.devices[deviceId] = {
+                    connected: false,
+                    streaming: false,
+                    mac: null,
+                    name: null,
+                    rssi: null,
+                };
+                updateDeviceUI(deviceId);
+                showToast(`设备 ${deviceId} 已断开`);
+            } else {
+                showToast('断开失败: ' + msg.error, 'error');
+            }
+            updateConnectButton(deviceId, true);
+        }
+        
+        // 开始采集
+        else if (action.startsWith('start')) {
+            const deviceId = action === 'start_all' ? 0 : parseInt(action.slice(-1));
+            
+            if (msg.success) {
+                if (deviceId === 0) {
+                    // start_all
+                    (msg.started || []).forEach(id => {
+                        BleState.devices[id].streaming = true;
+                    });
+                } else {
+                    BleState.devices[deviceId].streaming = true;
+                }
+                updateAllUI();
+                showToast('采集已开始');
+            } else {
+                showToast('启动失败: ' + msg.error, 'error');
+            }
+        }
+        
+        // 停止采集
+        else if (action.startsWith('stop')) {
+            const deviceId = action === 'stop_all' ? 0 : parseInt(action.slice(-1));
+            
+            if (msg.success) {
+                if (deviceId === 0) {
+                    BleState.devices[1].streaming = false;
+                    BleState.devices[2].streaming = false;
+                } else {
+                    BleState.devices[deviceId].streaming = false;
+                }
+                updateAllUI();
+                showToast('采集已停止');
+            } else {
+                showToast('停止失败: ' + msg.error, 'error');
+            }
+        }
+        
+        // 状态
+        else if (action === 'status') {
+            if (msg.dev1) updateDeviceState(1, msg.dev1);
+            if (msg.dev2) updateDeviceState(2, msg.dev2);
+            updateAllUI();
+        }
 
-ws.onclose = () => {
-  console.log('WebSocket连接断开');
-  bluetoothStatusDesc.textContent = '通信断开，请刷新页面';
-  scanBtn.disabled = true;
-  deviceList.disabled = true;
-  updateConnectButton('connect', true);
-};
+        else if (action === 'welcome') {
+            console.log('welcome msg: connected to websocket server', msg);
+        }
+        
+        // 回调
+        if (BleState.onStatusChange) {
+            BleState.onStatusChange(action, msg);
+        }
+    }
+    
+    function handleEvent(msg) {
+        const event = msg.event;
+        console.log('[BLE] 事件:', event, msg);
+        
+        if (event === 'device_connected') {
+            // 外部连接事件（其他控制端触发）
+        } else if (event === 'device_disconnected') {
+            // 外部断开事件
+        } else if (event === 'stream_started' || event === 'stream_stopped') {
+            // 采集状态变更
+            updateAllUI();
+        }
+    }
+    
+    function updateDeviceState(deviceId, data) {
+        BleState.devices[deviceId] = {
+            connected: data.connected,
+            streaming: data.streaming,
+            mac: data.mac,
+            name: data.name,
+            rssi: data.rssi,
+        };
+    }
 
-ws.onerror = (error) => {
-  console.error('WebSocket错误:', error);
-  bluetoothStatusDesc.textContent = '通信错误';
-};
+    // ================= UI 更新 =================
+    
+    function updateServerStatus(status) {
+        const el = document.getElementById('serverStatus');
+        if (el) {
+            el.className = 'status-badge ' + status;
+            el.textContent = {
+                connected: '已连接',
+                connecting: '连接中',
+                disconnected: '未连接'
+            }[status] || status;
+        }
+    }
+    
+    function updateScanButton(scanning) {
+        const btn = document.getElementById('scanAllBtn');
+        if (btn) {
+            btn.disabled = scanning;
+            btn.innerHTML = scanning 
+                ? '<i class="fas fa-spinner fa-spin"></i> 扫描中'
+                : '<i class="fas fa-search"></i> 扫描';
+        }
+    }
+    
+    function updateDeviceSelects() {
+        const devices = BleState.scannedDevices;
+        
+        const opts = '<option value="">请选择设备...</option>' + 
+            devices.map(d => {
+                const isTarget = d.name === 'ESP32S3_EMG' ? ' ★' : '';
+                return `<option value="${d.mac}">${d.name} (${d.rssi}dBm)${isTarget}</option>`;
+            }).join('');
+        
+        const select1 = document.getElementById('device1Select');
+        const select2 = document.getElementById('device2Select');
+        
+        if (select1) {
+            select1.innerHTML = opts;
+            select1.disabled = false;
+        }
+        if (select2) {
+            select2.innerHTML = opts;
+            select2.disabled = false;
+        }
+        
+        // 回调
+        if (BleState.onScanResult) {
+            BleState.onScanResult(devices);
+        }
+    }
+    
+    function updateDeviceUI(deviceId) {
+        const dev = BleState.devices[deviceId];
+        
+        updateDeviceStatus(deviceId, dev.connected ? 'connected' : 'disconnected');
+        updateDeviceInfo(deviceId, dev);
+        updateConnectButton(deviceId, true);
+    }
+    
+    function updateDeviceStatus(deviceId, status) {
+        const el = document.getElementById(`slot${deviceId}Status`);
+        const slotEl = document.getElementById(`btSlot${deviceId}`);
+        
+        if (el) {
+            el.className = 'status-badge ' + status;
+            el.textContent = {
+                connected: '已连接',
+                connecting: '连接中',
+                disconnected: '未连接'
+            }[status] || status;
+        }
+        
+        if (slotEl) {
+            slotEl.classList.remove('connected');
+            if (status === 'connected') {
+                slotEl.classList.add('connected');
+            }
+        }
+    }
+    
+    function updateDeviceInfo(deviceId, dev) {
+        const nameEl = document.getElementById(`device${deviceId}Name`);
+        const rssiEl = document.getElementById(`device${deviceId}RSSI`);
+        const signalEl = document.getElementById(`device${deviceId}Signal`);
+        
+        if (dev && dev.connected) {
+            if (nameEl) nameEl.textContent = dev.name || '--';
+            if (rssiEl) rssiEl.textContent = dev.rssi ? `${dev.rssi} dBm` : '-- dBm';
+            if (signalEl) {
+                const pct = dev.rssi ? Math.max(0, Math.min(100, ((dev.rssi + 90) / 60) * 100)) : 0;
+                signalEl.style.width = pct + '%';
+            }
+        } else {
+            if (nameEl) nameEl.textContent = '--';
+            if (rssiEl) rssiEl.textContent = '-- dBm';
+            if (signalEl) signalEl.style.width = '0%';
+        }
+    }
+    
+    function updateConnectButton(deviceId, enabled) {
+        const btn = document.getElementById(`connect${deviceId}Btn`);
+        const dev = BleState.devices[deviceId];
+        
+        if (btn) {
+            btn.disabled = !enabled;
+            
+            if (dev.connected) {
+                btn.innerHTML = '<i class="fas fa-unlink"></i> 断开';
+                btn.className = 'bt-connect-btn disconnect';
+            } else {
+                btn.innerHTML = '<i class="fas fa-link"></i> 连接';
+                btn.className = 'bt-connect-btn connect';
+            }
+        }
+    }
+    
+    function updateAllUI() {
+        updateDeviceUI(1);
+        updateDeviceUI(2);
+    }
+    
+    function showToast(msg, type = 'success') {
+        // 使用页面已有的 toast 函数
+        if (typeof window.showToast === 'function') {
+            window.showToast(msg, type);
+        } else {
+            // 简易 toast
+            const toast = document.getElementById('toast');
+            if (toast) {
+                const msgEl = document.getElementById('toastMessage');
+                const icon = toast.querySelector('i');
+                
+                toast.className = `toast ${type}`;
+                if (msgEl) msgEl.textContent = msg;
+                if (icon) {
+                    icon.className = type === 'success' ? 'fas fa-check-circle' : 
+                                    type === 'error' ? 'fas fa-times-circle' : 
+                                    'fas fa-exclamation-circle';
+                }
+                toast.classList.add('visible');
+                setTimeout(() => toast.classList.remove('visible'), 2500);
+            } else {
+                console.log('[Toast]', type, msg);
+            }
+        }
+    }
 
-// 页面加载初始化
-window.addEventListener('load', initBluetoothUI);
+    // ================= 公开 API =================
+    
+    const BleControl = {
+        // 连接服务器
+        connect: connect,
+        disconnect: disconnect,
+        
+        // 发送命令
+        send: send,
+        
+        // 扫描
+        scan: () => {
+            updateScanButton(true);
+            return send({ action: 'scan' });
+        },
+        
+        // 连接设备
+        connectDevice: (deviceId, mac) => {
+            updateConnectButton(deviceId, false);
+            updateDeviceStatus(deviceId, 'connecting');
+            return send({ action: `connect${deviceId}`, mac: mac });
+        },
+        
+        // 断开设备
+        disconnectDevice: (deviceId) => {
+            updateConnectButton(deviceId, false);
+            return send({ action: `disconnect${deviceId}` });
+        },
+        
+        // 开始采集
+        startStream: (deviceId) => {
+            return send({ action: `start${deviceId}` });
+        },
+        
+        // 停止采集
+        stopStream: (deviceId) => {
+            return send({ action: `stop${deviceId}` });
+        },
+        
+        // 同时开始/停止
+        startAll: () => send({ action: 'start_all' }),
+        stopAll: () => send({ action: 'stop_all' }),
+        
+        // 获取状态
+        getStatus: () => send({ action: 'status' }),
+        
+        // 状态访问
+        get state() { return BleState; },
+        get isConnected() { return BleState.connected; },
+        get devices() { return BleState.devices; },
+        get scannedDevices() { return BleState.scannedDevices; },
+        
+        // 回调设置
+        onStatusChange: (fn) => { BleState.onStatusChange = fn; },
+        onDeviceChange: (fn) => { BleState.onDeviceChange = fn; },
+        onScanResult: (fn) => { BleState.onScanResult = fn; },
+        onError: (fn) => { BleState.onError = fn; },
+    };
 
+    // ================= 初始化 =================
+    
+    function init() {
+        console.log('[BLE] 初始化蓝牙控制模块');
+        
+        // 绑定扫描按钮
+        const scanBtn = document.getElementById('scanAllBtn');
+        if (scanBtn) {
+            scanBtn.addEventListener('click', () => BleControl.scan());
+        }
+        
+        // 绑定设备选择
+        const select1 = document.getElementById('device1Select');
+        const select2 = document.getElementById('device2Select');
+        
+        if (select1) {
+            select1.addEventListener('change', (e) => {
+                const btn = document.getElementById('connect1Btn');
+                if (btn) btn.disabled = !e.target.value;
+            });
+        }
+        
+        if (select2) {
+            select2.addEventListener('change', (e) => {
+                const btn = document.getElementById('connect2Btn');
+                if (btn) btn.disabled = !e.target.value;
+            });
+        }
+        
+        // 绑定连接按钮
+        const connect1Btn = document.getElementById('connect1Btn');
+        const connect2Btn = document.getElementById('connect2Btn');
+        
+        if (connect1Btn) {
+            connect1Btn.addEventListener('click', () => {
+                if (BleState.devices[1].connected) {
+                    BleControl.disconnectDevice(1);
+                } else {
+                    const mac = document.getElementById('device1Select')?.value;
+                    if (mac) {
+                        BleControl.connectDevice(1, mac);
+                    } else {
+                        showToast('请先选择设备', 'warning');
+                    }
+                }
+            });
+        }
+        
+        if (connect2Btn) {
+            connect2Btn.addEventListener('click', () => {
+                if (BleState.devices[2].connected) {
+                    BleControl.disconnectDevice(2);
+                } else {
+                    const mac = document.getElementById('device2Select')?.value;
+                    if (mac) {
+                        BleControl.connectDevice(2, mac);
+                    } else {
+                        showToast('请先选择设备', 'warning');
+                    }
+                }
+            });
+        }
+        
+        // 检查重复设备选择
+        if (select1 && select2) {
+            const checkDuplicate = () => {
+                const v1 = select1.value;
+                const v2 = select2.value;
+                
+                if (v1 && v1 === v2) {
+                    showToast('不能选择相同的设备', 'warning');
+                    select2.value = '';
+                    const btn = document.getElementById('connect2Btn');
+                    if (btn) btn.disabled = true;
+                }
+            };
+            
+            select1.addEventListener('change', checkDuplicate);
+            select2.addEventListener('change', checkDuplicate);
+        }
+        
+        // 自动连接服务器
+        connect();
+    }
 
+    // DOM 加载完成后初始化
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+
+    // 导出到全局
+    window.BleControl = BleControl;
+
+})();
