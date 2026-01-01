@@ -1,12 +1,15 @@
 /**
- * animation-controller.js - 动画控制器
+ * animation-controller.js - 动画控制器（重构版）
  * 
  * 这个文件负责管理采集过程中的所有动画：
  * 1. 开场动画（Intro Animation）- 采集开始前播放
- * 2. Stage内容动画（Stage Content Animation）- 每个stage期间播放
+ * 2. Stage内容动画 - 根据任务类型选择对应的动画模块
  * 3. 倒计时动画（Countdown Animation）- stage切换时的准备倒计时
  * 
- * 后续可以在这里替换为自定义动画或视频
+ * 重构说明：
+ * - 不再有统一的stage-animation.js
+ * - 每种任务有独立的动画模块
+ * - 通过prompt数量控制stage时长，不再使用秒数倒计时
  */
 
 (function() {
@@ -21,12 +24,22 @@
             this.countdownTimer = null;
             this.isPlaying = false;
             
-            // 获取显示区域元素
+            // 当前任务类型
+            this.currentTaskId = 'discrete_gesture';
+            
+            // DOM元素引用
             this.gestureDisplay = null;
             this.gestureName = null;
             this.gestureInstruction = null;
             this.gestureIcon = null;
             this.countdown = null;
+            
+            // 动画模块映射
+            this.animationModules = {
+                'discrete_gesture': () => window.discreteGestureAnimation,
+                'continual_gesture_1': () => window.continualGesture1Animation,
+                'continual_gesture_2': () => window.continualGesture2Animation
+            };
         }
 
         /**
@@ -42,11 +55,33 @@
             console.log('[Animation] 初始化完成');
         }
 
-        // ==================== WebSocket通信 ====================
+        /**
+         * 设置当前任务类型
+         */
+        setCurrentTask(taskId) {
+            this.currentTaskId = taskId;
+            console.log('[Animation] 当前任务类型:', taskId);
+        }
 
         /**
-         * 获取WebSocket连接
+         * 获取当前任务对应的动画模块
          */
+        getCurrentAnimationModule() {
+            const getModule = this.animationModules[this.currentTaskId];
+            if (getModule) {
+                const module = getModule();
+                if (module) {
+                    return module;
+                }
+            }
+            
+            // 后备：使用离散手势动画
+            console.warn('[Animation] 未找到任务动画模块，使用默认');
+            return window.discreteGestureAnimation || null;
+        }
+
+        // ==================== WebSocket通信 ====================
+
         getWebSocket() {
             if (window.waveformController && 
                 window.waveformController.dataReceiver && 
@@ -56,9 +91,6 @@
             return null;
         }
 
-        /**
-         * 发送消息到realtimeEngine
-         */
         sendToRealtimeEngine(action, data) {
             console.log(`[Animation] >>> realtimeEngine: ${action}`, data);
             
@@ -80,11 +112,9 @@
 
         /**
          * 发送Prompt信号到realtimeEngine
-         * @param {string} promptName - prompt名称
-         * @param {string} stageName - 当前stage名称
          */
         sendPrompt(promptName, stageName) {
-            const timestamp = Date.now() / 1000; // 转换为秒
+            const timestamp = Date.now() / 1000;
             
             this.sendToRealtimeEngine('prompt', {
                 name: promptName,
@@ -95,10 +125,6 @@
 
         // ==================== 开场动画 ====================
 
-        /**
-         * 播放开场动画
-         * @param {Function} onComplete - 动画完成后的回调
-         */
         playIntroAnimation(onComplete) {
             console.log('[Animation] 播放开场动画');
             this.isPlaying = true;
@@ -120,18 +146,17 @@
             }
         }
 
-        /**
-         * 播放开场倒计时动画（默认）
-         */
         playIntroCountdown(duration, onComplete) {
             const totalSeconds = Math.ceil(duration / 1000);
             let remaining = totalSeconds;
             
-            // 更新显示
+            // 显示stage信息框（不隐藏）
             if (this.gestureName) {
+                this.gestureName.style.display = '';
                 this.gestureName.textContent = '准备开始';
             }
             if (this.gestureInstruction) {
+                this.gestureInstruction.style.display = '';
                 this.gestureInstruction.textContent = '请做好准备...';
             }
             
@@ -145,7 +170,6 @@
                 this.countdown.style.color = '#3b82f6';
             }
             
-            // 创建进度环容器（可选的视觉效果）
             this.showProgressRing(totalSeconds);
             
             const tick = () => {
@@ -173,71 +197,92 @@
             tick();
         }
 
-        /**
-         * 播放开场视频（预留接口）
-         */
         playIntroVideo(duration, onComplete) {
             console.log('[Animation] 播放开场视频（待实现）');
-            // TODO: 实现视频播放
-            // 目前回退到倒计时动画
             this.playIntroCountdown(duration, onComplete);
         }
 
         // ==================== Stage内容动画 ====================
 
         /**
-         * 播放Stage内容动画
-         * @param {Object} stage - stage配置对象
-         * @param {Function} onComplete - 动画完成后的回调
+         * 播放Stage动画
+         * 根据当前任务类型选择对应的动画模块
          */
         playStageAnimation(stage, onComplete) {
-            console.log('[Animation] 播放Stage动画:', stage.name);
+            console.log('[Animation] 播放Stage动画:', stage.name, '任务类型:', this.currentTaskId);
             this.isPlaying = true;
             
-            const duration = window.CollectionTiming ? 
-                window.CollectionTiming.getStageDuration() : 5000;
-            
-            // 更新显示内容
+            // 更新显示内容（保持stage信息框可见）
             this.updateStageDisplay(stage);
             
-            // 发送Prompt信号到realtimeEngine（动画开始时发送）
-            this.sendPrompt(stage.name, stage.name);
+            // 获取对应的动画模块
+            const animModule = this.getCurrentAnimationModule();
             
-            // 播放内容动画
-            this.playStageContent(stage, duration, onComplete);
+            if (animModule) {
+                console.log('[Animation] 使用动画模块:', this.currentTaskId);
+                
+                // 动画模块使用prompt计数，不再使用duration
+                animModule.start(
+                    stage,
+                    () => {
+                        this.isPlaying = false;
+                        if (onComplete) onComplete();
+                    },
+                    (promptName, promptIndex, stageName) => {
+                        // prompt触发回调
+                        console.log(`[Animation] Prompt触发: ${promptName} #${promptIndex + 1}`);
+                    }
+                );
+            } else {
+                // 后备方案：简单的倒计时
+                console.log('[Animation] 无动画模块，使用简单倒计时');
+                this.playFallbackAnimation(stage, onComplete);
+            }
         }
 
         /**
          * 更新Stage显示内容
+         * 保持stage信息框可见
          */
         updateStageDisplay(stage) {
-            // 显示手势图标
+            // 显示手势名称
+            if (this.gestureName) {
+                this.gestureName.style.display = '';
+                this.gestureName.textContent = stage.label || stage.name;
+            }
+            
+            // 显示指导说明
+            if (this.gestureInstruction) {
+                this.gestureInstruction.style.display = '';
+                this.gestureInstruction.textContent = stage.instruction || '请按照提示进行手势动作';
+            }
+            
+            // 隐藏手势图标（让Canvas动画显示）
             if (this.gestureIcon && this.gestureIcon.parentElement) {
-                this.gestureIcon.parentElement.style.display = '';
+                this.gestureIcon.parentElement.style.display = 'none';
             }
             
             // 隐藏大倒计时
             if (this.countdown) {
                 this.countdown.classList.remove('visible');
             }
-            
-            // 更新文字
-            if (this.gestureName) {
-                this.gestureName.textContent = stage.label || stage.name;
-            }
-            if (this.gestureInstruction) {
-                this.gestureInstruction.textContent = stage.instruction || '请按照提示进行手势动作';
-            }
         }
 
         /**
-         * 播放Stage内容（默认：进度动画）
-         * 这里是实际的5秒动画内容，后续可以替换为具体的手势演示动画
+         * 后备动画（当没有动画模块时使用）
          */
-        playStageContent(stage, duration, onComplete) {
-            const startTime = Date.now();
+        playFallbackAnimation(stage, onComplete) {
+            // 估算时长：基于prompt数量
+            let duration = 10000; // 默认10秒
             
-            // 创建小型倒计时显示
+            if (window.CollectionTiming) {
+                duration = window.CollectionTiming.estimateStageDuration(
+                    this.currentTaskId, 
+                    stage.name
+                );
+            }
+            
+            const startTime = Date.now();
             this.showStageTimer(duration);
             
             const updateProgress = () => {
@@ -264,19 +309,19 @@
 
         /**
          * 播放准备倒计时
-         * @param {number} seconds - 倒计时秒数
-         * @param {Function} onComplete - 完成回调
          */
         playCountdown(seconds, onComplete) {
             console.log('[Animation] 播放准备倒计时:', seconds, '秒');
             
             let remaining = seconds;
             
-            // 更新显示
+            // 保持stage信息框可见，只更新内容
             if (this.gestureName) {
+                this.gestureName.style.display = '';
                 this.gestureName.textContent = '准备';
             }
             if (this.gestureInstruction) {
+                this.gestureInstruction.style.display = '';
                 this.gestureInstruction.textContent = '下一个动作即将开始...';
             }
             
@@ -321,11 +366,7 @@
 
         // ==================== 辅助UI元素 ====================
 
-        /**
-         * 显示进度环（开场动画用）
-         */
         showProgressRing(totalSeconds) {
-            // 创建或获取进度环元素
             let ring = document.getElementById('introProgressRing');
             if (!ring) {
                 ring = document.createElement('div');
@@ -340,7 +381,6 @@
                     animation: spin 1s linear infinite;
                 `;
                 
-                // 添加旋转动画样式
                 if (!document.getElementById('spinAnimation')) {
                     const style = document.createElement('style');
                     style.id = 'spinAnimation';
@@ -360,16 +400,10 @@
             ring.style.display = 'block';
         }
 
-        /**
-         * 更新进度环
-         */
         updateProgressRing(remaining, total) {
             // 可以在这里更新进度环的样式
         }
 
-        /**
-         * 隐藏进度环
-         */
         hideProgressRing() {
             const ring = document.getElementById('introProgressRing');
             if (ring) {
@@ -377,9 +411,6 @@
             }
         }
 
-        /**
-         * 显示Stage计时器
-         */
         showStageTimer(duration) {
             let timer = document.getElementById('stageTimer');
             if (!timer) {
@@ -407,15 +438,11 @@
             timer.textContent = Math.ceil(duration / 1000) + 's';
         }
 
-        /**
-         * 更新Stage计时器
-         */
         updateStageTimer(seconds) {
             const timer = document.getElementById('stageTimer');
             if (timer) {
                 timer.textContent = seconds + 's';
                 
-                // 最后3秒变红
                 if (seconds <= 3) {
                     timer.style.color = '#ef4444';
                 } else {
@@ -424,9 +451,6 @@
             }
         }
 
-        /**
-         * 隐藏Stage计时器
-         */
         hideStageTimer() {
             const timer = document.getElementById('stageTimer');
             if (timer) {
@@ -436,9 +460,6 @@
 
         // ==================== 控制方法 ====================
 
-        /**
-         * 停止所有动画
-         */
         stop() {
             console.log('[Animation] 停止所有动画');
             
@@ -452,6 +473,15 @@
                 this.countdownTimer = null;
             }
             
+            // 停止所有动画模块
+            Object.keys(this.animationModules).forEach(taskId => {
+                const getModule = this.animationModules[taskId];
+                const module = getModule();
+                if (module && module.stop) {
+                    module.stop();
+                }
+            });
+            
             this.isPlaying = false;
             this.hideProgressRing();
             this.hideStageTimer();
@@ -461,23 +491,20 @@
             }
         }
 
-        /**
-         * 检查是否正在播放
-         */
         isAnimationPlaying() {
             return this.isPlaying;
         }
 
-        /**
-         * 重置显示
-         */
         reset() {
             this.stop();
             
+            // 恢复所有UI元素的显示
             if (this.gestureName) {
+                this.gestureName.style.display = '';
                 this.gestureName.textContent = '点击开始';
             }
             if (this.gestureInstruction) {
+                this.gestureInstruction.style.display = '';
                 this.gestureInstruction.textContent = '选择任务类型并点击开始按钮';
             }
             if (this.gestureIcon && this.gestureIcon.parentElement) {
