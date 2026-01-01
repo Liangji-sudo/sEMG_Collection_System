@@ -1,14 +1,21 @@
 /**
  * continual-gesture-2-animation.js - 连续手势2采集动画模块
  * 
- * 这个文件专门负责连续手势2（continual_gesture_2）任务的Stage动画
- * 主要是手腕相关的连续动作
+ * 概念说明：
+ * - Stage: 一个采集阶段（如"手腕控制任务"）
+ * - 与离散手势不同，这里使用滚轮控制光标任务（与连续手势1类似）
+ * - 每个Stage包含多个目标点（Trial），用户通过滚轮移动光标到目标点
  * 
- * 动画特点：
- * - 提示从右向左滚动
- * - 约1秒一个提示经过指示线
- * - 通过prompt数量来控制stage时长
- * - 橙色/琥珀色主题，区别于其他任务
+ * 任务规则：
+ * - 目标点出现在10个不同位置
+ * - 用户通过滚轮移动光标到目标点
+ * - 光标停留在目标区域500ms视为命中
+ * - 完成所有目标或120s超时后进入下一个Stage
+ * - Stage内不向realtimeEngine发送prompt消息
+ * 
+ * 与连续手势1的区别：
+ * - 视觉主题颜色不同（橙色系）
+ * - 可配置不同的任务参数
  */
 
 (function() {
@@ -18,77 +25,104 @@
 
     class ContinualGesture2AnimationController {
         constructor() {
+            // Canvas相关
             this.canvas = null;
             this.ctx = null;
             this.containerElement = null;
             
-            this.animationId = null;
+            // 任务状态
             this.isRunning = false;
-            this.prompts = [];
-            this.nextPromptIndex = 0;
-            this.executedCount = 0;
-            this.totalPromptCount = 12;
+            this.animationId = null;
+            this.stageTimer = null;
             
+            // 当前Stage信息
             this.currentStage = null;
             this.currentTaskId = 'continual_gesture_2';
             this.onComplete = null;
-            this.onPromptTriggered = null;
             
+            // 滚轮光标任务状态
+            this.cursorPos = 0.5;
+            this.targetPos = null;
+            this.trial = 0;
+            this.hits = 0;
+            this.maxTrials = 10;
+            this.stageTimeout = 120000;
+            this.dwellMs = 500;
+            this.onTargetSince = null;
+            this.dwellTimer = null;
+            this.fillTimer = null;
+            this.fillProgress = 0;
+            
+            // 目标区域配置
+            this.targetFrac = 0.12;
+            this.targetH = 0;
+            
+            // 轨道配置
+            this.trackPadding = 20;
+            this.trackWidth = 40;
+            this.cursorSize = 20;
+            
+            // 计时相关
+            this.startTime = null;
+            this.remainingTime = 0;
+            
+            // 配置 - 连续手势2使用橙色主题
             this.config = {
                 canvasWidth: 0,
                 canvasHeight: 0,
-                indicatorX: 0,
-                scrollSpeed: 2,
-                promptSpacing: 120,
-                promptLength: 60,
-                promptThickness: 10,
-                labelOffset: 80,
-                centerY: 0,
+                trackTop: 0,
+                trackBottom: 0,
+                trackHeight: 0,
+                trackCenterX: 0,
                 colors: {
-                    active: '#10b981',
-                    passed: '#9ca3af',
-                    normal: '#f59e0b',
-                    indicator: '#ef4444'
+                    track: 'rgba(15, 23, 42, 0.06)',
+                    trackBorder: 'rgba(15, 23, 42, 0.15)',
+                    target: 'rgba(245, 158, 11, 0.25)',      // 橙色目标
+                    targetActive: 'rgba(245, 158, 11, 0.45)',
+                    targetBorder: 'transparent',
+                    targetBorderActive: '#92400e',           // 深橙色边框
+                    cursor: '#ef4444',
+                    cursorBorder: '#991b1b',
+                    cursorFill: 'rgba(0, 0, 0, 0.85)',
+                    text: '#92400e',                         // 橙色文字
+                    muted: 'rgba(107, 114, 128, 0.9)',
+                    success: '#10b981',
+                    warning: '#f59e0b'
                 }
             };
             
-            this.gestureTypes = {
-                'wrist_rotation': { label: '手腕旋转', icon: '🔄', color: '#f59e0b' },
-                'wrist_updown': { label: '手腕上下', icon: '↕', color: '#f59e0b' },
-                'wrist_leftright': { label: '手腕左右', icon: '↔', color: '#f59e0b' },
-                'fist_rotation': { label: '握拳旋转', icon: '👊', color: '#f59e0b' }
-            };
+            // 绑定事件处理器
+            this._wheelHandler = this.handleWheel.bind(this);
+            this._resizeHandler = this.resizeCanvas.bind(this);
         }
 
+        /**
+         * 从配置加载
+         */
         loadConfig() {
-            if (window.COLLECTION_CONSTANTS && window.COLLECTION_CONSTANTS.CONTINUAL_GESTURE_2) {
-                const taskConfig = window.COLLECTION_CONSTANTS.CONTINUAL_GESTURE_2;
-                const animConfig = taskConfig.ANIMATION;
+            if (window.CONTINUAL_GESTURE_2_CONFIG) {
+                const taskConfig = window.CONTINUAL_GESTURE_2_CONFIG;
                 
-                this.config.scrollSpeed = taskConfig.SCROLL_SPEED || 2;
-                this.config.promptSpacing = taskConfig.PROMPT_SPACING || 120;
-                this.config.promptLength = animConfig.PROMPT_LENGTH || 60;
-                this.config.promptThickness = animConfig.PROMPT_THICKNESS || 10;
-                this.config.labelOffset = animConfig.LABEL_OFFSET || 80;
-                this.config.indicatorPosition = animConfig.INDICATOR_POSITION || 0.3;
-                
-                if (animConfig.COLORS) {
-                    this.config.colors = { ...animConfig.COLORS };
+                if (taskConfig.WHEEL_TASK) {
+                    const wt = taskConfig.WHEEL_TASK;
+                    this.maxTrials = wt.MAX_TRIALS || 10;
+                    this.stageTimeout = wt.STAGE_TIMEOUT || 120000;
+                    this.dwellMs = wt.DWELL_MS || 500;
+                    this.targetFrac = wt.TARGET_FRAC || 0.12;
                 }
                 
-                Object.keys(taskConfig.STAGES).forEach(key => {
-                    const stage = taskConfig.STAGES[key];
-                    this.gestureTypes[key] = {
-                        label: stage.label,
-                        icon: stage.icon,
-                        color: stage.color
-                    };
-                });
+                // 加载颜色配置
+                if (taskConfig.ANIMATION && taskConfig.ANIMATION.COLORS) {
+                    Object.assign(this.config.colors, taskConfig.ANIMATION.COLORS);
+                }
                 
                 console.log('[ContinualGesture2Animation] 配置已加载');
             }
         }
 
+        /**
+         * 初始化Canvas
+         */
         init(containerSelector) {
             this.loadConfig();
             
@@ -106,6 +140,7 @@
                 this.containerElement.style.position = 'relative';
             }
             
+            // 创建或获取Canvas
             this.canvas = document.getElementById('continualGesture2Canvas');
             if (!this.canvas) {
                 this.canvas = document.createElement('canvas');
@@ -116,23 +151,27 @@
                     left: 0;
                     width: 100%;
                     height: 100%;
-                    pointer-events: none;
                     z-index: 50;
-                    background: linear-gradient(135deg, rgba(255, 251, 235, 0.98) 0%, rgba(254, 243, 199, 0.95) 100%);
+                    background: rgba(255, 251, 235, 0.98);
                 `;
                 this.containerElement.appendChild(this.canvas);
             }
             
+            this.canvas.tabIndex = 0;
+            this.canvas.style.outline = 'none';
+            
             this.ctx = this.canvas.getContext('2d');
             this.resizeCanvas();
             
-            this._resizeHandler = () => this.resizeCanvas();
             window.addEventListener('resize', this._resizeHandler);
             
             console.log('[ContinualGesture2Animation] 初始化完成');
             return true;
         }
 
+        /**
+         * 调整Canvas大小
+         */
         resizeCanvas() {
             if (!this.canvas || !this.containerElement) return false;
             
@@ -148,25 +187,22 @@
                 
                 this.config.canvasWidth = rect.width;
                 this.config.canvasHeight = rect.height;
-                this.config.indicatorX = rect.width * (this.config.indicatorPosition || 0.3);
-                this.config.centerY = rect.height / 2;
+                
+                this.config.trackTop = this.trackPadding + 80;
+                this.config.trackBottom = rect.height - this.trackPadding - 60;
+                this.config.trackHeight = this.config.trackBottom - this.config.trackTop;
+                this.config.trackCenterX = rect.width / 2;
+                
+                this.targetH = Math.max(36, Math.round(this.config.trackHeight * this.targetFrac));
                 
                 return true;
             }
             return false;
         }
 
-        createPrompt(type, startX, index) {
-            return {
-                type: type,
-                x: startX,
-                index: index,
-                isActive: false,
-                isPassed: false,
-                promptSent: false
-            };
-        }
-
+        /**
+         * 开始Stage动画
+         */
         start(stage, onComplete, onPromptTriggered) {
             console.log('[ContinualGesture2Animation] 开始Stage动画:', stage.name);
             
@@ -180,268 +216,388 @@
             
             this.currentStage = stage;
             this.onComplete = onComplete;
-            this.onPromptTriggered = onPromptTriggered;
             
-            if (window.CollectionTiming) {
-                this.totalPromptCount = window.CollectionTiming.getPromptCount(
-                    this.currentTaskId, 
-                    stage.name
-                );
-            } else {
-                this.totalPromptCount = 12;
-            }
-            
-            this.prompts = [];
-            this.nextPromptIndex = 0;
-            this.executedCount = 0;
+            // 重置状态
+            this.cursorPos = 0.5;
+            this.targetPos = null;
+            this.trial = 0;
+            this.hits = 0;
+            this.onTargetSince = null;
+            this.fillProgress = 0;
             this.isRunning = true;
+            this.startTime = Date.now();
+            this.remainingTime = this.stageTimeout;
             
             this.resizeCanvas();
             this.canvas.style.display = 'block';
-            this.createNextPrompt();
+            this.canvas.focus();
+            
+            this.canvas.addEventListener('wheel', this._wheelHandler, { passive: false });
+            
+            this.setRandomTarget();
+            
+            this.stageTimer = setTimeout(() => {
+                console.log('[ContinualGesture2Animation] Stage超时');
+                this.completeStage();
+            }, this.stageTimeout);
+            
             this.animate();
         }
 
-        createNextPrompt() {
-            if (this.nextPromptIndex >= this.totalPromptCount) return;
+        /**
+         * 随机选择目标位置
+         */
+        pickRandomTargetPos(prev) {
+            const minEdge = 0.08;
+            const maxEdge = 0.92;
+            const minDeltaFromPrev = 0.20;
             
-            const startX = this.config.canvasWidth + 50;
-            const prompt = this.createPrompt(
-                this.currentStage.name, 
-                startX, 
-                this.nextPromptIndex
-            );
-            this.prompts.push(prompt);
-            this.nextPromptIndex++;
+            for (let i = 0; i < 80; i++) {
+                const v = minEdge + Math.random() * (maxEdge - minEdge);
+                if (prev == null || Math.abs(v - prev) >= minDeltaFromPrev) return v;
+            }
+            return minEdge + Math.random() * (maxEdge - minEdge);
         }
 
+        /**
+         * 设置随机目标
+         */
+        setRandomTarget() {
+            this.targetPos = this.pickRandomTargetPos(this.targetPos);
+            this.stopDwell();
+            console.log(`[ContinualGesture2Animation] 新目标: Trial ${this.trial + 1}, 位置 ${this.targetPos.toFixed(2)}`);
+        }
+
+        /**
+         * 处理滚轮事件
+         */
+        handleWheel(e) {
+            if (!this.isRunning) return;
+            
+            e.preventDefault();
+            e.stopPropagation();
+            
+            let multiplier = 0.001;
+            if (e.deltaMode === 1) multiplier = 0.015;
+            if (e.deltaMode === 2) multiplier = 0.25;
+            
+            const rawDelta = e.deltaY * multiplier;
+            const delta = Math.max(-0.06, Math.min(0.06, rawDelta));
+            
+            this.cursorPos = Math.max(0, Math.min(1, this.cursorPos + delta));
+            
+            if (this.isOnTarget()) {
+                this.startDwell();
+            } else {
+                this.stopDwell();
+            }
+        }
+
+        /**
+         * 获取光标屏幕Y坐标
+         */
+        getCursorScreenY() {
+            return this.config.trackTop + this.cursorPos * this.config.trackHeight;
+        }
+
+        /**
+         * 获取目标区域的边界
+         */
+        getTargetBounds() {
+            if (this.targetPos == null) return null;
+            
+            const targetCenterY = this.config.trackTop + this.targetPos * this.config.trackHeight;
+            const halfH = this.targetH / 2;
+            
+            return {
+                top: Math.max(this.config.trackTop, targetCenterY - halfH),
+                bottom: Math.min(this.config.trackBottom, targetCenterY + halfH),
+                centerY: targetCenterY
+            };
+        }
+
+        /**
+         * 检查光标是否在目标区域内
+         */
+        isOnTarget() {
+            const bounds = this.getTargetBounds();
+            if (!bounds) return false;
+            
+            const cursorY = this.getCursorScreenY();
+            return cursorY >= bounds.top && cursorY <= bounds.bottom;
+        }
+
+        /**
+         * 开始停留计时
+         */
+        startDwell() {
+            if (this.onTargetSince != null) return;
+            
+            this.onTargetSince = performance.now();
+            
+            this.fillTimer = setInterval(() => {
+                if (this.onTargetSince == null) return;
+                const elapsed = performance.now() - this.onTargetSince;
+                this.fillProgress = Math.max(0, Math.min(1, elapsed / this.dwellMs));
+            }, 20);
+            
+            this.dwellTimer = setTimeout(() => {
+                if (!this.isOnTarget()) {
+                    this.stopDwell();
+                    return;
+                }
+                
+                this.hits++;
+                this.trial++;
+                console.log(`[ContinualGesture2Animation] 命中! Trial ${this.trial}/${this.maxTrials}, Hits ${this.hits}`);
+                
+                this.stopDwell();
+                
+                if (this.trial >= this.maxTrials) {
+                    console.log('[ContinualGesture2Animation] 所有目标完成');
+                    this.completeStage();
+                } else {
+                    this.setRandomTarget();
+                }
+            }, this.dwellMs);
+        }
+
+        /**
+         * 停止停留计时
+         */
+        stopDwell() {
+            this.onTargetSince = null;
+            this.fillProgress = 0;
+            
+            if (this.dwellTimer) {
+                clearTimeout(this.dwellTimer);
+                this.dwellTimer = null;
+            }
+            if (this.fillTimer) {
+                clearInterval(this.fillTimer);
+                this.fillTimer = null;
+            }
+        }
+
+        /**
+         * 完成Stage
+         */
+        completeStage() {
+            console.log(`[ContinualGesture2Animation] Stage完成: ${this.hits}/${this.trial} 命中`);
+            this.stop();
+            if (this.onComplete) {
+                this.onComplete();
+            }
+        }
+
+        /**
+         * 动画循环
+         */
         animate() {
             if (!this.isRunning) return;
             
-            if (this.executedCount >= this.totalPromptCount) {
-                const allGone = this.prompts.every(p => p.x < -150);
-                if (allGone || this.prompts.length === 0) {
-                    this.stop();
-                    if (this.onComplete) this.onComplete();
-                    return;
-                }
-            }
-            
-            if (!this.config.canvasWidth || !this.config.canvasHeight) {
-                if (!this.resizeCanvas()) {
-                    this.animationId = requestAnimationFrame(() => this.animate());
-                    return;
-                }
-            }
+            this.remainingTime = Math.max(0, this.stageTimeout - (Date.now() - this.startTime));
             
             this.ctx.clearRect(0, 0, this.config.canvasWidth, this.config.canvasHeight);
             
-            this.prompts.forEach(p => {
-                p.x -= this.config.scrollSpeed;
-            });
-            
-            this.prompts = this.prompts.filter(p => p.x > -150);
-            
-            if (this.nextPromptIndex < this.totalPromptCount) {
-                const last = this.prompts[this.prompts.length - 1];
-                if (!last || last.x < this.config.canvasWidth - this.config.promptSpacing) {
-                    this.createNextPrompt();
-                }
-            }
-            
-            this.updatePrompts();
             this.drawStageInfo();
-            this.drawIndicator();
-            this.prompts.forEach(p => this.drawPrompt(p));
+            this.drawTrack();
+            this.drawTarget();
+            this.drawCursor();
             this.drawProgress();
+            this.drawInstructions();
             
             this.animationId = requestAnimationFrame(() => this.animate());
         }
 
-        updatePrompts() {
-            this.prompts.forEach(prompt => {
-                if (!prompt.isPassed) {
-                    const dist = prompt.x - this.config.indicatorX;
-                    
-                    if (Math.abs(dist) <= 20) {
-                        prompt.isActive = true;
-                        
-                        if (!prompt.promptSent) {
-                            prompt.promptSent = true;
-                            this.triggerPrompt(prompt);
-                        }
-                    }
-                    
-                    if (dist < -25) {
-                        prompt.isActive = false;
-                        prompt.isPassed = true;
-                        this.executedCount++;
-                    }
-                }
-            });
-        }
-
-        triggerPrompt(prompt) {
-            if (this.onPromptTriggered) {
-                this.onPromptTriggered(prompt.type, prompt.index, this.currentStage.name);
-            }
-            
-            if (window.animationController && window.animationController.sendPrompt) {
-                window.animationController.sendPrompt(prompt.type, this.currentStage.name);
-            }
-        }
-
+        /**
+         * 绘制Stage信息
+         */
         drawStageInfo() {
             const ctx = this.ctx;
-            const gesture = this.gestureTypes[this.currentStage.name] || {
-                label: this.currentStage.label || this.currentStage.name,
-                icon: '●',
-                color: '#f59e0b'
-            };
+            const stageConfig = this.currentStage;
+            
+            let stageLabel = stageConfig.label || stageConfig.name;
+            let stageIcon = stageConfig.icon || '🔄';
             
             ctx.save();
             
-            // 橙色主题标题
-            ctx.fillStyle = 'rgba(217, 119, 6, 0.95)';
-            ctx.font = '700 24px ui-sans-serif, system-ui, -apple-system';
+            ctx.fillStyle = this.config.colors.text;
+            ctx.font = '700 22px ui-sans-serif, system-ui, -apple-system';
             ctx.textAlign = 'left';
             ctx.textBaseline = 'top';
-            ctx.fillText(`手腕动作: ${gesture.label}`, 20, 20);
+            ctx.fillText(`${stageIcon} ${stageLabel}`, 20, 20);
             
-            const stageConfig = this.currentStage;
-            if (stageConfig.instruction) {
-                ctx.fillStyle = 'rgba(107, 114, 128, 0.9)';
-                ctx.font = '500 16px ui-sans-serif, system-ui';
-                ctx.fillText(stageConfig.instruction, 20, 52);
-            }
+            ctx.fillStyle = this.config.colors.muted;
+            ctx.font = '500 14px ui-sans-serif, system-ui';
+            ctx.fillText('手腕动作控制 - 滚动滚轮移动光标到目标区域', 20, 48);
             
-            ctx.restore();
-        }
-
-        drawIndicator() {
-            const ctx = this.ctx;
-            const x = this.config.indicatorX;
-            const y = this.config.centerY;
-            
-            ctx.save();
-            ctx.strokeStyle = this.config.colors.indicator;
-            ctx.lineWidth = 4;
-            ctx.setLineDash([10, 5]);
-            ctx.beginPath();
-            ctx.moveTo(x, y - 100);
-            ctx.lineTo(x, y + 100);
-            ctx.stroke();
-            ctx.setLineDash([]);
-            
-            ctx.fillStyle = this.config.colors.indicator;
-            ctx.font = '600 12px ui-sans-serif, system-ui';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'bottom';
-            ctx.fillText('采集点', x, y - 110);
+            const seconds = Math.ceil(this.remainingTime / 1000);
+            const timeColor = seconds <= 10 ? this.config.colors.warning : this.config.colors.muted;
+            ctx.fillStyle = timeColor;
+            ctx.font = '600 18px ui-sans-serif, system-ui';
+            ctx.textAlign = 'right';
+            ctx.fillText(`⏱ ${seconds}s`, this.config.canvasWidth - 20, 24);
             
             ctx.restore();
         }
 
-        drawPrompt(prompt) {
-            const gesture = this.gestureTypes[prompt.type] || {
-                label: prompt.type,
-                icon: '●',
-                color: '#f59e0b'
-            };
-            
-            let color = this.config.colors.normal;
-            if (prompt.isPassed) {
-                color = this.config.colors.passed;
-            } else if (prompt.isActive) {
-                color = this.config.colors.active;
-            }
-            
+        /**
+         * 绘制轨道
+         */
+        drawTrack() {
             const ctx = this.ctx;
-            const x = prompt.x;
-            const y = this.config.centerY;
+            const x = this.config.trackCenterX - this.trackWidth / 2;
+            const y = this.config.trackTop;
+            const w = this.trackWidth;
+            const h = this.config.trackHeight;
             
             ctx.save();
             
-            // 绘制竖线
-            ctx.strokeStyle = color;
-            ctx.lineWidth = this.config.promptThickness;
-            ctx.lineCap = 'round';
+            ctx.fillStyle = this.config.colors.track;
+            ctx.strokeStyle = this.config.colors.trackBorder;
+            ctx.lineWidth = 1;
             ctx.beginPath();
-            ctx.moveTo(x, y - this.config.promptLength / 2);
-            ctx.lineTo(x, y + this.config.promptLength / 2);
-            ctx.stroke();
-            
-            // 绘制六边形气泡（手腕动作用六边形，区别于其他任务）
-            const size = 35;
-            const gap = 12;
-            const cy = y - (this.config.promptLength / 2) - gap - size;
-            
-            // 六边形
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            for (let i = 0; i < 6; i++) {
-                const angle = (Math.PI / 3) * i - Math.PI / 2;
-                const px = x + size * Math.cos(angle);
-                const py = cy + size * Math.sin(angle);
-                if (i === 0) {
-                    ctx.moveTo(px, py);
-                } else {
-                    ctx.lineTo(px, py);
-                }
-            }
-            ctx.closePath();
+            ctx.roundRect(x, y, w, h, 12);
             ctx.fill();
             ctx.stroke();
             
-            ctx.fillStyle = color;
-            ctx.font = '900 28px ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"';
+            ctx.restore();
+        }
+
+        /**
+         * 绘制目标区域
+         */
+        drawTarget() {
+            if (this.targetPos == null) return;
+            
+            const ctx = this.ctx;
+            const bounds = this.getTargetBounds();
+            if (!bounds) return;
+            
+            const x = this.config.trackCenterX - this.trackWidth / 2;
+            const w = this.trackWidth;
+            const h = bounds.bottom - bounds.top;
+            const y = bounds.top;
+            
+            const isActive = this.onTargetSince != null;
+            
+            ctx.save();
+            
+            ctx.fillStyle = isActive ? this.config.colors.targetActive : this.config.colors.target;
+            ctx.strokeStyle = isActive ? this.config.colors.targetBorderActive : this.config.colors.targetBorder;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.roundRect(x, y, w, h, 8);
+            ctx.fill();
+            if (isActive) ctx.stroke();
+            
+            ctx.fillStyle = this.config.colors.muted;
+            ctx.font = '600 12px ui-sans-serif, system-ui';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText(gesture.icon, x, cy);
-            
-            ctx.font = '600 12px ui-sans-serif, system-ui';
-            ctx.textBaseline = 'top';
-            ctx.fillText(`#${prompt.index + 1}`, x, y + this.config.labelOffset);
+            ctx.fillText(`T${this.trial + 1}`, this.config.trackCenterX, bounds.centerY);
             
             ctx.restore();
         }
 
-        drawProgress() {
+        /**
+         * 绘制光标
+         */
+        drawCursor() {
             const ctx = this.ctx;
+            const y = this.getCursorScreenY();
+            const x = this.config.trackCenterX;
+            const r = this.cursorSize / 2;
             
             ctx.save();
             
-            ctx.fillStyle = 'rgba(217, 119, 6, 0.9)';
-            ctx.font = '700 18px ui-sans-serif, system-ui';
+            ctx.fillStyle = this.config.colors.cursor;
+            ctx.strokeStyle = this.config.colors.cursorBorder;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(x, y, r, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            
+            if (this.fillProgress > 0) {
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(x, y, r - 2, 0, Math.PI * 2);
+                ctx.clip();
+                
+                ctx.fillStyle = this.config.colors.cursorFill;
+                const fillWidth = (r - 2) * 2 * this.fillProgress;
+                ctx.fillRect(x - (r - 2), y - (r - 2), fillWidth, (r - 2) * 2);
+                
+                ctx.restore();
+            }
+            
+            ctx.restore();
+        }
+
+        /**
+         * 绘制进度信息
+         */
+        drawProgress() {
+            const ctx = this.ctx;
+            const bottomY = this.config.canvasHeight - 20;
+            
+            ctx.save();
+            
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+            ctx.font = '700 16px ui-sans-serif, system-ui';
             ctx.textAlign = 'right';
             ctx.textBaseline = 'bottom';
-            ctx.fillText(
-                `${this.executedCount} / ${this.totalPromptCount}`, 
-                this.config.canvasWidth - 20, 
-                this.config.canvasHeight - 20
-            );
+            ctx.fillText(`${this.trial} / ${this.maxTrials}`, this.config.canvasWidth - 20, bottomY);
             
             const barWidth = 150;
             const barHeight = 8;
             const barX = this.config.canvasWidth - 20 - barWidth;
-            const barY = this.config.canvasHeight - 45;
-            const progress = this.executedCount / this.totalPromptCount;
+            const barY = bottomY - 30;
+            const progress = this.maxTrials > 0 ? this.trial / this.maxTrials : 0;
             
-            ctx.fillStyle = '#fef3c7';
+            ctx.fillStyle = '#e5e7eb';
             ctx.beginPath();
             ctx.roundRect(barX, barY, barWidth, barHeight, 4);
             ctx.fill();
             
-            ctx.fillStyle = '#f59e0b';
+            ctx.fillStyle = this.config.colors.warning; // 橙色进度条
             ctx.beginPath();
             ctx.roundRect(barX, barY, barWidth * progress, barHeight, 4);
             ctx.fill();
             
+            ctx.fillStyle = this.config.colors.muted;
+            ctx.font = '500 14px ui-sans-serif, system-ui';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'bottom';
+            ctx.fillText(`命中: ${this.hits} | 光标: ${this.cursorPos.toFixed(2)}`, 20, bottomY);
+            
             ctx.restore();
         }
 
+        /**
+         * 绘制操作说明
+         */
+        drawInstructions() {
+            const ctx = this.ctx;
+            const centerX = this.config.canvasWidth / 2;
+            
+            ctx.save();
+            
+            ctx.fillStyle = this.config.colors.muted;
+            ctx.font = '500 12px ui-sans-serif, system-ui';
+            ctx.textAlign = 'center';
+            
+            ctx.fillText('↑ 手腕上抬/滚轮上滑', centerX, this.config.trackTop - 10);
+            ctx.fillText('↓ 手腕下压/滚轮下滑', centerX, this.config.trackBottom + 20);
+            
+            ctx.restore();
+        }
+
+        /**
+         * 停止动画
+         */
         stop() {
             console.log('[ContinualGesture2Animation] 停止动画');
             this.isRunning = false;
@@ -449,6 +605,16 @@
             if (this.animationId) {
                 cancelAnimationFrame(this.animationId);
                 this.animationId = null;
+            }
+            if (this.stageTimer) {
+                clearTimeout(this.stageTimer);
+                this.stageTimer = null;
+            }
+            
+            this.stopDwell();
+            
+            if (this.canvas) {
+                this.canvas.removeEventListener('wheel', this._wheelHandler);
             }
             
             if (this.ctx && this.config.canvasWidth && this.config.canvasHeight) {
@@ -460,12 +626,13 @@
             }
         }
 
+        /**
+         * 销毁
+         */
         destroy() {
             this.stop();
             
-            if (this._resizeHandler) {
-                window.removeEventListener('resize', this._resizeHandler);
-            }
+            window.removeEventListener('resize', this._resizeHandler);
             
             if (this.canvas && this.canvas.parentElement) {
                 this.canvas.parentElement.removeChild(this.canvas);
@@ -476,20 +643,28 @@
             this.containerElement = null;
         }
 
+        /**
+         * 检查动画是否在运行
+         */
         isAnimationRunning() {
             return this.isRunning;
         }
 
+        /**
+         * 获取进度信息
+         */
         getProgress() {
             return {
-                executed: this.executedCount,
-                total: this.totalPromptCount,
-                percent: this.totalPromptCount > 0 ? 
-                    (this.executedCount / this.totalPromptCount * 100) : 0
+                trial: this.trial,
+                hits: this.hits,
+                maxTrials: this.maxTrials,
+                percent: this.maxTrials > 0 ? (this.trial / this.maxTrials * 100) : 0,
+                remainingTime: this.remainingTime
             };
         }
     }
 
+    // 创建全局实例
     const continualGesture2Animation = new ContinualGesture2AnimationController();
     window.continualGesture2Animation = continualGesture2Animation;
     

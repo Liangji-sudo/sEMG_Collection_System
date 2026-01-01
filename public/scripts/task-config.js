@@ -9,11 +9,16 @@
  * - name: 任务显示名称
  * - description: 任务描述
  * - icon: FontAwesome图标类名
+ * - taskType: 任务类型 ('prompt_sequence' | 'wheel_cursor')
+ *   - prompt_sequence: 离散手势，按Prompt序列采集
+ *   - wheel_cursor: 滚轮光标任务，目标追踪
  * - stages: stage数组，每个stage包含：
  *   - name: stage唯一标识符（英文，用于数据标记）
  *   - label: stage显示名称（中文）
  *   - instruction: stage指导说明（可选）
  *   - animation: 该stage使用的动画ID（可选，默认使用通用动画）
+ *   - maxTrials: 滚轮任务的目标数量（仅wheel_cursor类型）
+ *   - timeout: 滚轮任务的超时时间ms（仅wheel_cursor类型）
  */
 
 const TASK_DEFINITIONS = {
@@ -23,6 +28,7 @@ const TASK_DEFINITIONS = {
         name: '离散手势',
         description: '4种单独手势采集',
         icon: 'fa-hand-paper',
+        taskType: 'prompt_sequence',  // 使用Prompt序列模式
         stages: [
             { 
                 name: 'palm_up', 
@@ -51,70 +57,96 @@ const TASK_DEFINITIONS = {
         ]
     },
 
-    // ==================== 连续手势1采集任务 ====================
+    // ==================== 连续手势1采集任务（滚轮光标） ====================
     continual_gesture_1: {
         id: 'continual_gesture_1',
         name: '连续手势1',
-        description: '手指连续运动',
+        description: '滚轮控制光标任务',
         icon: 'fa-hand-point-up',
+        taskType: 'wheel_cursor',  // 使用滚轮光标模式
         stages: [
             { 
-                name: 'finger_spread', 
-                label: '手指张合',
-                instruction: '请反复张开和握拢手指',
-                animation: 'finger_spread_anim'
+                name: 'wheel_task_1', 
+                label: '滚轮控制任务1',
+                instruction: '滚动滚轮将光标移动到蓝色目标区域，保持500ms命中',
+                icon: '🎯',
+                color: '#10b981',
+                maxTrials: 10,      // 10个目标
+                timeout: 120000     // 120秒超时
             },
             { 
-                name: 'finger_tap', 
-                label: '手指交替点击',
-                instruction: '请用手指交替点击桌面',
-                animation: 'finger_tap_anim'
+                name: 'wheel_task_2', 
+                label: '滚轮控制任务2',
+                instruction: '滚动滚轮将光标移动到蓝色目标区域，保持500ms命中',
+                icon: '🎯',
+                color: '#10b981',
+                maxTrials: 10,
+                timeout: 120000
             },
             { 
-                name: 'finger_extend', 
-                label: '手指伸展',
-                instruction: '请依次伸展每根手指',
-                animation: 'finger_extend_anim'
+                name: 'wheel_task_3', 
+                label: '滚轮控制任务3',
+                instruction: '滚动滚轮将光标移动到蓝色目标区域，保持500ms命中',
+                icon: '🎯',
+                color: '#10b981',
+                maxTrials: 10,
+                timeout: 120000
             },
             { 
-                name: 'finger_curl', 
-                label: '手指弯曲',
-                instruction: '请依次弯曲每根手指',
-                animation: 'finger_curl_anim'
+                name: 'wheel_task_4', 
+                label: '滚轮控制任务4',
+                instruction: '滚动滚轮将光标移动到蓝色目标区域，保持500ms命中',
+                icon: '🎯',
+                color: '#10b981',
+                maxTrials: 10,
+                timeout: 120000
             }
         ]
     },
 
-    // ==================== 连续手势2采集任务 ====================
+    // ==================== 连续手势2采集任务（滚轮光标） ====================
     continual_gesture_2: {
         id: 'continual_gesture_2',
         name: '连续手势2',
-        description: '手腕连续运动',
+        description: '手腕控制光标任务',
         icon: 'fa-hand-peace',
+        taskType: 'wheel_cursor',  // 使用滚轮光标模式
         stages: [
             { 
-                name: 'wrist_rotation', 
-                label: '手腕旋转',
-                instruction: '请缓慢旋转手腕',
-                animation: 'wrist_rotation_anim'
+                name: 'wrist_control_1', 
+                label: '手腕控制任务1',
+                instruction: '用手腕动作控制光标移动到橙色目标区域',
+                icon: '🔄',
+                color: '#f59e0b',
+                maxTrials: 10,
+                timeout: 120000
             },
             { 
-                name: 'wrist_updown', 
-                label: '手腕上下',
-                instruction: '请上下摆动手腕',
-                animation: 'wrist_updown_anim'
+                name: 'wrist_control_2', 
+                label: '手腕控制任务2',
+                instruction: '用手腕动作控制光标移动到橙色目标区域',
+                icon: '🔄',
+                color: '#f59e0b',
+                maxTrials: 10,
+                timeout: 120000
             },
             { 
-                name: 'wrist_leftright', 
-                label: '手腕左右',
-                instruction: '请左右摆动手腕',
-                animation: 'wrist_leftright_anim'
+                name: 'wrist_control_3', 
+                label: '手腕控制任务3',
+                instruction: '用手腕动作控制光标移动到橙色目标区域',
+                icon: '🔄',
+                color: '#f59e0b',
+                maxTrials: 10,
+                timeout: 120000
             },
             { 
-                name: 'fist_rotation', 
-                label: '握拳旋转',
-                instruction: '请握拳并旋转手腕',
-                animation: 'fist_rotation_anim'
+                name: 'wrist_control_4', 
+                label: '手腕控制任务4',
+                instruction: '用手腕动作控制光标移动到橙色目标区域',
+                icon: '🔄',
+                color: '#f59e0b',
+                maxTrials: 10,
+                timeout: 120000
             }
         ]
     }
@@ -143,6 +175,17 @@ function getTaskStages(taskId) {
     return config ? config.stages : [];
 }
 
+// 获取任务类型
+function getTaskType(taskId) {
+    const config = TASK_DEFINITIONS[taskId];
+    return config ? (config.taskType || 'prompt_sequence') : 'prompt_sequence';
+}
+
+// 判断是否是滚轮光标任务
+function isWheelTask(taskId) {
+    return getTaskType(taskId) === 'wheel_cursor';
+}
+
 // 添加新任务（运行时动态添加）
 function addTaskDefinition(taskId, taskConfig) {
     if (TASK_DEFINITIONS[taskId]) {
@@ -159,7 +202,10 @@ window.TaskConfig = {
     getTaskIds,
     getTaskConfig,
     getTaskStages,
+    getTaskType,
+    isWheelTask,
     addTaskDefinition
 };
 
 console.log('[TaskConfig] 任务配置已加载，共', Object.keys(TASK_DEFINITIONS).length, '个任务');
+console.log('[TaskConfig] 滚轮任务:', Object.keys(TASK_DEFINITIONS).filter(id => TASK_DEFINITIONS[id].taskType === 'wheel_cursor').join(', '));

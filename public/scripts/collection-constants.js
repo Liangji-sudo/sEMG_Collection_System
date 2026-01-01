@@ -1,12 +1,14 @@
 /**
- * collection-constants.js - 采集系统常量配置（重构版v2）
+ * collection-constants.js - 采集系统常量配置（重构版v3）
  * 
  * 概念说明：
- * - Task（任务）: 如 discrete_gesture（离散手势采集）
- * - Stage（阶段）: 任务中的一个采集阶段，如 "手心朝上" 姿势
- * - Prompt（提示）: Stage内的具体手势动作，如 "拇指上滑"、"食指点击" 等
+ * - Task（任务）: 如 discrete_gesture（离散手势采集）、continual_gesture_1（连续手势1）
+ * - Stage（阶段）: 任务中的一个采集阶段
+ * - Prompt（提示）: 离散手势Stage内的具体手势动作
  * 
- * 每个Stage会按顺序播放多个Prompt动画
+ * v3更新：
+ * - 连续手势1/2采用滚轮光标任务模式，而不是Prompt序列
+ * - 每个Stage是一个独立的滚轮控制任务
  */
 
 const COLLECTION_CONSTANTS = {
@@ -199,247 +201,158 @@ const DISCRETE_GESTURE_CONFIG = {
 };
 
 /**
- * ==================== 连续手势1采集配置（手指） ====================
+ * ==================== 连续手势1采集配置（滚轮光标任务） ====================
+ * 
+ * 在连续手势1采集中：
+ * - 每个Stage是一个滚轮控制光标任务
+ * - 用户通过滚轮控制光标移动到目标位置
+ * - 光标停留在目标区域500ms视为命中
+ * - 完成指定数量的目标或超时后进入下一个Stage
+ * - Stage内不向realtimeEngine发送prompt消息
  */
 const CONTINUAL_GESTURE_1_CONFIG = {
-    NAME: '连续手势采集1（手指）',
+    NAME: '连续手势采集1（滚轮控制）',
     
-    PROMPT_LIBRARY: {
-        'finger_spread_open': { label: '手指张开', icon: '🖐️', color: '#10b981' },
-        'finger_spread_close': { label: '手指合拢', icon: '✊', color: '#10b981' },
-        'finger_wave': { label: '手指波浪', icon: '👋', color: '#10b981' },
-        'finger_tap_seq': { label: '手指依次敲击', icon: '🎹', color: '#10b981' },
-        'finger_pinch_release': { label: '捏合松开', icon: '🤏', color: '#10b981' },
-        'thumb_circle': { label: '拇指画圈', icon: '⭕', color: '#10b981' },
-        'index_circle': { label: '食指画圈', icon: '⭕', color: '#10b981' },
-        'ok_gesture': { label: 'OK手势', icon: '👌', color: '#10b981' },
-        'victory_gesture': { label: '胜利手势', icon: '✌️', color: '#10b981' },
-        'rock_gesture': { label: '摇滚手势', icon: '🤘', color: '#10b981' },
+    // ==================== 任务类型标识 ====================
+    TASK_TYPE: 'wheel_cursor',  // 滚轮光标任务
+    
+    // ==================== 滚轮任务配置 ====================
+    WHEEL_TASK: {
+        MAX_TRIALS: 10,          // 每个Stage的目标数量
+        STAGE_TIMEOUT: 120000,   // Stage超时时间（120秒）
+        DWELL_MS: 500,           // 停留时间阈值（ms）
+        TARGET_FRAC: 0.12,       // 目标高度占轨道的比例
+        MIN_TARGET_DISTANCE: 0.20, // 相邻目标的最小距离
     },
-
+    
+    // ==================== Stage定义 ====================
+    // 连续手势的Stage不使用promptSequence，而是使用滚轮任务
     STAGES: {
-        finger_spread: {
-            name: 'finger_spread',
-            label: '手指张合',
-            instruction: '请跟随提示进行手指张合动作',
-            icon: '✋',
+        wheel_task_1: {
+            name: 'wheel_task_1',
+            label: '滚轮控制任务1',
+            instruction: '滚动滚轮将光标移动到蓝色目标区域，保持500ms命中',
+            icon: '🎯',
             color: '#10b981',
-            promptSequence: [
-                'finger_spread_open',
-                'finger_spread_close',
-                'finger_spread_open',
-                'finger_spread_close',
-                'finger_pinch_release',
-                'finger_pinch_release',
-                'finger_wave',
-                'finger_wave',
-                'ok_gesture',
-                'victory_gesture',
-                'rock_gesture',
-                'finger_spread_open'
-            ]
+            // 可选的Stage特定配置
+            maxTrials: 10,
+            timeout: 120000,
         },
-        finger_tap: {
-            name: 'finger_tap',
-            label: '手指点击',
-            instruction: '请跟随提示进行手指点击动作',
-            icon: '👆',
+        wheel_task_2: {
+            name: 'wheel_task_2',
+            label: '滚轮控制任务2',
+            instruction: '滚动滚轮将光标移动到蓝色目标区域，保持500ms命中',
+            icon: '🎯',
             color: '#10b981',
-            promptSequence: [
-                'finger_tap_seq',
-                'finger_tap_seq',
-                'finger_tap_seq',
-                'thumb_circle',
-                'index_circle',
-                'finger_wave',
-                'finger_pinch_release',
-                'ok_gesture',
-                'victory_gesture',
-                'rock_gesture',
-                'finger_tap_seq',
-                'finger_spread_open'
-            ]
+            maxTrials: 10,
+            timeout: 120000,
         },
-        finger_extend: {
-            name: 'finger_extend',
-            label: '手指伸展',
-            instruction: '请跟随提示进行手指伸展动作',
-            icon: '🖐',
+        wheel_task_3: {
+            name: 'wheel_task_3',
+            label: '滚轮控制任务3',
+            instruction: '滚动滚轮将光标移动到蓝色目标区域，保持500ms命中',
+            icon: '🎯',
             color: '#10b981',
-            promptSequence: [
-                'finger_spread_open',
-                'victory_gesture',
-                'rock_gesture',
-                'ok_gesture',
-                'finger_wave',
-                'finger_tap_seq',
-                'thumb_circle',
-                'index_circle',
-                'finger_spread_close',
-                'finger_spread_open',
-                'finger_pinch_release',
-                'finger_spread_close'
-            ]
+            maxTrials: 10,
+            timeout: 120000,
         },
-        finger_curl: {
-            name: 'finger_curl',
-            label: '手指弯曲',
-            instruction: '请跟随提示进行手指弯曲动作',
-            icon: '✊',
+        wheel_task_4: {
+            name: 'wheel_task_4',
+            label: '滚轮控制任务4',
+            instruction: '滚动滚轮将光标移动到蓝色目标区域，保持500ms命中',
+            icon: '🎯',
             color: '#10b981',
-            promptSequence: [
-                'finger_spread_close',
-                'finger_pinch_release',
-                'finger_spread_close',
-                'ok_gesture',
-                'rock_gesture',
-                'finger_wave',
-                'finger_tap_seq',
-                'finger_spread_open',
-                'finger_spread_close',
-                'thumb_circle',
-                'index_circle',
-                'finger_spread_close'
-            ]
+            maxTrials: 10,
+            timeout: 120000,
         }
     },
 
+    // ==================== 动画配置（保留兼容性） ====================
     ANIMATION: {
-        SCROLL_SPEED: 2,
-        PROMPT_SPACING: 120,
-        INDICATOR_POSITION: 0.3,
-        PROMPT_LENGTH: 60,
-        PROMPT_THICKNESS: 10,
-        LABEL_OFFSET: 80,
         COLORS: {
-            active: '#10b981',
-            passed: '#9ca3af',
-            normal: '#10b981',
-            indicator: '#ef4444'
+            track: 'rgba(15, 23, 42, 0.06)',
+            trackBorder: 'rgba(15, 23, 42, 0.15)',
+            target: 'rgba(59, 130, 246, 0.25)',
+            targetActive: 'rgba(59, 130, 246, 0.4)',
+            cursor: '#ef4444',
+            cursorBorder: '#991b1b',
+            success: '#10b981',
+            warning: '#f59e0b'
         }
     }
 };
 
 /**
  * ==================== 连续手势2采集配置（手腕） ====================
+ * 
+ * 连续手势2也采用滚轮光标任务模式
  */
 const CONTINUAL_GESTURE_2_CONFIG = {
-    NAME: '连续手势采集2（手腕）',
+    NAME: '连续手势采集2（手腕控制）',
     
-    PROMPT_LIBRARY: {
-        'wrist_flex_up': { label: '手腕上屈', icon: '⬆️', color: '#f59e0b' },
-        'wrist_flex_down': { label: '手腕下屈', icon: '⬇️', color: '#f59e0b' },
-        'wrist_left': { label: '手腕左偏', icon: '⬅️', color: '#f59e0b' },
-        'wrist_right': { label: '手腕右偏', icon: '➡️', color: '#f59e0b' },
-        'wrist_rotate_in': { label: '手腕内旋', icon: '🔄', color: '#f59e0b' },
-        'wrist_rotate_out': { label: '手腕外旋', icon: '🔃', color: '#f59e0b' },
-        'wrist_circle_cw': { label: '手腕顺时针绕圈', icon: '⭕', color: '#f59e0b' },
-        'wrist_circle_ccw': { label: '手腕逆时针绕圈', icon: '⭕', color: '#f59e0b' },
-        'fist_rotate_in': { label: '握拳内旋', icon: '👊', color: '#f59e0b' },
-        'fist_rotate_out': { label: '握拳外旋', icon: '👊', color: '#f59e0b' },
-        'fist_pump': { label: '握拳上下', icon: '💪', color: '#f59e0b' },
-        'wrist_shake': { label: '手腕抖动', icon: '👋', color: '#f59e0b' },
+    // ==================== 任务类型标识 ====================
+    TASK_TYPE: 'wheel_cursor',
+    
+    // ==================== 滚轮任务配置 ====================
+    WHEEL_TASK: {
+        MAX_TRIALS: 10,
+        STAGE_TIMEOUT: 120000,
+        DWELL_MS: 500,
+        TARGET_FRAC: 0.12,
+        MIN_TARGET_DISTANCE: 0.20,
     },
-
+    
+    // ==================== Stage定义 ====================
     STAGES: {
-        wrist_rotation: {
-            name: 'wrist_rotation',
-            label: '手腕旋转',
-            instruction: '请跟随提示进行手腕旋转动作',
+        wrist_control_1: {
+            name: 'wrist_control_1',
+            label: '手腕控制任务1',
+            instruction: '用手腕动作控制光标移动到目标区域',
             icon: '🔄',
             color: '#f59e0b',
-            promptSequence: [
-                'wrist_rotate_in',
-                'wrist_rotate_out',
-                'wrist_rotate_in',
-                'wrist_rotate_out',
-                'wrist_circle_cw',
-                'wrist_circle_ccw',
-                'wrist_circle_cw',
-                'wrist_circle_ccw',
-                'fist_rotate_in',
-                'fist_rotate_out',
-                'wrist_shake',
-                'wrist_rotate_in'
-            ]
+            maxTrials: 10,
+            timeout: 120000,
         },
-        wrist_updown: {
-            name: 'wrist_updown',
-            label: '手腕上下',
-            instruction: '请跟随提示进行手腕上下摆动',
-            icon: '↕',
+        wrist_control_2: {
+            name: 'wrist_control_2',
+            label: '手腕控制任务2',
+            instruction: '用手腕动作控制光标移动到目标区域',
+            icon: '🔄',
             color: '#f59e0b',
-            promptSequence: [
-                'wrist_flex_up',
-                'wrist_flex_down',
-                'wrist_flex_up',
-                'wrist_flex_down',
-                'wrist_flex_up',
-                'wrist_flex_down',
-                'fist_pump',
-                'fist_pump',
-                'wrist_shake',
-                'wrist_flex_up',
-                'wrist_flex_down',
-                'wrist_flex_up'
-            ]
+            maxTrials: 10,
+            timeout: 120000,
         },
-        wrist_leftright: {
-            name: 'wrist_leftright',
-            label: '手腕左右',
-            instruction: '请跟随提示进行手腕左右摆动',
-            icon: '↔',
+        wrist_control_3: {
+            name: 'wrist_control_3',
+            label: '手腕控制任务3',
+            instruction: '用手腕动作控制光标移动到目标区域',
+            icon: '🔄',
             color: '#f59e0b',
-            promptSequence: [
-                'wrist_left',
-                'wrist_right',
-                'wrist_left',
-                'wrist_right',
-                'wrist_left',
-                'wrist_right',
-                'wrist_circle_cw',
-                'wrist_circle_ccw',
-                'wrist_shake',
-                'wrist_left',
-                'wrist_right',
-                'wrist_left'
-            ]
+            maxTrials: 10,
+            timeout: 120000,
         },
-        fist_rotation: {
-            name: 'fist_rotation',
-            label: '握拳旋转',
-            instruction: '请握拳并跟随提示旋转',
-            icon: '👊',
+        wrist_control_4: {
+            name: 'wrist_control_4',
+            label: '手腕控制任务4',
+            instruction: '用手腕动作控制光标移动到目标区域',
+            icon: '🔄',
             color: '#f59e0b',
-            promptSequence: [
-                'fist_rotate_in',
-                'fist_rotate_out',
-                'fist_rotate_in',
-                'fist_rotate_out',
-                'fist_pump',
-                'fist_pump',
-                'wrist_circle_cw',
-                'wrist_circle_ccw',
-                'fist_rotate_in',
-                'fist_rotate_out',
-                'wrist_shake',
-                'fist_rotate_in'
-            ]
+            maxTrials: 10,
+            timeout: 120000,
         }
     },
 
+    // ==================== 动画配置 ====================
     ANIMATION: {
-        SCROLL_SPEED: 2,
-        PROMPT_SPACING: 120,
-        INDICATOR_POSITION: 0.3,
-        PROMPT_LENGTH: 60,
-        PROMPT_THICKNESS: 10,
-        LABEL_OFFSET: 80,
         COLORS: {
-            active: '#10b981',
-            passed: '#9ca3af',
-            normal: '#f59e0b',
-            indicator: '#ef4444'
+            track: 'rgba(15, 23, 42, 0.06)',
+            trackBorder: 'rgba(15, 23, 42, 0.15)',
+            target: 'rgba(245, 158, 11, 0.25)',
+            targetActive: 'rgba(245, 158, 11, 0.4)',
+            cursor: '#ef4444',
+            cursorBorder: '#991b1b',
+            success: '#10b981',
+            warning: '#f59e0b'
         }
     }
 };
@@ -480,13 +393,24 @@ const CollectionTiming = {
         return configMap[taskId] || DISCRETE_GESTURE_CONFIG;
     },
     
+    // 获取任务类型
+    getTaskType(taskId) {
+        const config = this.getTaskConfig(taskId);
+        return config.TASK_TYPE || 'prompt_sequence'; // 默认是prompt序列类型
+    },
+    
+    // 判断是否是滚轮任务
+    isWheelTask(taskId) {
+        return this.getTaskType(taskId) === 'wheel_cursor';
+    },
+    
     // 获取Stage配置
     getStageConfig(taskId, stageName) {
         const taskConfig = this.getTaskConfig(taskId);
         return taskConfig.STAGES[stageName] || null;
     },
     
-    // 获取Stage的Prompt序列
+    // 获取Stage的Prompt序列（仅对离散手势有效）
     getPromptSequence(taskId, stageName) {
         const stageConfig = this.getStageConfig(taskId, stageName);
         if (stageConfig && stageConfig.promptSequence) {
@@ -503,11 +427,14 @@ const CollectionTiming = {
     // 获取Prompt定义
     getPromptDefinition(taskId, promptName) {
         const taskConfig = this.getTaskConfig(taskId);
-        return taskConfig.PROMPT_LIBRARY[promptName] || { 
-            label: promptName, 
-            icon: '●', 
-            color: '#6b7280' 
-        };
+        if (taskConfig.PROMPT_LIBRARY) {
+            return taskConfig.PROMPT_LIBRARY[promptName] || { 
+                label: promptName, 
+                icon: '●', 
+                color: '#6b7280' 
+            };
+        }
+        return { label: promptName, icon: '●', color: '#6b7280' };
     },
     
     // 获取动画配置
@@ -516,14 +443,35 @@ const CollectionTiming = {
         return taskConfig.ANIMATION || DISCRETE_GESTURE_CONFIG.ANIMATION;
     },
     
-    // 获取Stage的Prompt数量
+    // 获取滚轮任务配置
+    getWheelTaskConfig(taskId) {
+        const taskConfig = this.getTaskConfig(taskId);
+        return taskConfig.WHEEL_TASK || {
+            MAX_TRIALS: 10,
+            STAGE_TIMEOUT: 120000,
+            DWELL_MS: 500,
+            TARGET_FRAC: 0.12
+        };
+    },
+    
+    // 获取Stage的Prompt数量（离散手势）或Trial数量（滚轮任务）
     getPromptCount(taskId, stageName) {
+        if (this.isWheelTask(taskId)) {
+            const stageConfig = this.getStageConfig(taskId, stageName);
+            const wheelConfig = this.getWheelTaskConfig(taskId);
+            return stageConfig?.maxTrials || wheelConfig.MAX_TRIALS;
+        }
         const sequence = this.getPromptSequence(taskId, stageName);
         return sequence.length;
     },
     
-    // 估算Stage时长（基于Prompt数量）
+    // 估算Stage时长
     estimateStageDuration(taskId, stageName) {
+        if (this.isWheelTask(taskId)) {
+            const stageConfig = this.getStageConfig(taskId, stageName);
+            const wheelConfig = this.getWheelTaskConfig(taskId);
+            return stageConfig?.timeout || wheelConfig.STAGE_TIMEOUT;
+        }
         const promptCount = this.getPromptCount(taskId, stageName);
         return (promptCount + 2) * 1000; // 每个prompt约1秒，加2秒缓冲
     },
@@ -540,8 +488,8 @@ const CollectionTiming = {
 window.CollectionTiming = CollectionTiming;
 
 // 打印加载信息
-console.log('[Constants] 采集常量已加载（v2）');
+console.log('[Constants] 采集常量已加载（v3 - 滚轮任务支持）');
 console.log('[Constants] 离散手势 Stage数:', Object.keys(DISCRETE_GESTURE_CONFIG.STAGES).length);
 console.log('[Constants] 离散手势 Prompt库:', Object.keys(DISCRETE_GESTURE_CONFIG.PROMPT_LIBRARY).length, '个动作');
-console.log('[Constants] 连续手势1 Stage数:', Object.keys(CONTINUAL_GESTURE_1_CONFIG.STAGES).length);
-console.log('[Constants] 连续手势2 Stage数:', Object.keys(CONTINUAL_GESTURE_2_CONFIG.STAGES).length);
+console.log('[Constants] 连续手势1 Stage数:', Object.keys(CONTINUAL_GESTURE_1_CONFIG.STAGES).length, '(滚轮任务)');
+console.log('[Constants] 连续手势2 Stage数:', Object.keys(CONTINUAL_GESTURE_2_CONFIG.STAGES).length, '(滚轮任务)');
