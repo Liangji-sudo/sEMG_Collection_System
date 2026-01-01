@@ -1,256 +1,459 @@
 /**
- * collection-constants.js - 采集系统常量配置（重构版）
+ * collection-constants.js - 采集系统常量配置（重构版v2）
  * 
- * 重构说明：
- * - 每种采集任务（discrete_gesture, continual_gesture_1, continual_gesture_2）
- *   都有独立的细节配置
- * - 不再使用统一的倒计时，改为用prompt数量来控制每个stage的时长
- * - 每个prompt约1秒滚过指示线
+ * 概念说明：
+ * - Task（任务）: 如 discrete_gesture（离散手势采集）
+ * - Stage（阶段）: 任务中的一个采集阶段，如 "手心朝上" 姿势
+ * - Prompt（提示）: Stage内的具体手势动作，如 "拇指上滑"、"食指点击" 等
  * 
- * 时间单位：毫秒 (ms)
+ * 每个Stage会按顺序播放多个Prompt动画
  */
 
 const COLLECTION_CONSTANTS = {
     // ==================== 开场动画配置 ====================
     INTRO: {
-        // 开场动画持续时间（点击开始后，第一个stage之前播放）
         DURATION: 10000,        // 10秒
-        
-        // 开场动画类型: 'countdown' | 'video' | 'custom'
-        TYPE: 'countdown',
-        
-        // 如果是视频，视频URL
+        TYPE: 'countdown',      // 'countdown' | 'video' | 'custom'
         VIDEO_URL: '',
-    },
-
-    // ==================== 通用UI配置 ====================
-    UI: {
-        // 进度条动画过渡时间
-        PROGRESS_TRANSITION: 300, // 300ms
-        
-        // Toast提示显示时间
-        TOAST_DURATION: 3000,     // 3秒
-        
-        // 状态更新防抖时间
-        STATUS_DEBOUNCE: 100,     // 100ms
     },
 
     // ==================== Stage间准备配置 ====================
     STAGE_PREPARE: {
-        // stage之间的准备倒计时（秒数）
         COUNTDOWN_SECONDS: 3,
-        
-        // 每个倒计时数字显示的间隔
-        COUNTDOWN_INTERVAL: 1000, // 1秒
+        COUNTDOWN_INTERVAL: 1000,
     },
 
-    // ==================== 离散手势采集配置 ====================
-    DISCRETE_GESTURE: {
-        // 任务名称
-        NAME: '离散手势采集',
-        
-        // 每个stage的prompt数量（每个prompt约1秒）
-        PROMPTS_PER_STAGE: 10,
-        
-        // prompt滚动速度（像素/帧，60fps）
-        SCROLL_SPEED: 2,
-        
-        // prompt之间的间距（像素）
-        PROMPT_SPACING: 120,
-        
-        // 各个stage的配置
-        STAGES: {
-            palm_up: {
-                name: 'palm_up',
-                label: '手心向上',
-                promptCount: 10,      // 这个stage需要采集10个prompt
-                icon: '↑',
-                color: '#3b82f6',
-                instruction: '请保持手心向上的姿势'
-            },
-            palm_inward: {
-                name: 'palm_inward',
-                label: '手心向内',
-                promptCount: 10,
-                icon: '→',
-                color: '#3b82f6',
-                instruction: '请保持手心向内的姿势'
-            },
-            hand_on_knee: {
-                name: 'hand_on_knee',
-                label: '手放膝盖',
-                promptCount: 10,
-                icon: '↓',
-                color: '#3b82f6',
-                instruction: '请将手放在膝盖上'
-            },
-            hand_on_desk: {
-                name: 'hand_on_desk',
-                label: '手放桌上',
-                promptCount: 10,
-                icon: '◐',
-                color: '#3b82f6',
-                instruction: '请将手放在桌上'
-            }
-        },
-        
-        // 动画配置
-        ANIMATION: {
-            // 指示线位置（相对于画布宽度的比例）
-            INDICATOR_POSITION: 0.3,
-            
-            // 提示竖线长度
-            PROMPT_LENGTH: 60,
-            
-            // 提示竖线粗细
-            PROMPT_THICKNESS: 10,
-            
-            // 标签偏移
-            LABEL_OFFSET: 80,
-            
-            // 颜色配置
-            COLORS: {
-                active: '#10b981',    // 激活颜色（绿色）
-                passed: '#9ca3af',    // 已过颜色（灰色）
-                normal: '#3b82f6',    // 普通颜色（蓝色）
-                indicator: '#ef4444'  // 指示线颜色（红色）
-            }
-        }
-    },
-
-    // ==================== 连续手势1采集配置 ====================
-    CONTINUAL_GESTURE_1: {
-        NAME: '连续手势采集1（手指）',
-        
-        PROMPTS_PER_STAGE: 12,
-        SCROLL_SPEED: 2,
-        PROMPT_SPACING: 120,
-        
-        STAGES: {
-            finger_spread: {
-                name: 'finger_spread',
-                label: '手指张合',
-                promptCount: 12,
-                icon: '✋',
-                color: '#10b981',
-                instruction: '请进行手指张合动作'
-            },
-            finger_tap: {
-                name: 'finger_tap',
-                label: '手指点击',
-                promptCount: 12,
-                icon: '👆',
-                color: '#10b981',
-                instruction: '请进行手指点击动作'
-            },
-            finger_extend: {
-                name: 'finger_extend',
-                label: '手指伸展',
-                promptCount: 12,
-                icon: '🖐',
-                color: '#10b981',
-                instruction: '请进行手指伸展动作'
-            },
-            finger_curl: {
-                name: 'finger_curl',
-                label: '手指弯曲',
-                promptCount: 12,
-                icon: '✊',
-                color: '#10b981',
-                instruction: '请进行手指弯曲动作'
-            }
-        },
-        
-        ANIMATION: {
-            INDICATOR_POSITION: 0.3,
-            PROMPT_LENGTH: 60,
-            PROMPT_THICKNESS: 10,
-            LABEL_OFFSET: 80,
-            COLORS: {
-                active: '#10b981',
-                passed: '#9ca3af',
-                normal: '#10b981',
-                indicator: '#ef4444'
-            }
-        }
-    },
-
-    // ==================== 连续手势2采集配置 ====================
-    CONTINUAL_GESTURE_2: {
-        NAME: '连续手势采集2（手腕）',
-        
-        PROMPTS_PER_STAGE: 12,
-        SCROLL_SPEED: 2,
-        PROMPT_SPACING: 120,
-        
-        STAGES: {
-            wrist_rotation: {
-                name: 'wrist_rotation',
-                label: '手腕旋转',
-                promptCount: 12,
-                icon: '🔄',
-                color: '#f59e0b',
-                instruction: '请进行手腕旋转动作'
-            },
-            wrist_updown: {
-                name: 'wrist_updown',
-                label: '手腕上下',
-                promptCount: 12,
-                icon: '↕',
-                color: '#f59e0b',
-                instruction: '请进行手腕上下摆动'
-            },
-            wrist_leftright: {
-                name: 'wrist_leftright',
-                label: '手腕左右',
-                promptCount: 12,
-                icon: '↔',
-                color: '#f59e0b',
-                instruction: '请进行手腕左右摆动'
-            },
-            fist_rotation: {
-                name: 'fist_rotation',
-                label: '握拳旋转',
-                promptCount: 12,
-                icon: '👊',
-                color: '#f59e0b',
-                instruction: '请握拳并旋转'
-            }
-        },
-        
-        ANIMATION: {
-            INDICATOR_POSITION: 0.3,
-            PROMPT_LENGTH: 60,
-            PROMPT_THICKNESS: 10,
-            LABEL_OFFSET: 80,
-            COLORS: {
-                active: '#10b981',
-                passed: '#9ca3af',
-                normal: '#f59e0b',
-                indicator: '#ef4444'
-            }
-        }
+    // ==================== 通用UI配置 ====================
+    UI: {
+        PROGRESS_TRANSITION: 300,
+        TOAST_DURATION: 3000,
+        STATUS_DEBOUNCE: 100,
     },
 
     // ==================== 调试配置 ====================
     DEBUG: {
-        // 是否启用调试模式（启用后会有更多日志输出）
         ENABLED: true,
-        
-        // 是否使用快速模式（测试时缩短所有时间）
         FAST_MODE: false,
-        
-        // 快速模式下的时间倍率（0.1 = 原来的10%时间）
         FAST_MODE_RATIO: 0.1,
     }
 };
 
 /**
- * 便捷访问对象 - CollectionTiming
- * 提供各种时间和配置的快捷获取方法
+ * ==================== 离散手势采集配置 ====================
+ * 
+ * 在离散手势采集中：
+ * - 每个Stage代表一个手部姿态（如手心朝上、手心朝内等）
+ * - 每个Stage内会播放一系列Prompt（具体的手势动作）
+ * - 用户需要在保持Stage姿态的同时，跟随Prompt完成具体动作
+ */
+const DISCRETE_GESTURE_CONFIG = {
+    NAME: '离散手势采集',
+    
+    // ==================== Prompt定义库 ====================
+    // 所有可用的手势Prompt定义
+    PROMPT_LIBRARY: {
+        // 拇指动作
+        'thumb_up': { label: '拇指上滑', icon: '👆', color: '#3b82f6' },
+        'thumb_down': { label: '拇指下滑', icon: '👇', color: '#3b82f6' },
+        'thumb_left': { label: '拇指左滑', icon: '👈', color: '#3b82f6' },
+        'thumb_right': { label: '拇指右滑', icon: '👉', color: '#3b82f6' },
+        'thumb_press': { label: '拇指按压', icon: '👍', color: '#3b82f6' },
+        
+        // 食指动作
+        'index_tap': { label: '食指点击', icon: '☝️', color: '#10b981' },
+        'index_double_tap': { label: '食指双击', icon: '✌️', color: '#10b981' },
+        'index_swipe': { label: '食指滑动', icon: '👆', color: '#10b981' },
+        
+        // 中指动作
+        'middle_tap': { label: '中指点击', icon: '🖕', color: '#f59e0b' },
+        'middle_swipe': { label: '中指滑动', icon: '🖕', color: '#f59e0b' },
+        
+        // 多指动作
+        'pinch': { label: '捏合', icon: '🤏', color: '#8b5cf6' },
+        'spread': { label: '张开', icon: '🖐️', color: '#8b5cf6' },
+        'fist': { label: '握拳', icon: '✊', color: '#8b5cf6' },
+        'release': { label: '松开', icon: '✋', color: '#8b5cf6' },
+        
+        // 手腕动作
+        'wrist_up': { label: '手腕上抬', icon: '⬆️', color: '#ec4899' },
+        'wrist_down': { label: '手腕下压', icon: '⬇️', color: '#ec4899' },
+        'wrist_rotate_cw': { label: '手腕顺时针', icon: '🔃', color: '#ec4899' },
+        'wrist_rotate_ccw': { label: '手腕逆时针', icon: '🔄', color: '#ec4899' },
+        
+        // 休息/空动作
+        'rest': { label: '保持', icon: '⏸️', color: '#6b7280' },
+        'ready': { label: '准备', icon: '✅', color: '#6b7280' },
+    },
+
+    // ==================== Stage定义 ====================
+    STAGES: {
+        // Stage 1: 手心朝上
+        palm_up: {
+            name: 'palm_up',
+            label: '手心朝上',
+            instruction: '请保持手心朝上的姿势，跟随提示完成动作',
+            icon: '🤲',
+            color: '#3b82f6',
+            
+            // 该Stage内的Prompt序列 - 可以自定义顺序和内容
+            promptSequence: [
+                'thumb_up',
+                'thumb_down',
+                'thumb_up',
+                'thumb_up',
+                'thumb_up',
+                'thumb_left',
+                'thumb_right',
+                'index_tap',
+                'index_double_tap',
+                'pinch',
+                'spread',
+                'fist',
+                'release'
+            ]
+        },
+        
+        // Stage 2: 手心朝内
+        palm_inward: {
+            name: 'palm_inward',
+            label: '手心朝内',
+            instruction: '请保持手心朝内的姿势，跟随提示完成动作',
+            icon: '🫲',
+            color: '#10b981',
+            
+            promptSequence: [
+                'thumb_up',
+                'thumb_down',
+                'index_tap',
+                'middle_tap',
+                'pinch',
+                'spread',
+                'wrist_up',
+                'wrist_down',
+                'fist',
+                'release'
+            ]
+        },
+        
+        // Stage 3: 手放膝盖
+        hand_on_knee: {
+            name: 'hand_on_knee',
+            label: '手放膝盖',
+            instruction: '请将手放在膝盖上，跟随提示完成动作',
+            icon: '🦵',
+            color: '#f59e0b',
+            
+            promptSequence: [
+                'thumb_press',
+                'index_tap',
+                'index_double_tap',
+                'middle_tap',
+                'pinch',
+                'spread',
+                'fist',
+                'release',
+                'rest',
+                'ready'
+            ]
+        },
+        
+        // Stage 4: 手放桌上
+        hand_on_desk: {
+            name: 'hand_on_desk',
+            label: '手放桌上',
+            instruction: '请将手放在桌面上，跟随提示完成动作',
+            icon: '🖥️',
+            color: '#8b5cf6',
+            
+            promptSequence: [
+                'index_tap',
+                'index_double_tap',
+                'middle_tap',
+                'thumb_left',
+                'thumb_right',
+                'pinch',
+                'spread',
+                'wrist_rotate_cw',
+                'wrist_rotate_ccw',
+                'rest'
+            ]
+        }
+    },
+
+    // ==================== 动画配置 ====================
+    ANIMATION: {
+        SCROLL_SPEED: 2,
+        PROMPT_SPACING: 120,
+        INDICATOR_POSITION: 0.3,
+        PROMPT_LENGTH: 60,
+        PROMPT_THICKNESS: 10,
+        LABEL_OFFSET: 80,
+        
+        COLORS: {
+            active: '#10b981',
+            passed: '#9ca3af',
+            normal: '#3b82f6',
+            indicator: '#ef4444'
+        }
+    }
+};
+
+/**
+ * ==================== 连续手势1采集配置（手指） ====================
+ */
+const CONTINUAL_GESTURE_1_CONFIG = {
+    NAME: '连续手势采集1（手指）',
+    
+    PROMPT_LIBRARY: {
+        'finger_spread_open': { label: '手指张开', icon: '🖐️', color: '#10b981' },
+        'finger_spread_close': { label: '手指合拢', icon: '✊', color: '#10b981' },
+        'finger_wave': { label: '手指波浪', icon: '👋', color: '#10b981' },
+        'finger_tap_seq': { label: '手指依次敲击', icon: '🎹', color: '#10b981' },
+        'finger_pinch_release': { label: '捏合松开', icon: '🤏', color: '#10b981' },
+        'thumb_circle': { label: '拇指画圈', icon: '⭕', color: '#10b981' },
+        'index_circle': { label: '食指画圈', icon: '⭕', color: '#10b981' },
+        'ok_gesture': { label: 'OK手势', icon: '👌', color: '#10b981' },
+        'victory_gesture': { label: '胜利手势', icon: '✌️', color: '#10b981' },
+        'rock_gesture': { label: '摇滚手势', icon: '🤘', color: '#10b981' },
+    },
+
+    STAGES: {
+        finger_spread: {
+            name: 'finger_spread',
+            label: '手指张合',
+            instruction: '请跟随提示进行手指张合动作',
+            icon: '✋',
+            color: '#10b981',
+            promptSequence: [
+                'finger_spread_open',
+                'finger_spread_close',
+                'finger_spread_open',
+                'finger_spread_close',
+                'finger_pinch_release',
+                'finger_pinch_release',
+                'finger_wave',
+                'finger_wave',
+                'ok_gesture',
+                'victory_gesture',
+                'rock_gesture',
+                'finger_spread_open'
+            ]
+        },
+        finger_tap: {
+            name: 'finger_tap',
+            label: '手指点击',
+            instruction: '请跟随提示进行手指点击动作',
+            icon: '👆',
+            color: '#10b981',
+            promptSequence: [
+                'finger_tap_seq',
+                'finger_tap_seq',
+                'finger_tap_seq',
+                'thumb_circle',
+                'index_circle',
+                'finger_wave',
+                'finger_pinch_release',
+                'ok_gesture',
+                'victory_gesture',
+                'rock_gesture',
+                'finger_tap_seq',
+                'finger_spread_open'
+            ]
+        },
+        finger_extend: {
+            name: 'finger_extend',
+            label: '手指伸展',
+            instruction: '请跟随提示进行手指伸展动作',
+            icon: '🖐',
+            color: '#10b981',
+            promptSequence: [
+                'finger_spread_open',
+                'victory_gesture',
+                'rock_gesture',
+                'ok_gesture',
+                'finger_wave',
+                'finger_tap_seq',
+                'thumb_circle',
+                'index_circle',
+                'finger_spread_close',
+                'finger_spread_open',
+                'finger_pinch_release',
+                'finger_spread_close'
+            ]
+        },
+        finger_curl: {
+            name: 'finger_curl',
+            label: '手指弯曲',
+            instruction: '请跟随提示进行手指弯曲动作',
+            icon: '✊',
+            color: '#10b981',
+            promptSequence: [
+                'finger_spread_close',
+                'finger_pinch_release',
+                'finger_spread_close',
+                'ok_gesture',
+                'rock_gesture',
+                'finger_wave',
+                'finger_tap_seq',
+                'finger_spread_open',
+                'finger_spread_close',
+                'thumb_circle',
+                'index_circle',
+                'finger_spread_close'
+            ]
+        }
+    },
+
+    ANIMATION: {
+        SCROLL_SPEED: 2,
+        PROMPT_SPACING: 120,
+        INDICATOR_POSITION: 0.3,
+        PROMPT_LENGTH: 60,
+        PROMPT_THICKNESS: 10,
+        LABEL_OFFSET: 80,
+        COLORS: {
+            active: '#10b981',
+            passed: '#9ca3af',
+            normal: '#10b981',
+            indicator: '#ef4444'
+        }
+    }
+};
+
+/**
+ * ==================== 连续手势2采集配置（手腕） ====================
+ */
+const CONTINUAL_GESTURE_2_CONFIG = {
+    NAME: '连续手势采集2（手腕）',
+    
+    PROMPT_LIBRARY: {
+        'wrist_flex_up': { label: '手腕上屈', icon: '⬆️', color: '#f59e0b' },
+        'wrist_flex_down': { label: '手腕下屈', icon: '⬇️', color: '#f59e0b' },
+        'wrist_left': { label: '手腕左偏', icon: '⬅️', color: '#f59e0b' },
+        'wrist_right': { label: '手腕右偏', icon: '➡️', color: '#f59e0b' },
+        'wrist_rotate_in': { label: '手腕内旋', icon: '🔄', color: '#f59e0b' },
+        'wrist_rotate_out': { label: '手腕外旋', icon: '🔃', color: '#f59e0b' },
+        'wrist_circle_cw': { label: '手腕顺时针绕圈', icon: '⭕', color: '#f59e0b' },
+        'wrist_circle_ccw': { label: '手腕逆时针绕圈', icon: '⭕', color: '#f59e0b' },
+        'fist_rotate_in': { label: '握拳内旋', icon: '👊', color: '#f59e0b' },
+        'fist_rotate_out': { label: '握拳外旋', icon: '👊', color: '#f59e0b' },
+        'fist_pump': { label: '握拳上下', icon: '💪', color: '#f59e0b' },
+        'wrist_shake': { label: '手腕抖动', icon: '👋', color: '#f59e0b' },
+    },
+
+    STAGES: {
+        wrist_rotation: {
+            name: 'wrist_rotation',
+            label: '手腕旋转',
+            instruction: '请跟随提示进行手腕旋转动作',
+            icon: '🔄',
+            color: '#f59e0b',
+            promptSequence: [
+                'wrist_rotate_in',
+                'wrist_rotate_out',
+                'wrist_rotate_in',
+                'wrist_rotate_out',
+                'wrist_circle_cw',
+                'wrist_circle_ccw',
+                'wrist_circle_cw',
+                'wrist_circle_ccw',
+                'fist_rotate_in',
+                'fist_rotate_out',
+                'wrist_shake',
+                'wrist_rotate_in'
+            ]
+        },
+        wrist_updown: {
+            name: 'wrist_updown',
+            label: '手腕上下',
+            instruction: '请跟随提示进行手腕上下摆动',
+            icon: '↕',
+            color: '#f59e0b',
+            promptSequence: [
+                'wrist_flex_up',
+                'wrist_flex_down',
+                'wrist_flex_up',
+                'wrist_flex_down',
+                'wrist_flex_up',
+                'wrist_flex_down',
+                'fist_pump',
+                'fist_pump',
+                'wrist_shake',
+                'wrist_flex_up',
+                'wrist_flex_down',
+                'wrist_flex_up'
+            ]
+        },
+        wrist_leftright: {
+            name: 'wrist_leftright',
+            label: '手腕左右',
+            instruction: '请跟随提示进行手腕左右摆动',
+            icon: '↔',
+            color: '#f59e0b',
+            promptSequence: [
+                'wrist_left',
+                'wrist_right',
+                'wrist_left',
+                'wrist_right',
+                'wrist_left',
+                'wrist_right',
+                'wrist_circle_cw',
+                'wrist_circle_ccw',
+                'wrist_shake',
+                'wrist_left',
+                'wrist_right',
+                'wrist_left'
+            ]
+        },
+        fist_rotation: {
+            name: 'fist_rotation',
+            label: '握拳旋转',
+            instruction: '请握拳并跟随提示旋转',
+            icon: '👊',
+            color: '#f59e0b',
+            promptSequence: [
+                'fist_rotate_in',
+                'fist_rotate_out',
+                'fist_rotate_in',
+                'fist_rotate_out',
+                'fist_pump',
+                'fist_pump',
+                'wrist_circle_cw',
+                'wrist_circle_ccw',
+                'fist_rotate_in',
+                'fist_rotate_out',
+                'wrist_shake',
+                'fist_rotate_in'
+            ]
+        }
+    },
+
+    ANIMATION: {
+        SCROLL_SPEED: 2,
+        PROMPT_SPACING: 120,
+        INDICATOR_POSITION: 0.3,
+        PROMPT_LENGTH: 60,
+        PROMPT_THICKNESS: 10,
+        LABEL_OFFSET: 80,
+        COLORS: {
+            active: '#10b981',
+            passed: '#9ca3af',
+            normal: '#f59e0b',
+            indicator: '#ef4444'
+        }
+    }
+};
+
+// ==================== 挂载到全局 ====================
+window.COLLECTION_CONSTANTS = COLLECTION_CONSTANTS;
+window.DISCRETE_GESTURE_CONFIG = DISCRETE_GESTURE_CONFIG;
+window.CONTINUAL_GESTURE_1_CONFIG = CONTINUAL_GESTURE_1_CONFIG;
+window.CONTINUAL_GESTURE_2_CONFIG = CONTINUAL_GESTURE_2_CONFIG;
+
+/**
+ * ==================== 便捷访问对象 ====================
  */
 const CollectionTiming = {
-    // 获取开场动画时长
     getIntroDuration() {
         let duration = COLLECTION_CONSTANTS.INTRO.DURATION;
         if (COLLECTION_CONSTANTS.DEBUG.FAST_MODE) {
@@ -259,7 +462,6 @@ const CollectionTiming = {
         return duration;
     },
     
-    // 获取准备倒计时秒数
     getPrepareCountdown() {
         let seconds = COLLECTION_CONSTANTS.STAGE_PREPARE.COUNTDOWN_SECONDS;
         if (COLLECTION_CONSTANTS.DEBUG.FAST_MODE) {
@@ -268,89 +470,78 @@ const CollectionTiming = {
         return seconds;
     },
     
-    // 获取指定任务的配置
+    // 获取任务配置
     getTaskConfig(taskId) {
         const configMap = {
-            'discrete_gesture': COLLECTION_CONSTANTS.DISCRETE_GESTURE,
-            'continual_gesture_1': COLLECTION_CONSTANTS.CONTINUAL_GESTURE_1,
-            'continual_gesture_2': COLLECTION_CONSTANTS.CONTINUAL_GESTURE_2
+            'discrete_gesture': DISCRETE_GESTURE_CONFIG,
+            'continual_gesture_1': CONTINUAL_GESTURE_1_CONFIG,
+            'continual_gesture_2': CONTINUAL_GESTURE_2_CONFIG
         };
-        return configMap[taskId] || COLLECTION_CONSTANTS.DISCRETE_GESTURE;
+        return configMap[taskId] || DISCRETE_GESTURE_CONFIG;
     },
     
-    // 获取指定任务的stage配置
+    // 获取Stage配置
     getStageConfig(taskId, stageName) {
         const taskConfig = this.getTaskConfig(taskId);
         return taskConfig.STAGES[stageName] || null;
     },
     
-    // 获取指定stage的prompt数量
-    getPromptCount(taskId, stageName) {
+    // 获取Stage的Prompt序列
+    getPromptSequence(taskId, stageName) {
         const stageConfig = this.getStageConfig(taskId, stageName);
-        if (stageConfig && stageConfig.promptCount) {
-            let count = stageConfig.promptCount;
+        if (stageConfig && stageConfig.promptSequence) {
+            let sequence = [...stageConfig.promptSequence];
             if (COLLECTION_CONSTANTS.DEBUG.FAST_MODE) {
-                count = Math.max(Math.floor(count * COLLECTION_CONSTANTS.DEBUG.FAST_MODE_RATIO), 3);
+                // 快速模式下只取前3个
+                sequence = sequence.slice(0, Math.max(3, Math.floor(sequence.length * COLLECTION_CONSTANTS.DEBUG.FAST_MODE_RATIO)));
             }
-            return count;
+            return sequence;
         }
-        // 默认值
+        return [];
+    },
+    
+    // 获取Prompt定义
+    getPromptDefinition(taskId, promptName) {
         const taskConfig = this.getTaskConfig(taskId);
-        let count = taskConfig.PROMPTS_PER_STAGE || 10;
-        if (COLLECTION_CONSTANTS.DEBUG.FAST_MODE) {
-            count = Math.max(Math.floor(count * COLLECTION_CONSTANTS.DEBUG.FAST_MODE_RATIO), 3);
-        }
-        return count;
+        return taskConfig.PROMPT_LIBRARY[promptName] || { 
+            label: promptName, 
+            icon: '●', 
+            color: '#6b7280' 
+        };
     },
     
     // 获取动画配置
     getAnimationConfig(taskId) {
         const taskConfig = this.getTaskConfig(taskId);
-        return taskConfig.ANIMATION || COLLECTION_CONSTANTS.DISCRETE_GESTURE.ANIMATION;
+        return taskConfig.ANIMATION || DISCRETE_GESTURE_CONFIG.ANIMATION;
     },
     
-    // 获取滚动速度
-    getScrollSpeed(taskId) {
-        const taskConfig = this.getTaskConfig(taskId);
-        return taskConfig.SCROLL_SPEED || 2;
+    // 获取Stage的Prompt数量
+    getPromptCount(taskId, stageName) {
+        const sequence = this.getPromptSequence(taskId, stageName);
+        return sequence.length;
     },
     
-    // 获取prompt间距
-    getPromptSpacing(taskId) {
-        const taskConfig = this.getTaskConfig(taskId);
-        return taskConfig.PROMPT_SPACING || 120;
+    // 估算Stage时长（基于Prompt数量）
+    estimateStageDuration(taskId, stageName) {
+        const promptCount = this.getPromptCount(taskId, stageName);
+        return (promptCount + 2) * 1000; // 每个prompt约1秒，加2秒缓冲
     },
     
-    // 是否调试模式
     isDebugMode() {
         return COLLECTION_CONSTANTS.DEBUG.ENABLED;
     },
     
-    // 是否快速模式
     isFastMode() {
         return COLLECTION_CONSTANTS.DEBUG.FAST_MODE;
-    },
-    
-    /**
-     * 根据prompt数量计算预估的stage时长（毫秒）
-     * 每个prompt约1秒（60fps, 2像素/帧, 120像素间距 = 1秒）
-     */
-    estimateStageDuration(taskId, stageName) {
-        const promptCount = this.getPromptCount(taskId, stageName);
-        // 每个prompt约1秒，加上一些缓冲时间
-        return (promptCount + 2) * 1000;
     }
 };
 
-// 导出到全局
-window.COLLECTION_CONSTANTS = COLLECTION_CONSTANTS;
 window.CollectionTiming = CollectionTiming;
 
 // 打印加载信息
-console.log('[Constants] 采集常量已加载（重构版）');
-console.log('[Constants] 开场动画:', COLLECTION_CONSTANTS.INTRO.DURATION / 1000, '秒');
-console.log('[Constants] 准备倒计时:', COLLECTION_CONSTANTS.STAGE_PREPARE.COUNTDOWN_SECONDS, '秒');
-console.log('[Constants] 离散手势每stage prompts:', COLLECTION_CONSTANTS.DISCRETE_GESTURE.PROMPTS_PER_STAGE);
-console.log('[Constants] 连续手势1每stage prompts:', COLLECTION_CONSTANTS.CONTINUAL_GESTURE_1.PROMPTS_PER_STAGE);
-console.log('[Constants] 连续手势2每stage prompts:', COLLECTION_CONSTANTS.CONTINUAL_GESTURE_2.PROMPTS_PER_STAGE);
-console.log('[Constants] 快速模式:', COLLECTION_CONSTANTS.DEBUG.FAST_MODE ? '开启' : '关闭');
+console.log('[Constants] 采集常量已加载（v2）');
+console.log('[Constants] 离散手势 Stage数:', Object.keys(DISCRETE_GESTURE_CONFIG.STAGES).length);
+console.log('[Constants] 离散手势 Prompt库:', Object.keys(DISCRETE_GESTURE_CONFIG.PROMPT_LIBRARY).length, '个动作');
+console.log('[Constants] 连续手势1 Stage数:', Object.keys(CONTINUAL_GESTURE_1_CONFIG.STAGES).length);
+console.log('[Constants] 连续手势2 Stage数:', Object.keys(CONTINUAL_GESTURE_2_CONFIG.STAGES).length);

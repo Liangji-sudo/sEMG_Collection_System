@@ -1,16 +1,15 @@
 /**
  * discrete-gesture-animation.js - 离散手势采集动画模块
  * 
- * 这个文件专门负责离散手势（discrete_gesture）任务的Stage动画
+ * 概念说明：
+ * - Stage: 一个采集阶段（如"手心朝上"姿势）
+ * - Prompt: Stage内的具体手势动作（如"拇指上滑"、"食指点击"等）
  * 
  * 动画特点：
- * - 提示从右向左滚动
- * - 约1秒一个提示经过指示线
- * - 通过prompt数量来控制stage时长（不再使用秒数倒计时）
- * - 每个prompt触发时发送信号给realtimeEngine
- * 
- * 使用方式：
- * 由animation-controller.js调用，在playStageContent时根据任务类型启动
+ * - 在一个Stage内，按顺序播放多个不同的Prompt
+ * - 每个Prompt约1秒经过指示线
+ * - Prompt定义从DISCRETE_GESTURE_CONFIG.PROMPT_LIBRARY读取
+ * - Prompt序列从Stage的promptSequence数组读取
  */
 
 (function() {
@@ -28,18 +27,21 @@
             // 动画状态
             this.animationId = null;
             this.isRunning = false;
-            this.prompts = [];
-            this.nextPromptIndex = 0;
-            this.executedCount = 0;        // 已经通过指示线的prompt数
-            this.totalPromptCount = 10;    // 总共需要的prompt数
+            this.prompts = [];           // 当前在屏幕上的prompt对象
+            this.nextPromptIndex = 0;    // 下一个要创建的prompt在序列中的索引
+            this.executedCount = 0;      // 已经通过指示线的prompt数
+            
+            // 当前Stage的Prompt序列
+            this.promptSequence = [];    // 从配置读取的prompt名称数组
+            this.promptLibrary = {};     // prompt定义库
             
             // 当前stage信息
             this.currentStage = null;
             this.currentTaskId = 'discrete_gesture';
             this.onComplete = null;
-            this.onPromptTriggered = null; // prompt触发回调
+            this.onPromptTriggered = null;
             
-            // 配置（将从COLLECTION_CONSTANTS读取）
+            // 配置
             this.config = {
                 canvasWidth: 0,
                 canvasHeight: 0,
@@ -50,6 +52,7 @@
                 promptThickness: 10,
                 labelOffset: 80,
                 centerY: 0,
+                indicatorPosition: 0.3,
                 colors: {
                     active: '#10b981',
                     passed: '#9ca3af',
@@ -57,58 +60,44 @@
                     indicator: '#ef4444'
                 }
             };
-            
-            // 手势类型定义
-            this.gestureTypes = {
-                'palm_up': { label: '手心向上', icon: '↑', color: '#3b82f6' },
-                'palm_inward': { label: '手心向内', icon: '→', color: '#3b82f6' },
-                'hand_on_knee': { label: '手放膝盖', icon: '↓', color: '#3b82f6' },
-                'hand_on_desk': { label: '手放桌上', icon: '◐', color: '#3b82f6' }
-            };
         }
 
         /**
-         * 从常量配置中加载配置
+         * 从配置加载
          */
         loadConfig() {
-            if (window.COLLECTION_CONSTANTS && window.COLLECTION_CONSTANTS.DISCRETE_GESTURE) {
-                const taskConfig = window.COLLECTION_CONSTANTS.DISCRETE_GESTURE;
+            if (window.DISCRETE_GESTURE_CONFIG) {
+                const taskConfig = window.DISCRETE_GESTURE_CONFIG;
                 const animConfig = taskConfig.ANIMATION;
                 
-                this.config.scrollSpeed = taskConfig.SCROLL_SPEED || 2;
-                this.config.promptSpacing = taskConfig.PROMPT_SPACING || 120;
-                this.config.promptLength = animConfig.PROMPT_LENGTH || 60;
-                this.config.promptThickness = animConfig.PROMPT_THICKNESS || 10;
-                this.config.labelOffset = animConfig.LABEL_OFFSET || 80;
-                this.config.indicatorPosition = animConfig.INDICATOR_POSITION || 0.3;
+                // 加载Prompt库
+                this.promptLibrary = taskConfig.PROMPT_LIBRARY || {};
                 
-                if (animConfig.COLORS) {
-                    this.config.colors = { ...animConfig.COLORS };
+                // 加载动画配置
+                if (animConfig) {
+                    this.config.scrollSpeed = animConfig.SCROLL_SPEED || 2;
+                    this.config.promptSpacing = animConfig.PROMPT_SPACING || 120;
+                    this.config.promptLength = animConfig.PROMPT_LENGTH || 60;
+                    this.config.promptThickness = animConfig.PROMPT_THICKNESS || 10;
+                    this.config.labelOffset = animConfig.LABEL_OFFSET || 80;
+                    this.config.indicatorPosition = animConfig.INDICATOR_POSITION || 0.3;
+                    
+                    if (animConfig.COLORS) {
+                        this.config.colors = { ...animConfig.COLORS };
+                    }
                 }
                 
-                // 加载手势配置
-                Object.keys(taskConfig.STAGES).forEach(key => {
-                    const stage = taskConfig.STAGES[key];
-                    this.gestureTypes[key] = {
-                        label: stage.label,
-                        icon: stage.icon,
-                        color: stage.color
-                    };
-                });
-                
-                console.log('[DiscreteGestureAnimation] 配置已从COLLECTION_CONSTANTS加载');
+                console.log('[DiscreteGestureAnimation] 配置已加载，Prompt库:', 
+                    Object.keys(this.promptLibrary).length, '个动作');
             }
         }
 
         /**
          * 初始化Canvas
-         * @param {string} containerSelector - 容器选择器
          */
         init(containerSelector) {
-            // 加载配置
             this.loadConfig();
             
-            // 查找动画区域容器
             this.containerElement = document.querySelector('.animation-area') ||
                                     document.querySelector(containerSelector) || 
                                     document.getElementById('gestureDisplay');
@@ -118,13 +107,11 @@
                 return false;
             }
             
-            // 确保容器有相对定位
             const containerStyle = window.getComputedStyle(this.containerElement);
             if (containerStyle.position === 'static') {
                 this.containerElement.style.position = 'relative';
             }
             
-            // 创建Canvas
             this.canvas = document.getElementById('discreteGestureCanvas');
             if (!this.canvas) {
                 this.canvas = document.createElement('canvas');
@@ -145,7 +132,6 @@
             this.ctx = this.canvas.getContext('2d');
             this.resizeCanvas();
             
-            // 监听窗口大小变化
             this._resizeHandler = () => this.resizeCanvas();
             window.addEventListener('resize', this._resizeHandler);
             
@@ -163,21 +149,15 @@
             if (rect.width > 0 && rect.height > 0) {
                 const dpr = window.devicePixelRatio || 1;
                 
-                // 设置Canvas的实际像素尺寸
                 this.canvas.width = rect.width * dpr;
                 this.canvas.height = rect.height * dpr;
-                
-                // 设置Canvas的CSS显示尺寸
                 this.canvas.style.width = rect.width + 'px';
                 this.canvas.style.height = rect.height + 'px';
-                
-                // 缩放绘图上下文
                 this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
                 
-                // 更新配置
                 this.config.canvasWidth = rect.width;
                 this.config.canvasHeight = rect.height;
-                this.config.indicatorX = rect.width * (this.config.indicatorPosition || 0.3);
+                this.config.indicatorX = rect.width * this.config.indicatorPosition;
                 this.config.centerY = rect.height / 2;
                 
                 return true;
@@ -186,11 +166,26 @@
         }
 
         /**
+         * 获取Prompt定义
+         */
+        getPromptDef(promptName) {
+            return this.promptLibrary[promptName] || {
+                label: promptName,
+                icon: '●',
+                color: '#6b7280'
+            };
+        }
+
+        /**
          * 创建Prompt对象
          */
-        createPrompt(type, startX, index) {
+        createPromptObject(promptName, startX, index) {
+            const def = this.getPromptDef(promptName);
             return {
-                type: type,
+                name: promptName,
+                label: def.label,
+                icon: def.icon,
+                color: def.color,
                 x: startX,
                 index: index,
                 isActive: false,
@@ -208,7 +203,6 @@
         start(stage, onComplete, onPromptTriggered) {
             console.log('[DiscreteGestureAnimation] 开始Stage动画:', stage.name);
             
-            // 确保Canvas已初始化
             if (!this.canvas) {
                 if (!this.init('.animation-area')) {
                     console.error('[DiscreteGestureAnimation] Canvas初始化失败');
@@ -221,17 +215,19 @@
             this.onComplete = onComplete;
             this.onPromptTriggered = onPromptTriggered;
             
-            // 获取这个stage需要的prompt数量
+            // 获取这个Stage的Prompt序列
             if (window.CollectionTiming) {
-                this.totalPromptCount = window.CollectionTiming.getPromptCount(
+                this.promptSequence = window.CollectionTiming.getPromptSequence(
                     this.currentTaskId, 
                     stage.name
                 );
+            } else if (stage.promptSequence) {
+                this.promptSequence = [...stage.promptSequence];
             } else {
-                this.totalPromptCount = 10; // 默认值
+                this.promptSequence = [];
             }
             
-            console.log('[DiscreteGestureAnimation] Stage prompts:', this.totalPromptCount);
+            console.log('[DiscreteGestureAnimation] Prompt序列:', this.promptSequence);
             
             // 重置状态
             this.prompts = [];
@@ -241,8 +237,6 @@
             
             // 调整Canvas
             this.resizeCanvas();
-            
-            // 显示Canvas
             this.canvas.style.display = 'block';
             
             // 创建第一个提示
@@ -256,14 +250,11 @@
          * 创建下一个提示
          */
         createNextPrompt() {
-            if (this.nextPromptIndex >= this.totalPromptCount) return;
+            if (this.nextPromptIndex >= this.promptSequence.length) return;
             
+            const promptName = this.promptSequence[this.nextPromptIndex];
             const startX = this.config.canvasWidth + 50;
-            const prompt = this.createPrompt(
-                this.currentStage.name, 
-                startX, 
-                this.nextPromptIndex
-            );
+            const prompt = this.createPromptObject(promptName, startX, this.nextPromptIndex);
             this.prompts.push(prompt);
             this.nextPromptIndex++;
         }
@@ -275,8 +266,7 @@
             if (!this.isRunning) return;
             
             // 检查是否所有prompt都已经通过
-            if (this.executedCount >= this.totalPromptCount) {
-                // 等待最后一个prompt完全离开屏幕
+            if (this.executedCount >= this.promptSequence.length) {
                 const allGone = this.prompts.every(p => p.x < -150);
                 if (allGone || this.prompts.length === 0) {
                     this.stop();
@@ -285,7 +275,6 @@
                 }
             }
             
-            // 确保canvas尺寸有效
             if (!this.config.canvasWidth || !this.config.canvasHeight) {
                 if (!this.resizeCanvas()) {
                     this.animationId = requestAnimationFrame(() => this.animate());
@@ -305,7 +294,7 @@
             this.prompts = this.prompts.filter(p => p.x > -150);
             
             // 创建新提示（如果需要）
-            if (this.nextPromptIndex < this.totalPromptCount) {
+            if (this.nextPromptIndex < this.promptSequence.length) {
                 const last = this.prompts[this.prompts.length - 1];
                 if (!last || last.x < this.config.canvasWidth - this.config.promptSpacing) {
                     this.createNextPrompt();
@@ -315,16 +304,10 @@
             // 更新提示状态
             this.updatePrompts();
             
-            // 绘制背景信息（stage名称等）
+            // 绘制
             this.drawStageInfo();
-            
-            // 绘制指示线
             this.drawIndicator();
-            
-            // 绘制所有提示
             this.prompts.forEach(p => this.drawPrompt(p));
-            
-            // 绘制进度信息
             this.drawProgress();
             
             // 继续下一帧
@@ -339,23 +322,20 @@
                 if (!prompt.isPassed) {
                     const dist = prompt.x - this.config.indicatorX;
                     
-                    // 检查是否到达指示线区域
                     if (Math.abs(dist) <= 20) {
                         prompt.isActive = true;
                         
-                        // 发送Prompt信号（只发送一次）
                         if (!prompt.promptSent) {
                             prompt.promptSent = true;
                             this.triggerPrompt(prompt);
                         }
                     }
                     
-                    // 检查是否已经通过指示线
                     if (dist < -25) {
                         prompt.isActive = false;
                         prompt.isPassed = true;
                         this.executedCount++;
-                        console.log(`[DiscreteGestureAnimation] Prompt ${prompt.index + 1}/${this.totalPromptCount} 完成`);
+                        console.log(`[DiscreteGestureAnimation] Prompt完成: ${prompt.label} (${this.executedCount}/${this.promptSequence.length})`);
                     }
                 }
             });
@@ -365,19 +345,14 @@
          * 触发Prompt信号
          */
         triggerPrompt(prompt) {
-            console.log(`[DiscreteGestureAnimation] 触发Prompt: ${prompt.type} #${prompt.index + 1}`);
+            console.log(`[DiscreteGestureAnimation] 触发Prompt: ${prompt.name} - ${prompt.label}`);
             
-            // 调用回调
             if (this.onPromptTriggered) {
-                this.onPromptTriggered(prompt.type, prompt.index, this.currentStage.name);
+                this.onPromptTriggered(prompt.name, prompt.index, this.currentStage.name);
             }
             
-            // 发送到realtimeEngine
             if (window.animationController && window.animationController.sendPrompt) {
-                window.animationController.sendPrompt(
-                    prompt.type, 
-                    this.currentStage.name
-                );
+                window.animationController.sendPrompt(prompt.name, this.currentStage.name);
             }
         }
 
@@ -386,23 +361,28 @@
          */
         drawStageInfo() {
             const ctx = this.ctx;
-            const gesture = this.gestureTypes[this.currentStage.name] || {
-                label: this.currentStage.label || this.currentStage.name,
-                icon: '●',
-                color: '#3b82f6'
-            };
+            const stageConfig = this.currentStage;
+            
+            // 从配置获取Stage信息
+            let stageLabel = stageConfig.label || stageConfig.name;
+            let stageIcon = stageConfig.icon || '🤲';
+            
+            if (window.DISCRETE_GESTURE_CONFIG && window.DISCRETE_GESTURE_CONFIG.STAGES[stageConfig.name]) {
+                const configStage = window.DISCRETE_GESTURE_CONFIG.STAGES[stageConfig.name];
+                stageLabel = configStage.label || stageLabel;
+                stageIcon = configStage.icon || stageIcon;
+            }
             
             ctx.save();
             
-            // 在左上角显示当前Stage名称
-            ctx.fillStyle = 'rgba(30, 64, 175, 0.9)';
+            // 左上角显示当前Stage名称
+            ctx.fillStyle = 'rgba(30, 64, 175, 0.95)';
             ctx.font = '700 24px ui-sans-serif, system-ui, -apple-system';
             ctx.textAlign = 'left';
             ctx.textBaseline = 'top';
-            ctx.fillText(`当前动作: ${gesture.label}`, 20, 20);
+            ctx.fillText(`${stageIcon} 姿势: ${stageLabel}`, 20, 20);
             
             // 显示指导文字
-            const stageConfig = this.currentStage;
             if (stageConfig.instruction) {
                 ctx.fillStyle = 'rgba(107, 114, 128, 0.9)';
                 ctx.font = '500 16px ui-sans-serif, system-ui';
@@ -430,7 +410,6 @@
             ctx.stroke();
             ctx.setLineDash([]);
             
-            // 在指示线上方添加文字
             ctx.fillStyle = this.config.colors.indicator;
             ctx.font = '600 12px ui-sans-serif, system-ui';
             ctx.textAlign = 'center';
@@ -441,16 +420,10 @@
         }
 
         /**
-         * 绘制单个提示
+         * 绘制单个Prompt
          */
         drawPrompt(prompt) {
-            const gesture = this.gestureTypes[prompt.type] || {
-                label: prompt.type,
-                icon: '●',
-                color: '#3b82f6'
-            };
-            
-            let color = this.config.colors.normal;
+            let color = prompt.color || this.config.colors.normal;
             if (prompt.isPassed) {
                 color = this.config.colors.passed;
             } else if (prompt.isActive) {
@@ -480,7 +453,6 @@
             const bx = x - badgeW / 2;
             const by = y - (this.config.promptLength / 2) - gap - badgeH;
             
-            // 气泡背景
             ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
             ctx.strokeStyle = color;
             ctx.lineWidth = 3;
@@ -494,12 +466,13 @@
             ctx.font = '900 32px ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText(gesture.icon, x, by + badgeH / 2);
+            ctx.fillText(prompt.icon, x, by + badgeH / 2);
             
-            // 序号
-            ctx.font = '600 12px ui-sans-serif, system-ui';
+            // 动作名称
+            ctx.font = '600 11px ui-sans-serif, system-ui';
+            ctx.fillStyle = color;
             ctx.textBaseline = 'top';
-            ctx.fillText(`#${prompt.index + 1}`, x, y + this.config.labelOffset);
+            ctx.fillText(prompt.label, x, y + this.config.labelOffset);
             
             ctx.restore();
         }
@@ -509,6 +482,7 @@
          */
         drawProgress() {
             const ctx = this.ctx;
+            const total = this.promptSequence.length;
             
             ctx.save();
             
@@ -518,7 +492,7 @@
             ctx.textAlign = 'right';
             ctx.textBaseline = 'bottom';
             ctx.fillText(
-                `${this.executedCount} / ${this.totalPromptCount}`, 
+                `${this.executedCount} / ${total}`, 
                 this.config.canvasWidth - 20, 
                 this.config.canvasHeight - 20
             );
@@ -528,15 +502,13 @@
             const barHeight = 8;
             const barX = this.config.canvasWidth - 20 - barWidth;
             const barY = this.config.canvasHeight - 45;
-            const progress = this.executedCount / this.totalPromptCount;
+            const progress = total > 0 ? this.executedCount / total : 0;
             
-            // 背景
             ctx.fillStyle = '#e5e7eb';
             ctx.beginPath();
             ctx.roundRect(barX, barY, barWidth, barHeight, 4);
             ctx.fill();
             
-            // 进度
             ctx.fillStyle = '#22c55e';
             ctx.beginPath();
             ctx.roundRect(barX, barY, barWidth * progress, barHeight, 4);
@@ -557,19 +529,17 @@
                 this.animationId = null;
             }
             
-            // 清除画布
             if (this.ctx && this.config.canvasWidth && this.config.canvasHeight) {
                 this.ctx.clearRect(0, 0, this.config.canvasWidth, this.config.canvasHeight);
             }
             
-            // 隐藏Canvas
             if (this.canvas) {
                 this.canvas.style.display = 'none';
             }
         }
 
         /**
-         * 销毁实例
+         * 销毁
          */
         destroy() {
             this.stop();
@@ -587,22 +557,16 @@
             this.containerElement = null;
         }
 
-        /**
-         * 检查是否正在运行
-         */
         isAnimationRunning() {
             return this.isRunning;
         }
 
-        /**
-         * 获取当前进度
-         */
         getProgress() {
             return {
                 executed: this.executedCount,
-                total: this.totalPromptCount,
-                percent: this.totalPromptCount > 0 ? 
-                    (this.executedCount / this.totalPromptCount * 100) : 0
+                total: this.promptSequence.length,
+                percent: this.promptSequence.length > 0 ? 
+                    (this.executedCount / this.promptSequence.length * 100) : 0
             };
         }
     }
