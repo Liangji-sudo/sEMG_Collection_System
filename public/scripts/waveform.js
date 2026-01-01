@@ -1,12 +1,10 @@
 /**
  * waveform.js - 主入口文件
  * 
- * 整合渲染器和数据生成器，提供完整的波形显示功能。
- * 支持两种数据源：
- *   1. WebSocket实时数据（来自realtimeEngine.js，端口8080）
- *   2. 模拟数据生成器（用于测试）
+ * 整合渲染器，提供完整的波形显示功能。
+ * 数据源：WebSocket实时数据（来自realtimeEngine.js，端口8080）
  * 
- * 修复：现在正确地将设备1数据显示到EMG1/IMU1，设备2数据显示到EMG2/IMU2
+ * 修复：移除对data-generator.js的依赖，所有模拟数据由ble_server.py生成
  */
 
 (function() {
@@ -121,7 +119,6 @@
 
                 // 兼容旧格式 emg_data
                 if (packet.type === 'emg_data') {
-                    // 旧格式处理（如果需要）
                     console.log('[Waveform] 收到旧格式数据包');
                     return;
                 }
@@ -133,9 +130,6 @@
 
         /**
          * 渲染实时数据
-         * 
-         * 修复：现在正确区分设备1和设备2的数据
-         * 只有连接的设备才会显示数据，未连接的设备窗口不显示
          * 
          * @param {Object} data - 数据包（来自realtimeEngine.js）
          *   data.emg1: 设备1的EMG数据 [[ch0_p1, ch0_p2, ...], [ch1_p1, ...], ...] 16通道×N帧
@@ -149,7 +143,7 @@
 
             const rm = this.controller.rendererManager;
             
-            // 获取活跃设备列表，用于判断哪些设备正在采集
+            // 获取活跃设备列表
             const activeDevices = data.activeDevices || [];
 
             // ===== EMG1数据渲染（仅当设备1有数据时） =====
@@ -232,7 +226,6 @@
          * 更新连接状态显示
          */
         updateConnectionStatus(connected) {
-            // 可以在这里更新UI上的连接状态指示器
             const statusElement = document.getElementById('ws-status');
             if (statusElement) {
                 statusElement.textContent = connected ? '已连接' : '未连接';
@@ -245,15 +238,11 @@
     class WaveformController {
         constructor() {
             this.rendererManager = new RendererManager();
-            this.dataGenerator1 = new DataGenerator();  // 设备1模拟数据
-            this.dataGenerator2 = new DataGenerator();  // 设备2模拟数据
             this.dataReceiver = new RealtimeDataReceiver(this);
             
             this.isRunning = false;
-            this.useRealData = false;  // 是否使用真实数据
             this.frameCount1 = 0;  // 设备1帧计数
             this.frameCount2 = 0;  // 设备2帧计数
-            this.intervalId = null;
             
             // 设备统计
             this.stats1 = { total: 0, lost: 0 };
@@ -299,8 +288,7 @@
             this.updateTimeDisplay();
             setInterval(() => this.updateTimeDisplay(), 1000);
 
-            // 不自动开始，等待用户操作
-            // this.start();
+            console.log('[Waveform] 渲染器初始化完成');
         }
 
         updateTimeDisplay() {
@@ -318,34 +306,13 @@
         }
 
         /**
-         * 启动显示（使用模拟数据）
-         */
-        start() {
-            if (this.isRunning) return;
-            this.isRunning = true;
-            this.useRealData = false;
-            
-            // 100Hz更新频率
-            const interval = 10;
-            
-            this.intervalId = setInterval(() => {
-                this.update();
-            }, interval);
-            
-            console.log('[Waveform] 启动模拟数据显示');
-        }
-
-        /**
-         * 启动显示（使用真实BLE数据）
+         * 启动实时数据显示
+         * 连接到realtimeEngine.js接收来自ble_server.py的数据
          */
         startRealtime() {
-            if (this.isRunning && this.useRealData) return;
-            
-            // 停止模拟数据
-            this.stop();
+            if (this.isRunning) return;
             
             this.isRunning = true;
-            this.useRealData = true;
             
             // 连接WebSocket接收真实数据
             this.dataReceiver.connect();
@@ -354,61 +321,19 @@
         }
 
         /**
+         * 兼容旧接口：start() 现在等同于 startRealtime()
+         */
+        start() {
+            this.startRealtime();
+        }
+
+        /**
          * 停止显示
          */
         stop() {
             this.isRunning = false;
-            
-            if (this.intervalId) {
-                clearInterval(this.intervalId);
-                this.intervalId = null;
-            }
-            
-            if (this.useRealData) {
-                this.dataReceiver.disconnect();
-            }
-            
-            this.useRealData = false;
+            this.dataReceiver.disconnect();
             console.log('[Waveform] 停止显示');
-        }
-
-        /**
-         * 更新显示（模拟数据模式）
-         * 修复：使用独立的数据生成器为每个设备生成不同的模拟数据
-         */
-        update() {
-            if (this.useRealData) return; // 真实数据模式下不使用此函数
-            
-            // 设备1数据
-            const emgData1 = this.dataGenerator1.generateEMGPacket();
-            const imuAccData1 = this.dataGenerator1.generateIMUAccPacket();
-            const imuGyrData1 = this.dataGenerator1.generateIMUGyrPacket();
-            const imuMagData1 = this.dataGenerator1.generateIMUMagPacket();
-
-            // 设备2数据（使用独立的生成器，产生不同的数据）
-            const emgData2 = this.dataGenerator2.generateEMGPacket();
-            const imuAccData2 = this.dataGenerator2.generateIMUAccPacket();
-            const imuGyrData2 = this.dataGenerator2.generateIMUGyrPacket();
-            const imuMagData2 = this.dataGenerator2.generateIMUMagPacket();
-
-            // EMG1显示设备1数据，EMG2显示设备2数据
-            this.rendererManager.get('emg1').renderPoints(emgData1);
-            this.rendererManager.get('emg2').renderPoints(emgData2);
-
-            // IMU1显示设备1数据
-            this.rendererManager.get('imu1Acc').renderPoints(imuAccData1);
-            this.rendererManager.get('imu1Gyr').renderPoints(imuGyrData1);
-            this.rendererManager.get('imu1Mag').renderPoints(imuMagData1);
-
-            // IMU2显示设备2数据
-            this.rendererManager.get('imu2Acc').renderPoints(imuAccData2);
-            this.rendererManager.get('imu2Gyr').renderPoints(imuGyrData2);
-            this.rendererManager.get('imu2Mag').renderPoints(imuMagData2);
-
-            // 更新帧计数
-            this.frameCount1++;
-            this.frameCount2++;
-            this.updateFrameCount();
         }
 
         /**
@@ -443,8 +368,6 @@
          */
         clearAll() {
             this.rendererManager.clearAll();
-            this.dataGenerator1.reset();
-            this.dataGenerator2.reset();
             this.frameCount1 = 0;
             this.frameCount2 = 0;
             this.updateFrameCount();
@@ -458,13 +381,6 @@
         }
 
         /**
-         * 获取数据生成器
-         */
-        getDataGenerator() {
-            return this.dataGenerator1;
-        }
-
-        /**
          * 获取数据接收器
          */
         getDataReceiver() {
@@ -475,7 +391,7 @@
          * 检查是否正在使用真实数据
          */
         isUsingRealData() {
-            return this.useRealData && this.dataReceiver.isConnected;
+            return this.dataReceiver.isConnected;
         }
     }
 
@@ -489,15 +405,14 @@
         window.waveformController = controller;
         
         // 便捷方法
-        window.startSimulation = () => controller.start();
         window.startRealtime = () => controller.startRealtime();
+        window.startSimulation = () => controller.startRealtime(); // 兼容旧接口
         window.stopWaveform = () => controller.stop();
         window.clearWaveform = () => controller.clearAll();
         
         console.log('[Waveform] 系统初始化完成');
         console.log('[Waveform] 可用命令:');
-        console.log('  - startSimulation(): 启动模拟数据显示');
-        console.log('  - startRealtime(): 启动实时BLE数据显示');
+        console.log('  - startRealtime(): 启动实时数据显示');
         console.log('  - stopWaveform(): 停止显示');
         console.log('  - clearWaveform(): 清除显示');
     });

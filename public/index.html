@@ -41,6 +41,15 @@
             visibility: hidden;
         }
 
+        /* 通用隐藏类 - 修复后台页面遮挡问题 */
+        .hidden {
+            display: none !important;
+        }
+
+        .page.hidden {
+            display: none !important;
+        }
+
         /* 顶部区域 */
         .welcome-header {
             padding: 16px 24px;
@@ -1736,41 +1745,30 @@
 
     <!-- #1 蓝牙ble设备扫描，连接，断开 控制逻辑 -->
     <script defer src="scripts/ble_control.js"></script>
+
+
+    <!-- 前端采集数据实时显示主入口 -->
+    <script src="scripts/waveform.js"></script>
     <!-- 波形显示模块 -->
     <script src="scripts/waveform-renderer.js"></script>
-    <!-- 数据生成模块 -->
-    <script src="scripts/data-generator.js"></script>
-    <!-- 主入口 -->
-    <script src="scripts/waveform.js"></script>
-    <!-- 界面控制 -->
-    <script src="scripts/app-controller.js"></script>
 
 
-    <!-- #2 左侧 emg 实时显示逻辑 -->
-    <!--
-    <script defer src="scripts/collection_page_left_emg_display.js"></script>
-    -->
+    <!-- ==================== 采集系统配置和控制 ==================== -->
+    <!-- 任务配置（定义所有采集任务的stage） -->
+    <script src="scripts/task-config.js"></script>
+    <!-- 采集常量配置（时间参数等） -->
+    <script src="scripts/collection-constants.js"></script>
+    <!-- 动画控制器（开场动画、stage动画等） -->
+    <script src="scripts/animation-controller.js"></script>
+    <!-- 页面切换控制 -->
+    <script defer src="scripts/page-switch.js"></script>
+    <!-- 采集任务控制器 -->
+    <script defer src="scripts/collection-controller.js"></script>
 
     
     <!-- #2 右侧 lab.js 实验采集流程 TODO -->
     <!--
     <script defer src="scripts/collection_page_right_collect.js"></script>
-    -->
-
-
-    <!-- 3.2 后台界面显示左半部分逻辑 -->
-    <!--
-    <script defer src="scripts/backend_page_left_display.js"></script>
-    -->
-
-    <!--  所有按钮页面切换点击逻辑 -->
-    <!--
-    <script defer src="scripts/page_switch.js"></script>
-    -->
-
-    <!--  刷新首页的底部状态栏 -->
-    <!--
-    <script defer src="scripts/bottom_status_panel_update.js"></script>
     -->
 
 </body>

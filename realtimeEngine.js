@@ -67,6 +67,13 @@ class RealtimeEngine extends EventEmitter {
         this.stage_name = null;
         this.stage_start = 0;
         this.stage_end = 0;
+
+        // ===== 采集任务状态（来自collection-controller.js的命令） =====
+        this.currentTaskId = null;      // 当前任务ID
+        this.currentUser = null;        // 当前用户信息
+        this.isCollecting = false;      // 是否正在采集
+        this.collectionPaused = false;  // 是否暂停
+        this.currentStageName = null;   // 当前Stage名称
     }
 
     // 0.0 启动 realtimeEngine 实时引擎模块
@@ -101,6 +108,10 @@ class RealtimeEngine extends EventEmitter {
                     //console.log(`[realtimeEngine] [${new Date().toISOString()}] 发送连接确认给前端:`, JSON.parse(connectMsg));
                     ws.send(connectMsg);
 
+                    // ===== 新增：监听来自前端的控制命令 =====
+                    ws.on('message', (message) => {
+                        this.handleFrontendMessage(message);
+                    });
 
                     ws.on('close', () => {
                         console.log('[realtimeEngine] 前端WebSocket连接已关闭');
@@ -137,6 +148,154 @@ class RealtimeEngine extends EventEmitter {
                 reject(error);
             }
         });
+    }
+
+
+    // ===== 新增：处理来自前端的控制命令 =====
+    handleFrontendMessage(rawMessage) {
+        try {
+            const message = JSON.parse(rawMessage.toString());
+            
+            // 只处理 control_command 类型的消息
+            if (message.type !== 'control_command') {
+                return;
+            }
+
+            const { action, data } = message;
+            console.log(`[realtimeEngine] <<< 收到前端命令: ${action}`, data);
+
+            switch (action) {
+                case 'task_change':
+                    this.onTaskChange(data.taskId);
+                    break;
+                
+                case 'collection_start':
+                    this.onCollectionStart(data.taskId, data.user);
+                    break;
+                
+                case 'collection_pause':
+                    this.onCollectionPause();
+                    break;
+                
+                case 'collection_resume':
+                    this.onCollectionResume();
+                    break;
+                
+                case 'collection_stop':
+                    this.onCollectionStop(data.completed);
+                    break;
+                
+                case 'stage_start':
+                    this.onStageStart(data.stageName, data.stageIndex, data.timestamp);
+                    break;
+                
+                case 'stage_end':
+                    this.onStageEnd(data.stageName, data.stageIndex, data.timestamp);
+                    break;
+                
+                case 'prompt':
+                    this.onPrompt(data.name, data.stageName, data.timestamp);
+                    break;
+                
+                default:
+                    console.log(`[realtimeEngine] 未知命令: ${action}`);
+            }
+
+        } catch (error) {
+            console.error('[realtimeEngine] 解析前端消息失败:', error);
+        }
+    }
+
+    // ===== 采集控制回调函数（供collection-controller.js调用） =====
+
+    /**
+     * 任务切换
+     */
+    onTaskChange(taskId) {
+        console.log(`[realtimeEngine] ========== 任务切换 ==========`);
+        console.log(`[realtimeEngine] 新任务: ${taskId}`);
+        this.currentTaskId = taskId;
+    }
+
+    /**
+     * 开始采集
+     */
+    onCollectionStart(taskId, user) {
+        console.log(`[realtimeEngine] ========== 开始采集 ==========`);
+        console.log(`[realtimeEngine] 任务: ${taskId}`);
+        console.log(`[realtimeEngine] 用户: ${user ? user.name : '未知'} (${user ? user.id : 'N/A'})`);
+        
+        this.currentTaskId = taskId;
+        this.currentUser = user;
+        this.isCollecting = true;
+        this.collectionPaused = false;
+    }
+
+    /**
+     * 暂停采集
+     */
+    onCollectionPause() {
+        console.log(`[realtimeEngine] ========== 暂停采集 ==========`);
+        this.collectionPaused = true;
+    }
+
+    /**
+     * 继续采集
+     */
+    onCollectionResume() {
+        console.log(`[realtimeEngine] ========== 继续采集 ==========`);
+        this.collectionPaused = false;
+    }
+
+    /**
+     * 停止采集
+     */
+    onCollectionStop(completed = false) {
+        console.log(`[realtimeEngine] ========== 停止采集 ==========`);
+        console.log(`[realtimeEngine] 完成状态: ${completed ? '正常完成' : '手动停止'}`);
+        
+        this.isCollecting = false;
+        this.collectionPaused = false;
+        this.currentStageName = null;
+    }
+
+    /**
+     * Stage开始
+     */
+    onStageStart(stageName, stageIndex, timestamp) {
+        console.log(`[realtimeEngine] ========== Stage开始 ==========`);
+        console.log(`[realtimeEngine] Stage: ${stageName} (索引: ${stageIndex})`);
+        console.log(`[realtimeEngine] 时间戳: ${timestamp}`);
+        
+        this.currentStageName = stageName;
+        this.stage_name = stageName;
+        this.stage_start = timestamp;
+    }
+
+    /**
+     * Stage结束
+     */
+    onStageEnd(stageName, stageIndex, timestamp) {
+        console.log(`[realtimeEngine] ========== Stage结束 ==========`);
+        console.log(`[realtimeEngine] Stage: ${stageName} (索引: ${stageIndex})`);
+        console.log(`[realtimeEngine] 时间戳: ${timestamp}`);
+        
+        this.stage_end = timestamp;
+    }
+
+    /**
+     * Prompt信号（来自动画控制器，在stage动画播放时发送）
+     */
+    onPrompt(name, stageName, timestamp) {
+        console.log(`[realtimeEngine] ========== Prompt信号 ==========`);
+        console.log(`[realtimeEngine] Prompt名称: ${name}`);
+        console.log(`[realtimeEngine] 所属Stage: ${stageName}`);
+        console.log(`[realtimeEngine] 时间戳: ${timestamp}`);
+        
+        // 更新prompt相关状态
+        this.prompt_flag = 1;
+        this.prompt_name = name;
+        this.prompt_time = timestamp;
     }
 
 
