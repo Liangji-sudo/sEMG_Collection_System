@@ -44,6 +44,9 @@ class RealtimeEngine extends EventEmitter {
         this.emg_5_packets_count=0;
         this.emg_interval = 0.001; //1ms
 
+        // ===== 新增：双设备帧计数 =====
+        this.dev1_packet_count = 0;
+        this.dev2_packet_count = 0;
 
         // ===== 新增：storage_server zetomq连接配置 =====
         this.storage_server_socket = new zmq.Request();
@@ -269,6 +272,8 @@ class RealtimeEngine extends EventEmitter {
             // 关闭处理
             this.ble_client.onclose = (event) => {
                 //clearTimeout(connectionTimeout);
+                const code = event.code || 0;
+                const reason = event.reason || '';
                 console.log(`[realtimeEngine] ble_server 连接关闭：code=${code}, reason=${reason.toString()}`);
                 // 非主动关闭（code !== 1000）且未达到最大重连次数时重连
                 if (code !== 1000) {
@@ -282,62 +287,151 @@ class RealtimeEngine extends EventEmitter {
         }
     }
 
-    // 1.2 处理新格式的BLE数据包 (type: "data", 来自双设备版ble_server)
+    /**
+     * 1.2 处理新格式的BLE数据包 (type: "data", 来自双设备版ble_server)
+     * 
+     * 修复：现在正确处理双设备数据，分别发送emg1/emg2和imu1/imu2给前端
+     * 新增：支持每帧EMG和每组IMU的独立时间戳
+     */
     handleBleDataPacket(packet) {
         if (!this.isRunning) return;
 
         try {
-            // 提取设备数据（优先使用dev1，如果没有则用dev2）
-            const devData = packet.dev1 || packet.dev2;
-            if (!devData) {
+            // 检查是否有任何设备数据
+            if (!packet.dev1 && !packet.dev2) {
                 // console.log('[realtimeEngine] 无有效设备数据');
                 return;
             }
 
-            // 提取EMG数据: uv是9帧×16通道的微伏值
-            const emgUv = devData.uv;  // [[ch0,ch1,...,ch15], [...], ...] 9帧
-            const emgRaw = devData.raw; // 原始ADC值
-            
-            // 提取IMU数据: imu[0]是第一个IMU传感器
-            const imuData = devData.imu;  // [[acc,gyr,mag], [acc,gyr,mag]]
-            
-            // 统计信息
-            const stats = devData.s;  // [total_frames, lost_frames]
-            const timestamp = devData.t;
+            // 准备数据容器
+            let emg1Data = null;
+            let emg2Data = null;
+            let emg1Timestamps = null;  // EMG1每帧时间戳
+            let emg2Timestamps = null;  // EMG2每帧时间戳
+            let imu1Data = null;
+            let imu2Data = null;
+            let imu1Timestamps = null;  // IMU1每组时间戳
+            let imu2Timestamps = null;  // IMU2每组时间戳
+            let timestamp = packet.ts;
+            let stats1 = null;
+            let stats2 = null;
+            let framesInPacket = 9;
 
-            // 更新包计数
-            const framesInPacket = devData.n || 9;
+            // ========== 处理设备1数据 ==========
+            if (packet.dev1) {
+                const dev1 = Array.isArray(packet.dev1) ? packet.dev1[0] : packet.dev1;
+                
+                if (dev1) {
+                    // EMG数据转置: [帧][通道] -> [通道][帧]
+                    if (dev1.uv && dev1.uv.length > 0) {
+                        emg1Data = this.transposeEMG(dev1.uv);
+                    }
+                    
+                    // EMG时间戳数组（每帧一个）
+                    if (dev1.emg_t && dev1.emg_t.length > 0) {
+                        emg1Timestamps = dev1.emg_t;
+                    }
+                    
+                    // IMU数据: imu[0] = [[acc], [gyr], [mag]]
+                    if (dev1.imu && dev1.imu[0]) {
+                        imu1Data = {
+                            acc: dev1.imu[0][0],  // [ax, ay, az]
+                            gyr: dev1.imu[0][1],  // [gx, gy, gz]
+                            mag: dev1.imu[0][2]   // [mx, my, mz]
+                        };
+                    }
+                    
+                    // IMU时间戳数组（每组一个）
+                    if (dev1.imu_t && dev1.imu_t.length > 0) {
+                        imu1Timestamps = dev1.imu_t;
+                    }
+                    
+                    // 统计信息
+                    stats1 = dev1.s ? { total: dev1.s[0], lost: dev1.s[1] } : null;
+                    framesInPacket = dev1.n || 9;
+                    
+                    // 更新计数
+                    this.dev1_packet_count += framesInPacket;
+                }
+            }
+
+            // ========== 处理设备2数据 ==========
+            if (packet.dev2) {
+                const dev2 = Array.isArray(packet.dev2) ? packet.dev2[0] : packet.dev2;
+                
+                if (dev2) {
+                    // EMG数据转置
+                    if (dev2.uv && dev2.uv.length > 0) {
+                        emg2Data = this.transposeEMG(dev2.uv);
+                    }
+                    
+                    // EMG时间戳数组
+                    if (dev2.emg_t && dev2.emg_t.length > 0) {
+                        emg2Timestamps = dev2.emg_t;
+                    }
+                    
+                    // IMU数据
+                    if (dev2.imu && dev2.imu[0]) {
+                        imu2Data = {
+                            acc: dev2.imu[0][0],
+                            gyr: dev2.imu[0][1],
+                            mag: dev2.imu[0][2]
+                        };
+                    }
+                    
+                    // IMU时间戳数组
+                    if (dev2.imu_t && dev2.imu_t.length > 0) {
+                        imu2Timestamps = dev2.imu_t;
+                    }
+                    
+                    // 统计信息
+                    stats2 = dev2.s ? { total: dev2.s[0], lost: dev2.s[1] } : null;
+                    
+                    // 更新计数
+                    this.dev2_packet_count += (dev2.n || 9);
+                }
+            }
+
+            // 更新总包计数
             this.emg_packet_count += framesInPacket;
             this.emg_5_packets_count++;
 
             /**
              * 构造广播数据包 - 发送给前端显示
-             * 格式适配前端 waveform.js 的需求
+             * 修复：现在包含分离的emg1/emg2和imu1/imu2数据
+             * 新增：每帧EMG和每组IMU都有独立的时间戳
+             * 注意：不再使用兼容字段emg/imu，避免单设备连接时数据被错误显示到两个窗口
              */
             const dataPacket = {
                 type: 'realtime_data',
                 data: {
-                    // EMG数据: 转置为 [通道][帧] 格式，方便前端渲染
-                    // 原始: uv[帧][通道] -> 转换为: emg[通道][帧]
-                    emg: this.transposeEMG(emgUv),
+                    // EMG数据：分别为设备1和设备2（null表示该设备未连接/无数据）
+                    emg1: emg1Data,  // [通道][帧] 格式，16通道 x N帧，或 null
+                    emg2: emg2Data,  // [通道][帧] 格式，16通道 x N帧，或 null
                     
-                    // IMU数据: 使用第一个IMU传感器的数据
-                    // imu[0] = [[ax,ay,az], [gx,gy,gz], [mx,my,mz]]
-                    imu: imuData && imuData[0] ? {
-                        acc: imuData[0][0],  // [ax, ay, az]
-                        gyr: imuData[0][1],  // [gx, gy, gz]
-                        mag: imuData[0][2]   // [mx, my, mz]
-                    } : null,
+                    // EMG时间戳：每帧一个时间戳
+                    emg1_t: emg1Timestamps,  // [t0, t1, ..., t8] 9个时间戳，或 null
+                    emg2_t: emg2Timestamps,  // [t0, t1, ..., t8] 9个时间戳，或 null
+                    
+                    // IMU数据：分别为设备1和设备2
+                    imu1: imu1Data,  // { acc: [ax,ay,az], gyr: [gx,gy,gz], mag: [mx,my,mz] } 或 null
+                    imu2: imu2Data,  // { acc: [ax,ay,az], gyr: [gx,gy,gz], mag: [mx,my,mz] } 或 null
+                    
+                    // IMU时间戳：每组一个时间戳
+                    imu1_t: imu1Timestamps,  // [t0, t1] 2个时间戳，或 null
+                    imu2_t: imu2Timestamps,  // [t0, t1] 2个时间戳，或 null
                     
                     // 元数据
-                    timestamp: timestamp,
+                    timestamp: timestamp,  // 包级别时间戳（保留兼容）
                     packetCount: this.emg_packet_count,
-                    frameIndex: devData.f,
                     framesInPacket: framesInPacket,
-                    stats: {
-                        total: stats ? stats[0] : 0,
-                        lost: stats ? stats[1] : 0
-                    }
+                    
+                    // 双设备统计
+                    stats1: stats1,
+                    stats2: stats2,
+                    
+                    // 活跃设备列表
+                    activeDevices: packet.active || []
                 }
             };
 
@@ -358,7 +452,7 @@ class RealtimeEngine extends EventEmitter {
 
     // 辅助函数：转置EMG数据 [帧][通道] -> [通道][帧]
     transposeEMG(uvData) {
-        if (!uvData || uvData.length === 0) return [];
+        if (!uvData || uvData.length === 0) return null;
         
         const numFrames = uvData.length;      // 9帧
         const numChannels = uvData[0].length; // 16通道
@@ -374,7 +468,22 @@ class RealtimeEngine extends EventEmitter {
         return transposed;
     }
 
-    // 1.3 接受来自ble_server 的大包数据（5*32）数据，并即时广播出去（旧格式兼容）
+    // 1.3 处理重连逻辑
+    handleReconnect(reason = '连接断开') {
+        if (this.currentReconnectTimes >= this.maxReconnectTimes) {
+            console.error(`[realtimeEngine] 达到最大重连次数(${this.maxReconnectTimes})，停止重连`);
+            return;
+        }
+
+        this.currentReconnectTimes++;
+        console.log(`[realtimeEngine] ${reason}，${this.reconnectInterval/1000}秒后进行第${this.currentReconnectTimes}次重连...`);
+
+        this.reconnectTimer = setTimeout(() => {
+            this.ble_server_connect();
+        }, this.reconnectInterval);
+    }
+
+    // 1.4 接受来自ble_server 的大包数据（5*32）数据，并即时广播出去（旧格式兼容）
     async attributeEMGData(emgData) {
         if (!this.isRunning) return;
 
@@ -398,120 +507,41 @@ class RealtimeEngine extends EventEmitter {
             /**
              * 实时显示广播数据包
              */
-
             const dataPacket = {
-                type: 'emg_data',
+                type: 'realtime_data',
                 data: {
-                    big_bag_raw_data: emgData.big_bag_raw_data,  // [string64, string64, string64, string64, string64]//大包的rawData[5]数组放入 big_bag_raw_data
-                    timestamp: emgData.timestamp_array, // [.9f, .9f, .9f, .9f, .9f] // 计算好大包内的5组的时间戳
+                    emg: emgData.big_bag_raw_data,
+                    imu: null,
+                    timestamp: Date.now(),
                     packetCount: this.emg_packet_count,
-                    interval: null // 现在不需要interval，可以以后加
+                    framesInPacket: 5
                 }
             };
 
-            // 广播出去
             this.broadcastToClients(dataPacket);
-            //console.log('realtimeEngine.js 发送一个大包，大包统计：小包统计：', this.emg_5_packets_count,this.emg_packet_count);
-
-            /**
-             * 存储 数据包发送逻辑
-             */
-            await this.storage_manager(emgData.big_bag_raw_data, emgData.timestamp_array);
-
 
         } catch (error) {
             console.error('[realtimeEngine] 处理EMG数据时发生错误:', error);
         }
     }
 
-    
 
-    // 1.2.1 判断存储逻辑
-    async storage_manager(rawData_array, timestamp_array)
-    {
-        if(this.storage_start_flag == 1)
-        {
-            this.storage_start_flag = 0;
-            await this.storage_server_create_new_hdf5_file();
-            return;
-        }
+    /**
+     * 2. storage_server 数据存储连接部分
+     */
 
-        if(this.storage_end_flag == 1)
-        {
-            this.storage_end_flag = 0;
-            await this.storage_server_close_hdf5_file();
-            return;
-        }
-
-        let prompt_name_temp = null;
-        let prompt_time_temp = 0;
-        if(this.prompt_flag == 1)
-        {
-            this.prompt_flag = 0;
-            prompt_name_temp = this.prompt_name;
-            prompt_time_temp = this.prompt_time;
-            this.prompt_name = null;
-            this.prompt_time = 0;
-        }
-
-        
-        const dataPacket_storage = {
-            data: {
-                task: 'discrete_gesture',     //采集任务（discrete/continual1/con2）
-
-                // data
-                big_bag_raw_data: rawData_array,  // [string64, string64, string64, string64, string64]//大包的rawData[5]数组放入 big_bag_raw_data
-                timestamp: timestamp_array, // [.9f, .9f, .9f, .9f, .9f] // 计算好大包内的5组的时间戳
-
-                // prompt
-                prompt_name: prompt_name_temp,
-                prompt_time: prompt_time_temp,
-
-                // stage
-                stage_name: null,
-                stage_start: 0,
-                stage_end: 0
-            }
-        };
-
-        await this.storage_server_append_hdf5_data(dataPacket_storage);
-        return;
-    }
-
-    // 1.3 断线重连逻辑
-    handleReconnect() {
-        // 检查是否达到最大重连次数
-        if (this.maxReconnectTimes > 0 && this.currentReconnectTimes >= this.maxReconnectTimes) {
-        console.error(`[realtimeEngine] ❌ 已达到最大重连次数（${this.maxReconnectTimes}），停止重连`);
-        return;
-        }
-
-        this.currentReconnectTimes++;
-        console.log(`[realtimeEngine] 🔄 正在进行第 ${this.currentReconnectTimes} 次重连目标服务器...`);
-
-        // 延迟重连（避免频繁连接）
-        this.reconnectTimer = setTimeout(() => {
-        this.connectTargetServer();
-        }, this.reconnectInterval);
-    }
-
-
-
-
-
-
-    // 2.1 连接storage_server
-    storage_server_connect() {
+    // 2.1 连接storage_server 服务器
+    async storage_server_connect() {
         try {
-            this.storage_server_socket.connect(`tcp://${this.storage_server_host}:${this.storage_server_port}`);
-            console.log(`已连接到 HDF5 存储服务：${this.storage_server_host}:${this.storage_server_port}`);
+            const address = `tcp://${this.storage_server_host}:${this.storage_server_port}`;
+            await this.storage_server_socket.connect(address);
+            console.log(`[realtimeEngine] 已连接到 storage_server: ${address}`);
         } catch (err) {
-            throw new Error(`连接失败：${err.message}`);
+            console.error(`[realtimeEngine] 连接 storage_server 失败: ${err.message}`);
         }
     }
 
     /**
-     * 发送指令到 Python 服务端（适配新版 API）
      * @param {string} cmd 指令类型：create/write/close
      * @param {object} params 指令参数
      * @returns {Promise<object>} 服务端响应
