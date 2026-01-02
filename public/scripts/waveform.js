@@ -142,15 +142,23 @@
             if (!this.controller || !this.controller.rendererManager) return;
 
             const rm = this.controller.rendererManager;
+            const fm = this.controller.filterManager;
+            const filterEnabled = this.controller.filterEnabled && fm;
             
             // 获取活跃设备列表
             const activeDevices = data.activeDevices || [];
 
             // ===== EMG1数据渲染（仅当设备1有数据时） =====
             if (data.emg1 && data.emg1.length > 0) {
+                // 滤波处理
+                let emg1Display = data.emg1;
+                if (filterEnabled) {
+                    emg1Display = fm.process('emg1', data.emg1);
+                }
+                
                 const emg1Renderer = rm.get('emg1');
                 if (emg1Renderer) {
-                    emg1Renderer.renderPoints(data.emg1);
+                    emg1Renderer.renderPoints(emg1Display);
                 }
                 // 更新帧计数
                 this.controller.frameCount1 += (data.framesInPacket || data.emg1[0].length || 9);
@@ -158,9 +166,15 @@
 
             // ===== EMG2数据渲染（仅当设备2有数据时） =====
             if (data.emg2 && data.emg2.length > 0) {
+                // 滤波处理
+                let emg2Display = data.emg2;
+                if (filterEnabled) {
+                    emg2Display = fm.process('emg2', data.emg2);
+                }
+                
                 const emg2Renderer = rm.get('emg2');
                 if (emg2Renderer) {
-                    emg2Renderer.renderPoints(data.emg2);
+                    emg2Renderer.renderPoints(emg2Display);
                 }
                 // 更新帧计数
                 this.controller.frameCount2 += (data.framesInPacket || data.emg2[0].length || 9);
@@ -248,10 +262,17 @@
             this.stats1 = { total: 0, lost: 0 };
             this.stats2 = { total: 0, lost: 0 };
             
+            // ===== 滤波器管理器 =====
+            this.filterManager = null;
+            this.filterEnabled = true;  // 默认启用滤波
+            
             this.init();
         }
 
         init() {
+            // ===== 初始化滤波器 =====
+            this.initFilters();
+            
             // 创建EMG渲染器
             this.rendererManager.createEMGRenderer(
                 'emg1', 'emg1-canvas', 'emg1-container', 'emg1-pointer', 
@@ -289,6 +310,63 @@
             setInterval(() => this.updateTimeDisplay(), 1000);
 
             console.log('[Waveform] 渲染器初始化完成');
+        }
+
+        /**
+         * 初始化滤波器
+         */
+        initFilters() {
+            // 检查 FilterManager 是否可用
+            if (typeof FilterManager === 'undefined') {
+                console.warn('[Waveform] FilterManager 未加载，滤波功能不可用');
+                this.filterManager = null;
+                return;
+            }
+
+            this.filterManager = new FilterManager();
+            
+            // 创建 EMG 滤波器 (16通道, 1kHz采样率)
+            this.filterManager.createEMGFilter('emg1', {
+                sampleRate: 1000,
+                numChannels: 16,
+                lowcut: 20,
+                highcut: 450,
+                enableBandpass: true,
+                enableNotch: true,
+                notchFreq: 50,
+                notchQ: 15
+            });
+
+            this.filterManager.createEMGFilter('emg2', {
+                sampleRate: 1000,
+                numChannels: 16,
+                lowcut: 20,
+                highcut: 450,
+                enableBandpass: true,
+                enableNotch: true,
+                notchFreq: 50,
+                notchQ: 15
+            });
+
+            console.log('[Waveform] 滤波器初始化完成');
+        }
+
+        /**
+         * 启用/禁用滤波
+         */
+        setFilterEnabled(enabled) {
+            this.filterEnabled = enabled;
+            if (!enabled && this.filterManager) {
+                this.filterManager.resetAll();
+            }
+            console.log(`[Waveform] 滤波已${enabled ? '启用' : '禁用'}`);
+        }
+
+        /**
+         * 获取滤波状态
+         */
+        isFilterEnabled() {
+            return this.filterEnabled && this.filterManager !== null;
         }
 
         updateTimeDisplay() {
@@ -371,6 +449,11 @@
             this.frameCount1 = 0;
             this.frameCount2 = 0;
             this.updateFrameCount();
+            
+            // 重置滤波器状态
+            if (this.filterManager) {
+                this.filterManager.resetAll();
+            }
         }
 
         /**
@@ -409,12 +492,15 @@
         window.startSimulation = () => controller.startRealtime(); // 兼容旧接口
         window.stopWaveform = () => controller.stop();
         window.clearWaveform = () => controller.clearAll();
+        window.setFilterEnabled = (enabled) => controller.setFilterEnabled(enabled);
+        window.isFilterEnabled = () => controller.isFilterEnabled();
         
         console.log('[Waveform] 系统初始化完成');
         console.log('[Waveform] 可用命令:');
         console.log('  - startRealtime(): 启动实时数据显示');
         console.log('  - stopWaveform(): 停止显示');
         console.log('  - clearWaveform(): 清除显示');
+        console.log('  - setFilterEnabled(true/false): 启用/禁用滤波');
     });
 
 })();
