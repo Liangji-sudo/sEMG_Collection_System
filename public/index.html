@@ -1410,6 +1410,709 @@
             opacity: 1;
             transform: translateX(-50%) translateY(0);
         }
+
+        /* ==================== 后台管理页面样式（左右分栏版） ==================== */
+
+        /* 后台页面容器 */
+        #backend-page {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background: #f5f7fa;
+            position: fixed;
+            top: 0;
+            left: 0;
+            z-index: 999;
+        }
+
+        #backend-page.hidden {
+            display: none !important;
+        }
+
+        /* 后台顶部导航 */
+        .backend-header {
+            width: 100%;
+            padding: 16px 24px;
+            background: white;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .backend-header-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .backend-header-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .backend-title {
+            font-size: 20px;
+            font-weight: 700;
+            color: #3b82f6;
+            margin: 0;
+        }
+
+        .backend-btn {
+            padding: 8px 16px;
+            border: none;
+            background: transparent;
+            color: #3b82f6;
+            font-size: 13px;
+            cursor: pointer;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s;
+        }
+
+        .backend-btn:hover {
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .backend-btn-primary {
+            background: #3b82f6;
+            color: white;
+        }
+
+        .backend-btn-primary:hover {
+            background: #2563eb;
+        }
+
+        /* 后台主内容区 - 左右分栏 */
+        .backend-main {
+            flex: 1;
+            display: flex;
+            padding: 24px;
+            gap: 24px;
+            overflow: hidden;
+        }
+
+        /* 通用面板样式 */
+        .backend-panel {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .stats-panel-container {
+            flex: 1;
+            min-width: 400px;
+        }
+
+        .file-panel-container {
+            flex: 1;
+            min-width: 400px;
+        }
+
+        .panel-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .panel-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #1f2937;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .panel-title i {
+            color: #3b82f6;
+        }
+
+        .panel-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .panel-content {
+            flex: 1;
+            padding: 20px 24px;
+            overflow-y: auto;
+        }
+
+        /* 空状态提示 */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 60px 20px;
+            color: #9ca3af;
+            text-align: center;
+            height: 100%;
+        }
+
+        .empty-state i {
+            font-size: 56px;
+            margin-bottom: 16px;
+            color: #e5e7eb;
+        }
+
+        .empty-state p {
+            margin: 4px 0;
+            font-size: 14px;
+        }
+
+        .empty-state .text-sm {
+            font-size: 12px;
+            color: #b0b7c3;
+        }
+
+        /* ========== 左侧统计面板样式 ========== */
+
+        /* 统计卡片网格 */
+        .stats-cards {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: #f9fafb;
+            border-radius: 12px;
+            padding: 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            transition: transform 0.2s;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+        }
+
+        .stat-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+        }
+
+        .stat-card.total .stat-icon {
+            background: linear-gradient(135deg, #3b82f6 0%, #1e40af 100%);
+            color: white;
+        }
+
+        .stat-card.subjects .stat-icon {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+        }
+
+        .stat-card.tasks .stat-icon {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            color: white;
+        }
+
+        .stat-card.size .stat-icon {
+            background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
+            color: white;
+        }
+
+        .stat-info {
+            flex: 1;
+        }
+
+        .stat-value {
+            font-size: 22px;
+            font-weight: 700;
+            color: #1f2937;
+            line-height: 1.2;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #6b7280;
+            margin-top: 2px;
+        }
+
+        /* 统计分区 */
+        .stats-section {
+            margin-bottom: 20px;
+        }
+
+        .stats-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #374151;
+            margin: 0 0 12px 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .section-title i {
+            color: #3b82f6;
+            font-size: 14px;
+        }
+
+        .stats-list {
+            background: #f9fafb;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        .stats-item {
+            padding: 12px 16px;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .stats-item:last-child {
+            border-bottom: none;
+        }
+
+        .stats-item:hover {
+            background: #f3f4f6;
+        }
+
+        .item-name {
+            flex: 1;
+            min-width: 120px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            color: #1f2937;
+        }
+
+        .item-name i {
+            color: #3b82f6;
+            font-size: 14px;
+        }
+
+        .item-meta {
+            display: flex;
+            gap: 6px;
+        }
+
+        .badge {
+            background: rgba(59, 130, 246, 0.1);
+            color: #3b82f6;
+            padding: 3px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .badge.secondary {
+            background: rgba(16, 185, 129, 0.1);
+            color: #059669;
+        }
+
+        .item-tasks {
+            width: 100%;
+            font-size: 11px;
+            color: #6b7280;
+            padding-left: 22px;
+            margin-top: 4px;
+        }
+
+        .empty-hint {
+            padding: 20px;
+            text-align: center;
+            color: #9ca3af;
+            font-size: 13px;
+        }
+
+        /* ========== 右侧文件列表样式 ========== */
+
+        .file-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            background: #f9fafb;
+            border-radius: 10px;
+            transition: all 0.15s;
+            cursor: default;
+        }
+
+        .file-item:hover {
+            background: #f3f4f6;
+        }
+
+        .file-icon {
+            width: 40px;
+            height: 40px;
+            background: white;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #3b82f6;
+            font-size: 16px;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+        }
+
+        .file-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .file-name {
+            font-size: 13px;
+            font-weight: 500;
+            color: #1f2937;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .file-meta {
+            font-size: 11px;
+            color: #9ca3af;
+            margin-top: 4px;
+            display: flex;
+            gap: 12px;
+        }
+
+        .file-meta i {
+            margin-right: 4px;
+        }
+
+        /* 分页 */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 6px;
+            margin-top: 20px;
+            padding-top: 16px;
+            border-top: 1px solid #e5e7eb;
+        }
+
+        .page-btn {
+            min-width: 32px;
+            height: 32px;
+            padding: 0 10px;
+            border: none;
+            background: transparent;
+            color: #6b7280;
+            font-size: 13px;
+            cursor: pointer;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .page-btn:hover:not(.disabled) {
+            background: #f3f4f6;
+        }
+
+        .page-btn.active {
+            background: #3b82f6;
+            color: white;
+        }
+
+        .page-btn.disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: #1f2937;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            z-index: 10000;
+            opacity: 0;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+
+        .toast.visible {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+        }
+
+        .toast.success i {
+            color: #10b981;
+        }
+
+        .toast.error i {
+            color: #ef4444;
+        }
+
+        /* 响应式 */
+        @media (max-width: 900px) {
+            .backend-main {
+                flex-direction: column;
+            }
+            
+            .stats-panel-container,
+            .file-panel-container {
+                min-width: auto;
+            }
+            
+            .stats-cards {
+                grid-template-columns: repeat(4, 1fr);
+            }
+        }
+
+        @media (max-width: 640px) {
+            .stats-cards {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        /* 保留的旧样式 - 兼容其他页面 */
+            align-items: center;
+            padding: 12px 16px;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .file-item:hover {
+            transform: translateX(4px);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            border-color: #3b82f6;
+        }
+
+        .file-item.selected {
+            background: rgba(59, 130, 246, 0.05);
+            border-color: #3b82f6;
+        }
+
+        .file-checkbox {
+            width: 18px;
+            height: 18px;
+            margin-right: 12px;
+            accent-color: #3b82f6;
+            cursor: pointer;
+        }
+
+        .file-icon {
+            margin-right: 12px;
+            font-size: 24px;
+            color: #3b82f6;
+        }
+
+        .file-info {
+            flex: 1;
+        }
+
+        .file-name {
+            font-weight: 600;
+            color: #1f2937;
+            font-size: 14px;
+        }
+
+        .file-meta {
+            font-size: 12px;
+            color: #9ca3af;
+            margin-top: 4px;
+            display: flex;
+            gap: 16px;
+        }
+
+        .file-meta i {
+            margin-right: 4px;
+        }
+
+        .preview-btn {
+            padding: 6px 14px;
+            background: transparent;
+            border: none;
+            color: #3b82f6;
+            font-size: 13px;
+            cursor: pointer;
+            border-radius: 6px;
+            transition: all 0.2s;
+            opacity: 0.7;
+        }
+
+        .file-item:hover .preview-btn {
+            opacity: 1;
+        }
+
+        .preview-btn:hover {
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        /* 分页 */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            gap: 4px;
+            margin-top: 20px;
+            padding-top: 16px;
+            border-top: 1px solid #e5e7eb;
+        }
+
+        .page-btn {
+            width: 32px;
+            height: 32px;
+            border: none;
+            background: transparent;
+            color: #6b7280;
+            font-size: 13px;
+            cursor: pointer;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .page-btn:hover {
+            background: #f3f4f6;
+        }
+
+        .page-btn.active {
+            background: #3b82f6;
+            color: white;
+        }
+
+        .page-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Toast */
+        #backendToast {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-20px);
+            padding: 12px 24px;
+            border-radius: 8px;
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.2);
+            z-index: 4000;
+            opacity: 0;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: white;
+        }
+
+        #backendToast.success {
+            background: #22c55e;
+        }
+
+        #backendToast.error {
+            background: #ef4444;
+        }
+
+        #backendToast.visible {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        /* 数据预览详情区 */
+        .preview-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        .preview-file-header {
+            border-bottom: 1px solid #e5e7eb;
+            padding-bottom: 16px;
+            margin-bottom: 16px;
+        }
+
+        .preview-file-name {
+            font-size: 18px;
+            font-weight: 700;
+            color: #1f2937;
+            margin-bottom: 12px;
+        }
+
+        .preview-section {
+            margin-bottom: 20px;
+        }
+
+        .preview-section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1f2937;
+            margin-bottom: 12px;
+        }
+
+        /* 文件结构树 */
+        .file-tree {
+            padding-left: 16px;
+            border-left: 2px solid rgba(59, 130, 246, 0.3);
+        }
+
+        .tree-item {
+            display: flex;
+            align-items: center;
+            padding: 6px 0;
+            font-size: 13px;
+            color: #4b5563;
+        }
+
+        .tree-item i {
+            margin-right: 8px;
+            width: 16px;
+        }
+
+        .tree-item i.fa-folder {
+            color: #f59e0b;
+        }
+
+        .tree-item i.fa-file {
+            color: #3b82f6;
+        }
+
+        .tree-children {
+            padding-left: 24px;
+            border-left: 2px solid #e5e7eb;
+        }
     </style>
 </head>
 <body class="font-inter bg-light-2 text-dark min-h-screen overflow-x-hidden">
@@ -1882,206 +2585,56 @@
         </div>
     </div>
 
-    <!-- 3.1 后台管理界面 -->
-    <div id="backend-page" class="page hidden h-screen flex flex-col">
+    <!-- 3.1 后台管理界面（左右分栏版） -->
+    <div id="backend-page" class="hidden">
         <!-- 顶部导航 -->
-        <header class="w-full p-4 bg-white shadow-sm flex items-center justify-between">
-          <div class="flex items-center">
-            <button id="back-to-initial-2" class="btn-hover mr-4 text-primary">
-              <i class="fa fa-arrow-left mr-1"></i>返回
-            </button>
-            <h1 class="text-xl font-bold text-primary">数据管理后台</h1>
-          </div>
-          <div class="flex items-center space-x-4">
-            <button class="btn-hover text-primary">
-              <i class="fa fa-search mr-1"></i>搜索
-            </button>
-            <button class="btn-hover text-primary">
-              <i class="fa fa-upload mr-1"></i>导出
-            </button>
-          </div>
+        <header class="backend-header">
+            <div class="backend-header-left">
+                <button id="back-to-initial-2" class="backend-btn">
+                    <i class="fa fa-arrow-left"></i>返回
+                </button>
+                <h1 class="backend-title">数据管理后台</h1>
+            </div>
+            <div class="backend-header-right">
+                <button class="backend-btn" id="refreshBtn">
+                    <i class="fa fa-refresh"></i>刷新
+                </button>
+                <button class="backend-btn backend-btn-primary" id="selectFolderBtn">
+                    <i class="fa fa-folder-open"></i>选择文件夹
+                </button>
+            </div>
         </header>
 
-        <!-- 主内容区域 -->
-        <main class="flex-1 flex p-6 bg-light-2">
-          <!-- 左侧预览区域 -->
-          <div class="w-1/2 bg-white rounded-2xl p-6 shadow-lg mr-6 flex flex-col">
-            <h2 class="text-xl font-bold mb-4 flex items-center">
-              <i class="fa fa-file-text-o text-primary mr-2"></i>数据文件预览
-            </h2>
-            
-            <!-- 初始状态提示 -->
-            <div id="file-preview" class="text-center py-12 text-dark-2 flex-1 flex flex-col items-center justify-center">
-              <i class="fa fa-file-code-o text-6xl mb-4 text-light-1"></i>
-              <p>请在右侧选择一个HDF5文件进行预览</p>
-              <p class="text-sm mt-2">支持查看文件结构、多通道信号波形和基本统计信息</p>
-            </div>
-
-            <!-- 数据预览区域 -->
-            <div id="data-preview" class="hidden flex-1 flex flex-col">
-              <div class="border-b border-light-1 pb-4 mb-4">
-                <h3 class="font-bold text-lg" id="preview-filename">data_20251107_1430.hdf5</h3>
-                <div class="flex flex-wrap gap-2 mt-2">
-                  <span class="bg-primary/10 text-primary text-xs px-2 py-1 rounded" id="preview-createTime">创建时间: 2025-11-07 14:30:22</span>
-                  <span class="bg-primary/10 text-primary text-xs px-2 py-1 rounded" id="preview-size">文件大小: 128.5 MB</span>
-                  <span class="bg-primary/10 text-primary text-xs px-2 py-1 rounded">sEMG: 16通道 × 10000采样点</span>
-                  <span class="bg-primary/10 text-primary text-xs px-2 py-1 rounded">IMU: 9通道 × 10000采样点</span>
+        <!-- 主内容区域 - 左右分栏 -->
+        <main class="backend-main">
+            <!-- 左侧统计面板 -->
+            <div class="backend-panel stats-panel-container">
+                <div class="panel-header">
+                    <h2 class="panel-title">
+                        <i class="fa fa-bar-chart"></i> 数据统计
+                    </h2>
                 </div>
-              </div>
-
-              <!-- 信号图表预览窗口 -->
-              <div class="mb-6 flex-1 min-h-[300px]">
-                <h4 class="font-bold mb-3">多通道信号预览</h4>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 h-full">
-                  <!-- sEMG信号图表 -->
-                  <div class="bg-light-2 p-3 rounded-lg h-full">
-                    <h5 class="text-sm font-medium mb-2">sEMG信号 (16通道)</h5>
-                    <div class="w-full h-[200px]">
-                      <canvas id="semg-chart"></canvas>
-                    </div>
-                  </div>
-                  <!-- IMU信号图表 -->
-                  <div class="bg-light-2 p-3 rounded-lg h-full">
-                    <h5 class="text-sm font-medium mb-2">IMU信号 (9通道)</h5>
-                    <div class="w-full h-[200px]">
-                      <canvas id="imu-chart"></canvas>
-                    </div>
-                  </div>
+                <div class="panel-content" id="stats-panel">
+                    <!-- 统计内容由JS动态填充 -->
                 </div>
-              </div>
+            </div>
 
-              <!-- 文件结构 -->
-              <div class="mb-4 flex-1 overflow-auto">
-                <h4 class="font-bold mb-2">文件结构</h4>
-                <div class="pl-4 border-l-2 border-primary/30">
-                  <div class="flex items-center py-1">
-                    <i class="fa fa-folder text-warning mr-2"></i>
-                    <span>root</span>
-                  </div>
-                  <div class="pl-6 border-l-2 border-light-1">
-                    <div class="flex items-center py-1">
-                      <i class="fa fa-folder text-warning mr-2"></i>
-                      <span>sEMG (16通道)</span>
+            <!-- 右侧文件列表面板 -->
+            <div class="backend-panel file-panel-container">
+                <div class="panel-header">
+                    <h2 class="panel-title">
+                        <i class="fa fa-folder-open"></i> 文件列表
+                    </h2>
+                    <div class="panel-actions">
+                        <button class="backend-btn" id="sortBtn">
+                            <i class="fa fa-sort"></i> 排序
+                        </button>
                     </div>
-                    <div class="pl-6 border-l-2 border-light-1">
-                      <div class="flex items-center py-1">
-                        <i class="fa fa-file text-primary mr-2"></i>
-                        <span>channel_01 (10000×1)</span>
-                      </div>
-                      <div class="flex items-center py-1">
-                        <i class="fa fa-file text-primary mr-2"></i>
-                        <span>channel_02 (10000×1)</span>
-                      </div>
-                      <div class="flex items-center py-1 text-primary">
-                        <i class="fa fa-ellipsis-h mr-2"></i>
-                        <span>... 其余14个通道</span>
-                      </div>
-                    </div>
-                    <div class="flex items-center py-1">
-                      <i class="fa fa-folder text-warning mr-2"></i>
-                      <span>IMU (9通道)</span>
-                    </div>
-                    <div class="pl-6 border-l-2 border-light-1">
-                      <div class="flex items-center py-1">
-                        <i class="fa fa-file text-primary mr-2"></i>
-                        <span>accelerometer (10000×3)</span>
-                      </div>
-                      <div class="flex items-center py-1">
-                        <i class="fa fa-file text-primary mr-2"></i>
-                        <span>gyroscope (10000×3)</span>
-                      </div>
-                      <div class="flex items-center py-1">
-                        <i class="fa fa-file text-primary mr-2"></i>
-                        <span>magnetometer (10000×3)</span>
-                      </div>
-                    </div>
-                    <div class="flex items-center py-1">
-                      <i class="fa fa-folder text-warning mr-2"></i>
-                      <span>metadata</span>
-                    </div>
-                    <div class="pl-6 border-l-2 border-light-1">
-                      <div class="flex items-center py-1">
-                        <i class="fa fa-file text-primary mr-2"></i>
-                        <span>device_info</span>
-                      </div>
-                      <div class="flex items-center py-1">
-                        <i class="fa fa-file text-primary mr-2"></i>
-                        <span>gesture_labels</span>
-                      </div>
-                      <div class="flex items-center py-1">
-                        <i class="fa fa-file text-primary mr-2"></i>
-                        <span>calibration_data</span>
-                      </div>
-                    </div>
-                  </div>
                 </div>
-              </div>
-
-              <!-- 数据统计摘要 -->
-              <div class="flex-1">
-                <h4 class="font-bold mb-2">数据统计摘要</h4>
-                <div class="grid grid-cols-2 gap-4">
-                  <div class="bg-light-2 p-3 rounded-lg">
-                    <div class="text-sm text-dark-2">sEMG信号</div>
-                    <div class="text-lg font-bold" id="stats-semgRange">±2.56 mV</div>
-                    <div class="text-xs text-dark-2">采样率: 1000 Hz | 带宽: 20-500 Hz</div>
-                  </div>
-                  <div class="bg-light-2 p-3 rounded-lg">
-                    <div class="text-sm text-dark-2">IMU - 加速度</div>
-                    <div class="text-lg font-bold" id="stats-imuAccRange">±1.25 g</div>
-                    <div class="text-xs text-dark-2">采样率: 200 Hz | 量程: ±8g</div>
-                  </div>
-                  <div class="bg-light-2 p-3 rounded-lg">
-                    <div class="text-sm text-dark-2">IMU - 角速度</div>
-                    <div class="text-lg font-bold" id="stats-imuGyroRange">±15.3 °/s</div>
-                    <div class="text-xs text-dark-2">采样率: 200 Hz | 量程: ±2000°/s</div>
-                  </div>
-                  <div class="bg-light-2 p-3 rounded-lg">
-                    <div class="text-sm text-dark-2">数据完整性</div>
-                    <div class="text-lg font-bold text-success" id="stats-completeness">100%</div>
-                    <div class="text-xs text-dark-2">无缺失 | 无异常值 | 无噪声</div>
-                  </div>
+                <div class="panel-content" id="file-list-panel">
+                    <!-- 文件列表由JS动态填充 -->
                 </div>
-              </div>
             </div>
-          </div>
-
-          <!-- 右侧文件管理器 -->
-          <div class="w-1/2 bg-white rounded-2xl p-6 shadow-lg overflow-auto">
-            <div class="flex justify-between items-center mb-4">
-              <h2 class="text-xl font-bold flex items-center">
-                <i class="fa fa-folder-open text-primary mr-2"></i>采集文件列表
-              </h2>
-              <div class="flex items-center space-x-2">
-                <button class="btn-hover text-sm text-primary">
-                  <i class="fa fa-sort-amount-asc mr-1"></i>排序
-                </button>
-                <button class="btn-hover text-sm text-primary">
-                  <i class="fa fa-trash-o mr-1"></i>删除选中
-                </button>
-              </div>
-            </div>
-
-            <!-- 文件列表（将通过API动态加载） -->
-            <div class="space-y-2" id="file-list">
-              <!-- 这里将由JS动态填充 -->
-            </div>
-
-            <!-- 分页 -->
-            <div class="flex justify-center mt-6">
-              <nav class="flex items-center space-x-1">
-                <button class="btn-hover w-8 h-8 rounded flex items-center justify-center text-dark-2">
-                  <i class="fa fa-angle-left"></i>
-                </button>
-                <button class="w-8 h-8 rounded flex items-center justify-center bg-primary text-white">1</button>
-                <button class="btn-hover w-8 h-8 rounded flex items-center justify-center text-dark-2">2</button>
-                <button class="btn-hover w-8 h-8 rounded flex items-center justify-center text-dark-2">3</button>
-                <button class="btn-hover w-8 h-8 rounded flex items-center justify-center text-dark-2">
-                  <i class="fa fa-angle-right"></i>
-                </button>
-              </nav>
-            </div>
-          </div>
         </main>
     </div>
 
@@ -2117,6 +2670,8 @@
     <script defer src="scripts/page-switch.js"></script>
     <!-- 配置管理器（加载/预览配置文件） -->
     <script defer src="scripts/config-manager.js"></script>
+    <!-- 后台数据管理 -->
+    <script defer src="scripts/backend-manager.js"></script>
     <!-- 采集任务控制器 -->
     <script defer src="scripts/collection-controller.js"></script>
 

@@ -2,7 +2,7 @@
  * page-switch.js - 页面切换控制器
  * 
  * 职责：
- * 1. 页面切换（欢迎页 ↔ 采集页）
+ * 1. 页面切换（欢迎页 ↔ 采集页 ↔ 后台页）
  * 2. 用户信息管理（表单、保存、显示）
  * 3. 波形显示控制
  * 4. Toast提示
@@ -41,6 +41,15 @@
                 });
             }
 
+            // 后台按钮（首页）
+            const backendBtn = document.getElementById('backendBtn');
+            if (backendBtn) {
+                backendBtn.addEventListener('click', () => {
+                    console.log('[PageSwitch] 点击后台按钮');
+                    this.showBackend();
+                });
+            }
+
             // 用户表单提交
             const userForm = document.getElementById('userForm');
             if (userForm) {
@@ -50,12 +59,21 @@
                 });
             }
 
-            // 返回按钮
+            // 返回按钮（采集页）
             const backBtn = document.getElementById('backBtn');
             if (backBtn) {
                 backBtn.addEventListener('click', () => {
-                    console.log('[PageSwitch] 点击返回按钮');
+                    console.log('[PageSwitch] 点击返回按钮（采集页）');
                     this.backToWelcome();
+                });
+            }
+
+            // 返回按钮（后台页）
+            const backBtn2 = document.getElementById('back-to-initial-2');
+            if (backBtn2) {
+                backBtn2.addEventListener('click', () => {
+                    console.log('[PageSwitch] 点击返回按钮（后台页）');
+                    this.backToWelcomeFromBackend();
                 });
             }
 
@@ -78,9 +96,11 @@
             
             const welcomeScreen = document.getElementById('welcomeScreen');
             const collectionScreen = document.getElementById('collectionScreen');
+            const backendPage = document.getElementById('backend-page');
             
             if (welcomeScreen) welcomeScreen.classList.remove('hidden');
             if (collectionScreen) collectionScreen.style.display = 'none';
+            if (backendPage) backendPage.classList.add('hidden');
             
             this.stopWaveform();
         }
@@ -93,9 +113,11 @@
             
             const welcomeScreen = document.getElementById('welcomeScreen');
             const collectionScreen = document.getElementById('collectionScreen');
+            const backendPage = document.getElementById('backend-page');
             
             if (welcomeScreen) welcomeScreen.classList.add('hidden');
             if (collectionScreen) collectionScreen.style.display = 'flex';
+            if (backendPage) backendPage.classList.add('hidden');
             
             this.startWaveform();
             
@@ -103,6 +125,34 @@
             if (window.collectionController) {
                 window.collectionController.onPageShow();
             }
+        }
+
+        /**
+         * 显示后台页面
+         */
+        showBackend() {
+            console.log('[PageSwitch] 切换到后台页面');
+            
+            const welcomeScreen = document.getElementById('welcomeScreen');
+            const collectionScreen = document.getElementById('collectionScreen');
+            const backendPage = document.getElementById('backend-page');
+            
+            if (welcomeScreen) welcomeScreen.classList.add('hidden');
+            if (collectionScreen) collectionScreen.style.display = 'none';
+            if (backendPage) backendPage.classList.remove('hidden');
+            
+            // 通知后台管理器页面已显示
+            if (window.backendManager && !window.backendManager._initialized) {
+                window.backendManager.init();
+                window.backendManager._initialized = true;
+            }
+        }
+
+        /**
+         * 从后台返回欢迎页面
+         */
+        backToWelcomeFromBackend() {
+            this.showWelcome();
         }
 
         /**
@@ -126,7 +176,7 @@
         }
 
         /**
-         * 返回欢迎页面
+         * 返回欢迎页面（从采集页）
          */
         backToWelcome() {
             // 检查采集控制器是否正在运行
