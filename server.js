@@ -2,10 +2,20 @@
 server.js
 负责启动采集模式的所有模块，包括（deviceSync, ble_server, realtimeEngine, taskManager, storage）
 */ 
+
+// ===================== 日志系统初始化（必须最先执行）=====================
+const { initLogger } = require('./logger');
+const logger = initLogger({
+    maxFileSize: 20 * 1024 * 1024,  // 20MB
+    maxFiles: 10,                    // 最多保留 10 个日志文件
+    filePrefix: 'server'             // 日志文件前缀
+});
+
+// ===================== 其他模块引入 =====================
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const fs = require('fs');  // 添加 fs 模块
+const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -288,6 +298,12 @@ function setupGracefulShutdown() {
             await deviceSync.close();
             await realtimeEngine.stop();
             await dataStorage.close();
+            
+            // 关闭日志系统
+            if (logger) {
+                logger.close();
+            }
+            
             console.log('服务器关闭完成');
             process.exit(0);
         } catch (error) {
