@@ -122,7 +122,7 @@
       "icon": "fa-hand-point-up",
       "taskType": "wheel_cursor",
       "wheelTaskConfig": {
-        "maxTrials": 10,
+        "maxTrials": 2,
         "stageTimeout": 120000,
         "dwellMs": 500,
         "targetFrac": 0.12,
@@ -147,7 +147,7 @@
           "instruction": "滚动滚轮将光标移动到蓝色目标区域，保持500ms命中",
           "icon": "🎯",
           "color": "#10b981",
-          "maxTrials": 1,
+          "maxTrials": 2,
           "timeout": 120000
         },
         {
@@ -156,7 +156,7 @@
           "instruction": "滚动滚轮将光标移动到蓝色目标区域，保持500ms命中",
           "icon": "🎯",
           "color": "#10b981",
-          "maxTrials": 1,
+          "maxTrials": 2,
           "timeout": 120000
         },
         {
@@ -165,7 +165,7 @@
           "instruction": "滚动滚轮将光标移动到蓝色目标区域，保持500ms命中",
           "icon": "🎯",
           "color": "#10b981",
-          "maxTrials": 1,
+          "maxTrials": 2,
           "timeout": 120000
         },
         {
@@ -174,7 +174,7 @@
           "instruction": "滚动滚轮将光标移动到蓝色目标区域，保持500ms命中",
           "icon": "🎯",
           "color": "#10b981",
-          "maxTrials": 1,
+          "maxTrials": 2,
           "timeout": 120000
         }
       ]
@@ -212,7 +212,7 @@
           "instruction": "用手腕动作控制光标移动到橙色目标区域",
           "icon": "🔄",
           "color": "#f59e0b",
-          "maxTrials": 1,
+          "maxTrials": 10,
           "timeout": 120000
         },
         {
@@ -221,7 +221,7 @@
           "instruction": "用手腕动作控制光标移动到橙色目标区域",
           "icon": "🔄",
           "color": "#f59e0b",
-          "maxTrials": 1,
+          "maxTrials": 10,
           "timeout": 120000
         },
         {
@@ -230,7 +230,7 @@
           "instruction": "用手腕动作控制光标移动到橙色目标区域",
           "icon": "🔄",
           "color": "#f59e0b",
-          "maxTrials": 1,
+          "maxTrials": 10,
           "timeout": 120000
         },
         {
@@ -239,7 +239,7 @@
           "instruction": "用手腕动作控制光标移动到橙色目标区域",
           "icon": "🔄",
           "color": "#f59e0b",
-          "maxTrials": 1,
+          "maxTrials": 10,
           "timeout": 120000
         }
       ]
