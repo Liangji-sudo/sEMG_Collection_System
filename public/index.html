@@ -1089,6 +1089,327 @@
             opacity: 0.5;
             cursor: not-allowed;
         }
+
+        /* ==================== 配置管理卡片样式 ==================== */
+        .config-card {
+            background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+        }
+
+        .config-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: #1e40af;
+            margin: 4px 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .config-buttons {
+            display: flex;
+            gap: 6px;
+            margin-top: 6px;
+        }
+
+        .config-btn {
+            flex: 1;
+            padding: 5px 8px;
+            border: none;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            transition: all 0.2s;
+        }
+
+        .config-btn.load-btn {
+            background: #3b82f6;
+            color: white;
+        }
+
+        .config-btn.load-btn:hover {
+            background: #2563eb;
+            transform: translateY(-1px);
+        }
+
+        .config-btn.preview-btn {
+            background: white;
+            color: #374151;
+            border: 1px solid #d1d5db;
+        }
+
+        .config-btn.preview-btn:hover {
+            background: #f3f4f6;
+            border-color: #9ca3af;
+        }
+
+        /* ==================== 配置预览弹窗样式 ==================== */
+        .config-modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(4px);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 3000;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .config-modal-overlay.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .config-modal {
+            background: white;
+            border-radius: 16px;
+            width: 700px;
+            max-width: 90vw;
+            max-height: 85vh;
+            box-shadow: 0 25px 80px rgba(0, 0, 0, 0.25);
+            transform: scale(0.9) translateY(20px);
+            transition: transform 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .config-modal-overlay.visible .config-modal {
+            transform: scale(1) translateY(0);
+        }
+
+        .config-modal-header {
+            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
+            color: white;
+            padding: 20px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .config-modal-title {
+            font-size: 18px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .config-modal-close {
+            background: rgba(255, 255, 255, 0.2);
+            border: none;
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+        }
+
+        .config-modal-close:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .config-modal-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+        }
+
+        /* 预览内容样式 */
+        .preview-section {
+            margin-bottom: 24px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .preview-section:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+        }
+
+        .preview-section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1e40af;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .preview-section-title i {
+            color: #3b82f6;
+        }
+
+        .preview-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+
+        .preview-item {
+            background: #f9fafb;
+            padding: 10px 12px;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .preview-label {
+            font-size: 11px;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .preview-value {
+            font-size: 13px;
+            font-weight: 500;
+            color: #1f2937;
+        }
+
+        .preview-task-info {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .preview-badge {
+            background: #dbeafe;
+            color: #1e40af;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .preview-stages {
+            background: #f9fafb;
+            border-radius: 8px;
+            padding: 8px;
+        }
+
+        .preview-stage-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            border-radius: 6px;
+            transition: background 0.2s;
+        }
+
+        .preview-stage-item:hover {
+            background: #e5e7eb;
+        }
+
+        .preview-stage-num {
+            width: 24px;
+            height: 24px;
+            background: #3b82f6;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .preview-stage-icon {
+            font-size: 16px;
+        }
+
+        .preview-stage-name {
+            flex: 1;
+            font-size: 13px;
+            color: #374151;
+        }
+
+        .preview-stage-count {
+            font-size: 11px;
+            color: #6b7280;
+            background: white;
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
+
+        .preview-prompt-summary {
+            font-size: 13px;
+            color: #374151;
+            margin-bottom: 12px;
+        }
+
+        .preview-prompt-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .preview-prompt-tag {
+            background: white;
+            border: 1px solid #e5e7eb;
+            padding: 4px 10px;
+            border-radius: 16px;
+            font-size: 11px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            border-left-width: 3px;
+        }
+
+        .preview-empty {
+            text-align: center;
+            padding: 40px;
+            color: #9ca3af;
+            font-size: 14px;
+        }
+
+        /* ConfigToast样式 */
+        #configToast {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-20px);
+            padding: 12px 24px;
+            border-radius: 8px;
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.2);
+            z-index: 4000;
+            opacity: 0;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: white;
+        }
+
+        #configToast.success {
+            background: #22c55e;
+        }
+
+        #configToast.error {
+            background: #ef4444;
+        }
+
+        #configToast.visible {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
     </style>
 </head>
 <body class="font-inter bg-light-2 text-dark min-h-screen overflow-x-hidden">
@@ -1228,18 +1549,25 @@
                     </div>
                 </div>
 
-                <!-- 传输吞吐量 -->
-                <div class="status-card">
+                <!-- 配置管理 -->
+                <div class="status-card config-card">
                     <div class="status-card-header">
                         <div class="status-card-title">
-                            <i class="fas fa-exchange-alt"></i> 传输速率
+                            <i class="fas fa-cogs"></i> 配置管理
                         </div>
+                        <span class="status-badge connected" id="configStatus">已加载</span>
                     </div>
-                    <div class="status-value"><span id="throughputValue">0</span> <small>kb/s</small></div>
-                    <div class="status-sub">实时数据流</div>
-                    <div class="status-progress">
-                        <div class="status-progress-fill green" id="throughputBar" style="width: 0%;"></div>
+                    <div class="config-name" id="configName">默认配置</div>
+                    <div class="config-buttons">
+                        <button class="config-btn load-btn" id="loadConfigBtn">
+                            <i class="fas fa-folder-open"></i> 加载
+                        </button>
+                        <button class="config-btn preview-btn" id="previewConfigBtn">
+                            <i class="fas fa-eye"></i> 预览
+                        </button>
                     </div>
+                    <!-- 隐藏的文件输入 -->
+                    <input type="file" id="configFileInput" accept=".json" style="display: none;">
                 </div>
             </div>
         </footer>
@@ -1291,6 +1619,24 @@
                     <i class="fas fa-check"></i> 确认并开始
                 </button>
             </form>
+        </div>
+    </div>
+
+    <!-- ==================== 配置预览弹窗 ==================== -->
+    <div class="config-modal-overlay" id="configPreviewModal">
+        <div class="config-modal">
+            <div class="config-modal-header">
+                <div class="config-modal-title">
+                    <i class="fas fa-file-alt"></i>
+                    配置预览
+                </div>
+                <button class="config-modal-close">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="config-modal-body" id="configPreviewContent">
+                <!-- 内容由JS动态生成 -->
+            </div>
         </div>
     </div>
 
@@ -1769,6 +2115,8 @@
     <script src="scripts/animation-controller.js"></script>
     <!-- 页面切换控制 -->
     <script defer src="scripts/page-switch.js"></script>
+    <!-- 配置管理器（加载/预览配置文件） -->
+    <script defer src="scripts/config-manager.js"></script>
     <!-- 采集任务控制器 -->
     <script defer src="scripts/collection-controller.js"></script>
 

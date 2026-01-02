@@ -487,9 +487,100 @@ const CollectionTiming = {
 
 window.CollectionTiming = CollectionTiming;
 
+// ==================== TaskConfig 整合（原task-config.js） ====================
+/**
+ * 任务配置 - 整合到 collection-constants.js
+ * 这些定义主要用于UI显示和任务管理
+ */
+const TASK_DEFINITIONS = {
+    discrete_gesture: {
+        id: 'discrete_gesture',
+        name: '离散手势',
+        description: '4种单独手势采集',
+        icon: 'fa-hand-paper',
+        taskType: 'prompt_sequence',
+        stages: [
+            { name: 'palm_up', label: '手心向上', instruction: '请将手掌向上平放' },
+            { name: 'palm_inward', label: '手心向内', instruction: '请将手心朝向身体' },
+            { name: 'hand_on_knee', label: '手放膝盖', instruction: '请将手自然放在膝盖上' },
+            { name: 'hand_on_desk', label: '手放桌上', instruction: '请将手自然放在桌面上' }
+        ]
+    },
+    continual_gesture_1: {
+        id: 'continual_gesture_1',
+        name: '连续手势1',
+        description: '滚轮控制光标任务',
+        icon: 'fa-hand-point-up',
+        taskType: 'wheel_cursor',
+        stages: [
+            { name: 'wheel_task_1', label: '滚轮控制任务1', instruction: '滚动滚轮将光标移动到目标区域', icon: '🎯', color: '#10b981', maxTrials: 10, timeout: 120000 },
+            { name: 'wheel_task_2', label: '滚轮控制任务2', instruction: '滚动滚轮将光标移动到目标区域', icon: '🎯', color: '#10b981', maxTrials: 10, timeout: 120000 },
+            { name: 'wheel_task_3', label: '滚轮控制任务3', instruction: '滚动滚轮将光标移动到目标区域', icon: '🎯', color: '#10b981', maxTrials: 10, timeout: 120000 },
+            { name: 'wheel_task_4', label: '滚轮控制任务4', instruction: '滚动滚轮将光标移动到目标区域', icon: '🎯', color: '#10b981', maxTrials: 10, timeout: 120000 }
+        ]
+    },
+    continual_gesture_2: {
+        id: 'continual_gesture_2',
+        name: '连续手势2',
+        description: '手腕控制光标任务',
+        icon: 'fa-hand-peace',
+        taskType: 'wheel_cursor',
+        stages: [
+            { name: 'wrist_control_1', label: '手腕控制任务1', instruction: '用手腕动作控制光标移动到目标区域', icon: '🔄', color: '#f59e0b', maxTrials: 10, timeout: 120000 },
+            { name: 'wrist_control_2', label: '手腕控制任务2', instruction: '用手腕动作控制光标移动到目标区域', icon: '🔄', color: '#f59e0b', maxTrials: 10, timeout: 120000 },
+            { name: 'wrist_control_3', label: '手腕控制任务3', instruction: '用手腕动作控制光标移动到目标区域', icon: '🔄', color: '#f59e0b', maxTrials: 10, timeout: 120000 },
+            { name: 'wrist_control_4', label: '手腕控制任务4', instruction: '用手腕动作控制光标移动到目标区域', icon: '🔄', color: '#f59e0b', maxTrials: 10, timeout: 120000 }
+        ]
+    }
+};
+
+// HTML中的data-task属性到内部ID的映射
+const TASK_ID_MAP = {
+    'discrete': 'discrete_gesture',
+    'continuous1': 'continual_gesture_1',
+    'continuous2': 'continual_gesture_2'
+};
+
+// TaskConfig API（兼容原task-config.js的接口）
+window.TaskConfig = {
+    DEFINITIONS: TASK_DEFINITIONS,
+    ID_MAP: TASK_ID_MAP,
+    
+    getTaskIds() {
+        return Object.keys(TASK_DEFINITIONS);
+    },
+    
+    getTaskConfig(taskId) {
+        return TASK_DEFINITIONS[taskId] || null;
+    },
+    
+    getTaskStages(taskId) {
+        const config = TASK_DEFINITIONS[taskId];
+        return config ? config.stages : [];
+    },
+    
+    getTaskType(taskId) {
+        const config = TASK_DEFINITIONS[taskId];
+        return config ? (config.taskType || 'prompt_sequence') : 'prompt_sequence';
+    },
+    
+    isWheelTask(taskId) {
+        return this.getTaskType(taskId) === 'wheel_cursor';
+    },
+    
+    addTaskDefinition(taskId, taskConfig) {
+        if (TASK_DEFINITIONS[taskId]) {
+            console.warn(`[TaskConfig] 任务 ${taskId} 已存在，将被覆盖`);
+        }
+        TASK_DEFINITIONS[taskId] = taskConfig;
+        console.log(`[TaskConfig] 已添加任务: ${taskId}`);
+    }
+};
+
 // 打印加载信息
-console.log('[Constants] 采集常量已加载（v3 - 滚轮任务支持）');
+console.log('[Constants] 采集常量已加载（v4 - 整合TaskConfig + 支持外部配置）');
 console.log('[Constants] 离散手势 Stage数:', Object.keys(DISCRETE_GESTURE_CONFIG.STAGES).length);
 console.log('[Constants] 离散手势 Prompt库:', Object.keys(DISCRETE_GESTURE_CONFIG.PROMPT_LIBRARY).length, '个动作');
 console.log('[Constants] 连续手势1 Stage数:', Object.keys(CONTINUAL_GESTURE_1_CONFIG.STAGES).length, '(滚轮任务)');
 console.log('[Constants] 连续手势2 Stage数:', Object.keys(CONTINUAL_GESTURE_2_CONFIG.STAGES).length, '(滚轮任务)');
+console.log('[Constants] TaskConfig已整合，共', Object.keys(TASK_DEFINITIONS).length, '个任务定义');
