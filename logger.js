@@ -14,6 +14,7 @@ const path = require('path');
 
 class Logger {
     constructor(options = {}) {
+        // 如果传入了 logDir 就使用，否则使用默认的 __dirname/log
         this.logDir = options.logDir || path.join(__dirname, 'log');
         this.maxFileSize = options.maxFileSize || 20 * 1024 * 1024;  // 默认 20MB
         this.maxFiles = options.maxFiles || 10;  // 默认保留 10 个文件

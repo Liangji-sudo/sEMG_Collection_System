@@ -3,12 +3,16 @@ server.js
 负责启动采集模式的所有模块，包括（deviceSync, ble_server, realtimeEngine, taskManager, storage）
 */ 
 
-// ===================== 日志系统初始化（必须最先执行）=====================
+// ===================== 路径管理（必须最先执行）=====================
+const { PATHS, isPackaged } = require('./paths');
+
+// ===================== 日志系统初始化 =====================
 const { initLogger } = require('./logger');
 const logger = initLogger({
-    maxFileSize: 20 * 1024 * 1024,  // 20MB
-    maxFiles: 10,                    // 最多保留 10 个日志文件
-    filePrefix: 'server'             // 日志文件前缀
+    logDir: PATHS.log,               // 使用统一的日志目录
+    maxFileSize: 20 * 1024 * 1024,   // 20MB
+    maxFiles: 10,                     // 最多保留 10 个日志文件
+    filePrefix: 'server'              // 日志文件前缀
 });
 
 // ===================== 其他模块引入 =====================
@@ -32,12 +36,12 @@ const dataStorage = require('./dataStorage');
 // 中间件配置， 用于给前端获取数据的接口
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(PATHS.public));
 
 
 // ===================== Storage 文件列表 API =====================
 app.get('/api/storage/files', (req, res) => {
-    const storageDir = path.join(__dirname, 'storage');
+    const storageDir = PATHS.storage;
     
     if (!fs.existsSync(storageDir)) {
         return res.json({ success: false, error: 'storage 目录不存在', files: [] });
@@ -75,7 +79,7 @@ app.get('/api/storage/files', (req, res) => {
 
 // ===================== Config 配置文件列表 API =====================
 app.get('/api/config/files', (req, res) => {
-    const configDir = path.join(__dirname, 'config');
+    const configDir = PATHS.config;
     
     if (!fs.existsSync(configDir)) {
         return res.json({ success: false, error: 'config 目录不存在', files: [] });
@@ -104,7 +108,7 @@ app.get('/api/config/files', (req, res) => {
 // ===================== 读取单个配置文件内容 API =====================
 app.get('/api/config/load/:filename', (req, res) => {
     const { filename } = req.params;
-    const configPath = path.join(__dirname, 'config', filename);
+    const configPath = path.join(PATHS.config, filename);
     
     // 安全检查：防止路径遍历攻击
     if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
@@ -261,7 +265,7 @@ app.get('/api/preview-file/:filename', (req, res) => {
 
 // 所有路由都指向index.html（支持前端路由）
 app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    res.sendFile(path.join(PATHS.public, 'index.html'));
 });
 
 

@@ -1,10 +1,16 @@
 /*
  dataStorage.js
  负责启动storage_server, 以及监控storage_server的传输信息（数据不接受，只接收一些统计信息，为前端提供api接口）
+ 
+ 修改记录：
+ - 引入 paths.js 获取正确的存储路径
+ - 启动 Python 时传入 --storage_dir 参数
 */
 
 const { spawn } = require('child_process');
 const EventEmitter = require('events');
+const path = require('path');
+const { PATHS } = require('./paths'); // [新增] 引入路径管理模块
 
 class DataStorage extends EventEmitter {
     constructor() {
@@ -18,8 +24,22 @@ class DataStorage extends EventEmitter {
             try {
                 console.log('[dataStorage] 正在启动storage_server......');
                 
-                // 启动Python子进程，连接固定设备（无需传参，脚本内已固定MAC）
-                this.pythonProcess = spawn('python', ['storage_server.py']);
+                // [关键修改] 获取 Python 脚本的绝对路径
+                // 在打包后，脚本位于 resources/app/ 下，与 dataStorage.js 同级
+                const scriptPath = path.join(__dirname, 'storage_server.py');
+                
+                // [关键修改] 获取外部可写的 storage 目录 (exe同级目录)
+                const storageDir = PATHS.storage;
+
+                console.log(`[dataStorage] Python脚本路径: ${scriptPath}`);
+                console.log(`[dataStorage] 数据存储目标路径: ${storageDir}`);
+
+                // [关键修改] 启动参数：脚本路径 + storage路径参数
+                this.pythonProcess = spawn('python', [
+                    scriptPath, 
+                    '--storage_dir', 
+                    storageDir
+                ]);
                 
                 this.pythonProcess.on('spawn', () => {
                     console.log('[dataStorage] storage_server已启动');
@@ -34,6 +54,13 @@ class DataStorage extends EventEmitter {
                     }
                 });
 
+                // 接收标准输出（如果有）
+                this.pythonProcess.stdout.on('data', (data) => {
+                    const log = data.toString().trim();
+                    if (log) {
+                         console.log(`[Python STDOUT] ${log}`);
+                    }
+                });
 
                 this.pythonProcess.on('error', (error) => {
                     console.error('[dataStorage] storage_server发生错误:', error.message);
@@ -60,11 +87,11 @@ class DataStorage extends EventEmitter {
             if (this.pythonProcess) {
                 this.pythonProcess.kill();
                 this.pythonProcess = null;
-                console.log('[deviceSync] ble_server关闭');
+                console.log('[dataStorage] storage_server关闭');
                 this.emit('disconnected');
                 resolve();
             } else {
-                console.log('[deviceSync] ble_server未启动，无需关闭');
+                console.log('[dataStorage] storage_server未启动，无需关闭');
                 resolve();
             }
         });

@@ -1,19 +1,17 @@
 """
-storage_server.py - HDF5数据存储服务 (v2.0)
+storage_server.py - HDF5数据存储服务 (v2.1)
 
 功能:
 1. 接收来自realtimeEngine.js的双设备EMG+IMU数据
 2. 存储stage信息（name, start, end）
 3. 存储prompt信息（仅离散手势任务需要）
-4. 支持多任务类型（discrete_gesture, continual_gesture_1, continual_gesture_2）
+4. 支持多任务类型
+5. [新增] 支持通过命令行参数指定存储路径，适配Electron打包环境
 
 数据结构:
-- emg1: 设备1的16通道EMG数据
-- emg2: 设备2的16通道EMG数据  
-- imu1: 设备1的IMU数据（acc, gyr, mag各3通道）
-- imu2: 设备2的IMU数据
-- prompts: prompt标签和时间戳（仅离散手势）
-- stages: stage名称、开始和结束时间戳
+- emg1/emg2: 16通道EMG
+- imu1/imu2: 9轴IMU
+- prompts/stages: 标注数据
 
 文件命名:
 {task_id}_{user_id}_{YYYYMMDD}_{HHMMSS}.h5
@@ -25,6 +23,7 @@ import json
 import os
 import sys
 import io
+import argparse # [新增] 用于解析命令行参数
 from datetime import datetime
 import numpy as np
 from threading import Lock
@@ -63,11 +62,17 @@ class HDF5StorageServer:
         self.socket.bind(f"tcp://{host}:{port}")
         debug_log(f"HDF5存储服务已启动，监听 {host}:{port}")
         
-        # 存储目录
-        self.storage_dir = storage_dir
-        if not os.path.exists(storage_dir):
-            os.makedirs(storage_dir)
-            debug_log(f"创建存储目录: {storage_dir}")
+        # [修改] 使用传入的 storage_dir，并转换为绝对路径
+        self.storage_dir = os.path.abspath(storage_dir)
+        debug_log(f"存储根目录设置为: {self.storage_dir}")
+        
+        # 确保存储目录存在
+        if not os.path.exists(self.storage_dir):
+            try:
+                os.makedirs(self.storage_dir)
+                debug_log(f"创建存储目录: {self.storage_dir}")
+            except Exception as e:
+                debug_log(f"❌ 创建存储目录失败: {e}")
         
         # HDF5文件相关
         self.file_path = None
@@ -98,6 +103,7 @@ class HDF5StorageServer:
         date_str = now.strftime("%Y%m%d")
         time_str = now.strftime("%H%M%S")
         filename = f"{task_id}_{user_id}_{date_str}_{time_str}.h5"
+        # [修改] 使用 self.storage_dir 拼接路径
         return os.path.join(self.storage_dir, filename)
     
     def create_file(self, params):
@@ -293,13 +299,7 @@ class HDF5StorageServer:
             return {"status": "error", "msg": f"追加数据失败：{str(e)}"}
     
     def _append_emg(self, dataset_name, emg_data, timestamps):
-        """追加EMG数据
-        
-        Args:
-            dataset_name: "emg1" 或 "emg2"
-            emg_data: [通道][帧] 格式，16通道 x N帧
-            timestamps: [t0, t1, ..., tN-1] N个时间戳
-        """
+        """追加EMG数据"""
         try:
             ds = self.f[dataset_name]
             
@@ -311,7 +311,6 @@ class HDF5StorageServer:
             if len(timestamps) != num_frames:
                 # 如果时间戳数量不匹配，尝试插值或截断
                 if len(timestamps) < num_frames:
-                    # 复制最后一个时间戳
                     timestamps = list(timestamps) + [timestamps[-1]] * (num_frames - len(timestamps))
                 else:
                     timestamps = timestamps[:num_frames]
@@ -340,13 +339,7 @@ class HDF5StorageServer:
             return 0
     
     def _append_imu(self, dataset_name, imu_data, timestamps):
-        """追加IMU数据
-        
-        Args:
-            dataset_name: "imu1" 或 "imu2"
-            imu_data: { acc: [ax,ay,az], gyr: [gx,gy,gz], mag: [mx,my,mz] }
-            timestamps: [t0] 或 [t0, t1] 时间戳列表
-        """
+        """追加IMU数据"""
         try:
             ds = self.f[dataset_name]
             
@@ -531,5 +524,15 @@ class HDF5StorageServer:
 
 
 if __name__ == "__main__":
-    server = HDF5StorageServer()
+    # [新增] 解析命令行参数
+    parser = argparse.ArgumentParser(description='HDF5 Storage Server')
+    parser.add_argument('--storage_dir', type=str, default='./storage',
+                        help='HDF5文件存储目录')
+    parser.add_argument('--port', type=int, default=5555,
+                        help='ZeroMQ监听端口')
+    
+    args = parser.parse_args()
+    
+    # 将解析到的路径传入 Server
+    server = HDF5StorageServer(port=args.port, storage_dir=args.storage_dir)
     server.run()
