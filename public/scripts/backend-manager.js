@@ -68,14 +68,22 @@
 
         /**
          * 保存当前统计数据供下次比较（仅在离开页面时保存）
+         * 
+         * 注意：保存时会记录一个简单的"指纹"，用于检测目录是否发生变化
          */
         saveCurrentStats() {
+            // 使用第一个文件名作为简单的目录指纹
+            // 如果目录内容完全不同，这个指纹会变化
+            const firstFileName = this.files.length > 0 ? this.files[0].name : '';
+            
             const statsToSave = {
                 totalFiles: this.stats.totalFiles,
                 totalSize: this.stats.totalSize,
                 subjectCount: Object.keys(this.stats.subjects).length,
                 taskCount: Object.keys(this.stats.tasks).length,
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                // 新增：目录指纹，用于检测目录切换
+                fingerprint: `${this.stats.totalFiles}_${firstFileName}`
             };
             localStorage.setItem('emg_backend_last_stats', JSON.stringify(statsToSave));
             console.log('[BackendManager] 已保存当前统计数据');
@@ -368,6 +376,15 @@
 
         /**
          * 计算统计数据的变化量
+         * 
+         * 修复说明：
+         * 当 storage 目录路径发生变化（如打包后切换目录）时，
+         * localStorage 中保存的旧数据可能与当前目录不匹配，
+         * 导致计算出不合理的负数增量。
+         * 
+         * 解决方案：
+         * 1. 如果计算出的所有增量都是负数，说明可能发生了目录切换，清除旧数据
+         * 2. 只有当增量合理时才显示
          */
         calculateChanges(subjectCount, taskCount) {
             const changes = {
@@ -381,10 +398,34 @@
                 return changes;
             }
 
-            changes.totalFiles = this.stats.totalFiles - this.lastStats.totalFiles;
-            changes.subjectCount = subjectCount - this.lastStats.subjectCount;
-            changes.taskCount = taskCount - this.lastStats.taskCount;
-            changes.totalSize = this.stats.totalSize - this.lastStats.totalSize;
+            // 计算各项增量
+            const fileDiff = this.stats.totalFiles - this.lastStats.totalFiles;
+            const subjectDiff = subjectCount - this.lastStats.subjectCount;
+            const taskDiff = taskCount - this.lastStats.taskCount;
+            const sizeDiff = this.stats.totalSize - this.lastStats.totalSize;
+
+            // 检查是否所有增量都是负数（或大部分是负数）
+            // 这通常意味着 storage 目录发生了变化，旧数据不再有效
+            const negativeCount = [fileDiff, subjectDiff, taskDiff].filter(d => d < 0).length;
+            
+            // 如果文件数增量为负数，且负数项超过一半，认为数据不匹配
+            // 这种情况下清除旧数据，不显示增量
+            if (fileDiff < 0 && negativeCount >= 2) {
+                console.log('[BackendManager] 检测到数据目录可能已切换，清除旧统计数据');
+                console.log(`[BackendManager] 旧数据: files=${this.lastStats.totalFiles}, 新数据: files=${this.stats.totalFiles}`);
+                
+                // 清除不匹配的旧数据
+                localStorage.removeItem('emg_backend_last_stats');
+                this.lastStats = null;
+                
+                return changes; // 返回空增量
+            }
+
+            // 数据匹配，返回正常增量
+            changes.totalFiles = fileDiff;
+            changes.subjectCount = subjectDiff;
+            changes.taskCount = taskDiff;
+            changes.totalSize = sizeDiff;
 
             return changes;
         }
