@@ -4,24 +4,6 @@ BLE Server Mock - 模拟ESP32S3_EMG设备 (无硬件测试版本)
 这是一个模拟版本，不需要实际的BLE硬件设备。
 它会生成模拟的EMG和IMU数据，供前端调试使用。
 
-【测试波形版本】
-=================================================================
-此版本使用特殊的测试波形，便于验证硬件隔离：
-
-EMG 16通道波形分布：
-  - 通道 0-3:   方波 (Square Wave)   - 频率 2/3.5/5/6.5 Hz
-  - 通道 4-7:   锯齿波 (Sawtooth)    - 频率 3/5/7/9 Hz
-  - 通道 8-11:  三角波 (Triangle)    - 频率 4/5.5/7/8.5 Hz
-  - 通道 12-15: 阶梯波 (Stair-step)  - 频率 1.5/2/2.5/3 Hz
-
-IMU 运动模式：
-  - 加速度计：8字形运动轨迹
-  - 陀螺仪：大幅度(±50°/s)正弦摆动
-  - 磁力计：缓慢旋转（5秒一圈）
-
-如需恢复原始模拟波形，请使用 ble_server_original.py
-=================================================================
-
 支持：
   - 两个模拟蓝牙设备（独立控制）
   - 两个 WebSocket 客户端：
@@ -141,64 +123,43 @@ class MockDataGenerator:
         self.motion_freq = 0.5 + random.uniform(-0.2, 0.2)
     
     def generate_emg_frame(self) -> List[float]:
-        """
-        生成一帧16通道EMG数据（单位：μV）
-        
-        【测试波形版本】- 使用明显不同的波形模式：
-        - 通道 0-3:   方波 (Square Wave) - 频率递增
-        - 通道 4-7:   锯齿波 (Sawtooth Wave) - 频率递增
-        - 通道 8-11:  三角波 (Triangle Wave) - 频率递增
-        - 通道 12-15: 阶梯波 (Stair-step Wave) - 每通道不同阶数
-        
-        这样你可以在示波器界面上一眼看出是测试数据！
-        """
+        """生成一帧16通道EMG数据（单位：μV）"""
         emg_data = []
-        t = self.time
         
         for ch in range(16):
-            amp = 80 + ch * 5  # 幅度随通道递增，便于区分
+            # 更新肌肉活动（缓慢变化）
+            if random.random() < 0.02:
+                self.muscle_targets[ch] = 0.2 + random.random() * 0.8
             
-            if ch < 4:
-                # ===== 通道 0-3: 方波 =====
-                freq = 2 + ch * 1.5  # 2Hz, 3.5Hz, 5Hz, 6.5Hz
-                period = 1.0 / freq
-                # 方波：周期前半为正，后半为负
-                phase_in_period = (t % period) / period
-                signal = amp if phase_in_period < 0.5 else -amp
-                
-            elif ch < 8:
-                # ===== 通道 4-7: 锯齿波 =====
-                freq = 3 + (ch - 4) * 2  # 3Hz, 5Hz, 7Hz, 9Hz
-                period = 1.0 / freq
-                # 锯齿波：从 -amp 线性上升到 +amp
-                phase_in_period = (t % period) / period
-                signal = -amp + 2 * amp * phase_in_period
-                
-            elif ch < 12:
-                # ===== 通道 8-11: 三角波 =====
-                freq = 4 + (ch - 8) * 1.5  # 4Hz, 5.5Hz, 7Hz, 8.5Hz
-                period = 1.0 / freq
-                phase_in_period = (t % period) / period
-                # 三角波：前半周期上升，后半周期下降
-                if phase_in_period < 0.5:
-                    signal = -amp + 4 * amp * phase_in_period
-                else:
-                    signal = amp - 4 * amp * (phase_in_period - 0.5)
-                    
+            diff = self.muscle_targets[ch] - self.muscle_activity[ch]
+            self.muscle_activity[ch] += diff * 0.05
+            
+            # 基础EMG信号（多个频率成分）
+            t = self.time
+            freq = self.emg_base_freqs[ch]
+            phase = self.emg_phases[ch]
+            amp = self.emg_amplitudes[ch] * self.muscle_activity[ch]
+            
+            # 主频成分
+            signal = amp * math.sin(2 * math.pi * freq * t + phase)
+            
+            # 添加谐波
+            signal += amp * 0.3 * math.sin(2 * math.pi * freq * 2 * t + phase * 1.5)
+            signal += amp * 0.15 * math.sin(2 * math.pi * freq * 0.5 * t + phase * 0.7)
+            
+            # 添加随机爆发（模拟肌电爆发）
+            if random.random() < 0.01:
+                signal += random.uniform(-100, 100) * self.muscle_activity[ch]
+            
+            # 添加噪声
+            if HAS_NUMPY:
+                noise = np.random.normal(0, self.emg_noise_level)
             else:
-                # ===== 通道 12-15: 阶梯波 =====
-                freq = 1.5 + (ch - 12) * 0.5  # 1.5Hz, 2Hz, 2.5Hz, 3Hz
-                steps = 4 + (ch - 12)  # 4级, 5级, 6级, 7级阶梯
-                period = 1.0 / freq
-                phase_in_period = (t % period) / period
-                # 阶梯波：分成N级台阶
-                step_index = int(phase_in_period * steps)
-                signal = -amp + (2 * amp / (steps - 1)) * step_index
+                # Box-Muller变换生成高斯噪声
+                u1, u2 = random.random(), random.random()
+                noise = math.sqrt(-2 * math.log(u1)) * math.cos(2 * math.pi * u2) * self.emg_noise_level
             
-            # 添加少量噪声（但保持波形清晰可辨）
-            noise = random.uniform(-3, 3)
             signal += noise
-            
             emg_data.append(signal)
         
         self.time += self.dt
@@ -232,59 +193,48 @@ class MockDataGenerator:
         }
     
     def generate_imu_data(self) -> Dict:
-        """
-        生成IMU数据（2组，每组包含加速度计、陀螺仪、磁力计）
-        
-        【测试波形版本】- 使用明显的周期性模式：
-        - 加速度计：模拟"8字形"运动轨迹
-        - 陀螺仪：大幅度正弦摆动
-        - 磁力计：缓慢旋转
-        """
+        """生成IMU数据（2组，每组包含加速度计、陀螺仪、磁力计，以及独立时间戳）"""
         imu_data = []
-        imu_timestamps = []
+        imu_timestamps = []  # 每组IMU的时间戳
         
         base_time = time.time()
-        imu_interval = 0.005  # 5ms (200Hz)
+        imu_interval = 0.005  # IMU采样间隔5ms (200Hz)
         
-        for i in range(2):
-            t = self.time + i * imu_interval
+        for i in range(2):  # 2组IMU数据
+            t = self.time
             
-            # ===== 加速度计 (g) - 8字形运动 =====
-            motion_freq = 0.8  # 较快的运动频率
+            # 加速度计 (g)
             acc = [
-                0.3 * math.sin(2 * math.pi * motion_freq * t),           # X: 正弦
-                0.3 * math.sin(2 * math.pi * motion_freq * 2 * t),       # Y: 2倍频（形成8字）
-                1.0 + 0.2 * math.cos(2 * math.pi * motion_freq * t),     # Z: 重力 + 上下摆动
+                self.acc_bias[0] + 0.1 * math.sin(2 * math.pi * self.motion_freq * t + self.motion_phase),
+                self.acc_bias[1] + 0.1 * math.cos(2 * math.pi * self.motion_freq * t + self.motion_phase),
+                1.0 + self.acc_bias[2] + 0.05 * math.sin(2 * math.pi * self.motion_freq * 2 * t),
             ]
+            # 添加噪声
+            acc = [a + random.uniform(-0.02, 0.02) for a in acc]
             
-            # ===== 陀螺仪 (deg/s) - 大幅度摆动 =====
-            gyro_freq = 1.2
+            # 陀螺仪 (deg/s)
             gyr = [
-                50 * math.sin(2 * math.pi * gyro_freq * t),              # Roll: ±50 deg/s
-                50 * math.cos(2 * math.pi * gyro_freq * t),              # Pitch: ±50 deg/s  
-                30 * math.sin(2 * math.pi * gyro_freq * 0.5 * t),        # Yaw: 慢速摆动
+                self.gyr_bias[0] + 10 * math.sin(2 * math.pi * self.motion_freq * t),
+                self.gyr_bias[1] + 10 * math.cos(2 * math.pi * self.motion_freq * t),
+                self.gyr_bias[2] + 5 * math.sin(2 * math.pi * self.motion_freq * 0.5 * t),
             ]
+            gyr = [g + random.uniform(-2, 2) for g in gyr]
             
-            # ===== 磁力计 (μT) - 模拟缓慢旋转 =====
-            mag_freq = 0.2  # 5秒一圈
-            mag_strength = 50  # 地磁场强度约50μT
+            # 磁力计 (μT)
             mag = [
-                mag_strength * math.cos(2 * math.pi * mag_freq * t),     # X
-                mag_strength * math.sin(2 * math.pi * mag_freq * t),     # Y
-                -30 + 5 * math.sin(2 * math.pi * mag_freq * 2 * t),      # Z (向下)
+                self.mag_base[0] + 2 * math.sin(2 * math.pi * 0.1 * t),
+                self.mag_base[1] + 2 * math.cos(2 * math.pi * 0.1 * t),
+                self.mag_base[2] + 1 * math.sin(2 * math.pi * 0.05 * t),
             ]
-            
-            # 添加少量噪声
-            acc = [a + random.uniform(-0.01, 0.01) for a in acc]
-            gyr = [g + random.uniform(-1, 1) for g in gyr]
-            mag = [m + random.uniform(-0.5, 0.5) for m in mag]
+            mag = [m + random.uniform(-1, 1) for m in mag]
             
             imu_data.append([acc, gyr, mag])
+            # 每组IMU时间戳 = 基准时间 + 组索引 * IMU采样间隔
             imu_timestamps.append(base_time + i * imu_interval)
         
         return {
             'data': imu_data,
-            't': imu_timestamps,
+            't': imu_timestamps,  # IMU时间戳数组
         }
     
     def generate_packet(self) -> Dict:
