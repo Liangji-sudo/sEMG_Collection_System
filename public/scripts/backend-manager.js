@@ -2,8 +2,9 @@
  * backend-manager.js - 后台数据统计模块（左右分栏版）
  * 
  * 功能：
- * 1. 左侧：统计总览（文件数、受试者、任务分类）
+ * 1. 左侧：统计总览（文件数、受试者、任务分类）+ 变化气泡
  * 2. 右侧：文件列表（支持排序）
+ * 3. 自动从服务端 /api/storage/files 加载 storage/ 目录
  * 
  * 文件命名格式：[采集任务名]_[受试者编号]_[年月日]_[时分秒].h5
  */
@@ -22,35 +23,72 @@
                 subjects: {},
                 tasks: {}
             };
+            this.lastStats = null; // 上次打开时的统计数据
             this.sortMode = 'time-desc'; // 默认按时间降序
             this.currentPage = 1;
             this.pageSize = 15;
         }
 
         /**
-         * 初始化
+         * 初始化（只执行一次）
          */
         init() {
             console.log('[BackendManager] 初始化开始');
             this.bindEvents();
-            this.renderEmptyState();
             console.log('[BackendManager] 初始化完成 ✓');
+        }
+
+        /**
+         * 每次进入后台页面时调用
+         */
+        onPageShow() {
+            console.log('[BackendManager] 进入后台页面，开始加载数据...');
+            this.loadLastStats();  // 先加载上次的统计数据
+            this.renderLoadingState();
+            this.loadStorageFiles();  // 再加载当前数据
+        }
+
+        /**
+         * 加载上次保存的统计数据
+         */
+        loadLastStats() {
+            const saved = localStorage.getItem('emg_backend_last_stats');
+            if (saved) {
+                try {
+                    this.lastStats = JSON.parse(saved);
+                    console.log('[BackendManager] 已加载上次统计数据:', this.lastStats);
+                } catch (e) {
+                    console.warn('[BackendManager] 解析上次统计数据失败:', e);
+                    this.lastStats = null;
+                }
+            } else {
+                this.lastStats = null;
+            }
+        }
+
+        /**
+         * 保存当前统计数据供下次比较（仅在离开页面时保存）
+         */
+        saveCurrentStats() {
+            const statsToSave = {
+                totalFiles: this.stats.totalFiles,
+                totalSize: this.stats.totalSize,
+                subjectCount: Object.keys(this.stats.subjects).length,
+                taskCount: Object.keys(this.stats.tasks).length,
+                timestamp: Date.now()
+            };
+            localStorage.setItem('emg_backend_last_stats', JSON.stringify(statsToSave));
+            console.log('[BackendManager] 已保存当前统计数据');
         }
 
         /**
          * 绑定事件
          */
         bindEvents() {
-            // 选择文件夹按钮
-            const selectFolderBtn = document.getElementById('selectFolderBtn');
-            if (selectFolderBtn) {
-                selectFolderBtn.addEventListener('click', () => this.openFolderSelector());
-            }
-
             // 刷新按钮
             const refreshBtn = document.getElementById('refreshBtn');
             if (refreshBtn) {
-                refreshBtn.addEventListener('click', () => this.openFolderSelector());
+                refreshBtn.addEventListener('click', () => this.loadStorageFiles());
             }
 
             // 排序按钮
@@ -59,64 +97,37 @@
                 sortBtn.addEventListener('click', () => this.toggleSort());
             }
 
-            // 创建隐藏的文件输入
-            if (!document.getElementById('folderInput')) {
-                const input = document.createElement('input');
-                input.type = 'file';
-                input.id = 'folderInput';
-                input.webkitdirectory = true;
-                input.directory = true;
-                input.multiple = true;
-                input.style.display = 'none';
-                input.addEventListener('change', (e) => this.handleFolderSelected(e));
-                document.body.appendChild(input);
-            }
-
             console.log('[BackendManager] 事件绑定完成');
         }
 
         /**
-         * 打开文件夹选择器
+         * 从服务端加载 storage 目录文件列表
          */
-        openFolderSelector() {
-            const input = document.getElementById('folderInput');
-            if (input) {
-                input.click();
+        async loadStorageFiles() {
+            console.log('[BackendManager] 开始加载 storage 目录...');
+            this.renderLoadingState();
+
+            try {
+                const response = await fetch('/api/storage/files');
+                const data = await response.json();
+
+                if (data.success) {
+                    console.log('[BackendManager] 从服务端获取到', data.files.length, '个文件');
+                    
+                    this.files = data.files;
+                    this.parseAndAnalyze();
+                    this.render();
+                    this.showToast(`已加载 ${data.count} 个文件`, 'success');
+                } else {
+                    console.error('[BackendManager] 加载失败:', data.error);
+                    this.renderErrorState(data.error);
+                    this.showToast('加载失败: ' + data.error, 'error');
+                }
+            } catch (err) {
+                console.error('[BackendManager] 请求失败:', err);
+                this.renderErrorState('无法连接到服务器');
+                this.showToast('无法连接到服务器', 'error');
             }
-        }
-
-        /**
-         * 处理文件夹选择
-         */
-        handleFolderSelected(event) {
-            const allFiles = Array.from(event.target.files);
-            if (allFiles.length === 0) return;
-
-            console.log('[BackendManager] 扫描到', allFiles.length, '个文件');
-
-            // 只过滤h5文件
-            const h5Files = allFiles.filter(f => 
-                f.name.endsWith('.h5') || f.name.endsWith('.hdf5')
-            );
-
-            console.log('[BackendManager] 找到', h5Files.length, '个h5文件');
-
-            // 保存文件列表
-            this.files = h5Files.map(file => ({
-                name: file.name,
-                size: file.size,
-                lastModified: file.lastModified,
-                path: file.webkitRelativePath || file.name
-            }));
-
-            // 解析并统计
-            this.parseAndAnalyze();
-            
-            // 渲染
-            this.render();
-
-            // 清空input
-            event.target.value = '';
         }
 
         /**
@@ -268,6 +279,59 @@
         }
 
         /**
+         * 渲染加载状态
+         */
+        renderLoadingState() {
+            const leftPanel = document.getElementById('stats-panel');
+            const rightPanel = document.getElementById('file-list-panel');
+            
+            if (leftPanel) {
+                leftPanel.innerHTML = `
+                    <div class="empty-state">
+                        <i class="fa fa-spinner fa-spin"></i>
+                        <p>正在加载 storage 目录...</p>
+                    </div>
+                `;
+            }
+            
+            if (rightPanel) {
+                rightPanel.innerHTML = `
+                    <div class="empty-state">
+                        <i class="fa fa-spinner fa-spin"></i>
+                        <p>加载中...</p>
+                    </div>
+                `;
+            }
+        }
+
+        /**
+         * 渲染错误状态
+         */
+        renderErrorState(error) {
+            const leftPanel = document.getElementById('stats-panel');
+            const rightPanel = document.getElementById('file-list-panel');
+            
+            if (leftPanel) {
+                leftPanel.innerHTML = `
+                    <div class="empty-state">
+                        <i class="fa fa-exclamation-triangle"></i>
+                        <p>加载失败</p>
+                        <p class="text-sm">${error}</p>
+                    </div>
+                `;
+            }
+            
+            if (rightPanel) {
+                rightPanel.innerHTML = `
+                    <div class="empty-state">
+                        <i class="fa fa-exclamation-triangle"></i>
+                        <p>点击刷新重试</p>
+                    </div>
+                `;
+            }
+        }
+
+        /**
          * 渲染空状态
          */
         renderEmptyState() {
@@ -287,8 +351,8 @@
                 rightPanel.innerHTML = `
                     <div class="empty-state">
                         <i class="fa fa-folder-open"></i>
-                        <p>请选择 storage 文件夹</p>
-                        <p class="text-sm">点击右上角"选择文件夹"按钮</p>
+                        <p>storage/ 目录为空</p>
+                        <p class="text-sm">采集数据后自动显示</p>
                     </div>
                 `;
             }
@@ -300,7 +364,51 @@
         render() {
             this.renderStats();
             this.renderFileList();
-            this.showToast(`已扫描 ${this.stats.totalFiles} 个文件`, 'success');
+        }
+
+        /**
+         * 计算统计数据的变化量
+         */
+        calculateChanges(subjectCount, taskCount) {
+            const changes = {
+                totalFiles: null,
+                subjectCount: null,
+                taskCount: null,
+                totalSize: null
+            };
+
+            if (!this.lastStats) {
+                return changes;
+            }
+
+            changes.totalFiles = this.stats.totalFiles - this.lastStats.totalFiles;
+            changes.subjectCount = subjectCount - this.lastStats.subjectCount;
+            changes.taskCount = taskCount - this.lastStats.taskCount;
+            changes.totalSize = this.stats.totalSize - this.lastStats.totalSize;
+
+            return changes;
+        }
+
+        /**
+         * 渲染变化气泡
+         */
+        renderChangeBadge(change, isSize = false) {
+            if (change === null || change === 0) {
+                return '';
+            }
+
+            const isPositive = change > 0;
+            const badgeClass = isPositive ? 'positive' : 'negative';
+            const prefix = isPositive ? '+' : '';
+            
+            let displayValue;
+            if (isSize) {
+                displayValue = prefix + this.formatFileSize(Math.abs(change));
+            } else {
+                displayValue = prefix + change;
+            }
+
+            return `<span class="stat-change-badge ${badgeClass}">${displayValue}</span>`;
         }
 
         /**
@@ -311,22 +419,21 @@
             if (!container) return;
 
             if (this.files.length === 0) {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <i class="fa fa-exclamation-circle"></i>
-                        <p>未找到 .h5 文件</p>
-                    </div>
-                `;
+                this.renderEmptyState();
                 return;
             }
 
             const subjectCount = Object.keys(this.stats.subjects).length;
             const taskCount = Object.keys(this.stats.tasks).length;
 
+            // 计算变化量
+            const changes = this.calculateChanges(subjectCount, taskCount);
+
             let html = `
                 <!-- 总览卡片 -->
                 <div class="stats-cards">
                     <div class="stat-card total">
+                        ${this.renderChangeBadge(changes.totalFiles)}
                         <div class="stat-icon"><i class="fa fa-database"></i></div>
                         <div class="stat-info">
                             <div class="stat-value">${this.stats.totalFiles}</div>
@@ -334,6 +441,7 @@
                         </div>
                     </div>
                     <div class="stat-card subjects">
+                        ${this.renderChangeBadge(changes.subjectCount)}
                         <div class="stat-icon"><i class="fa fa-users"></i></div>
                         <div class="stat-info">
                             <div class="stat-value">${subjectCount}</div>
@@ -341,6 +449,7 @@
                         </div>
                     </div>
                     <div class="stat-card tasks">
+                        ${this.renderChangeBadge(changes.taskCount)}
                         <div class="stat-icon"><i class="fa fa-tasks"></i></div>
                         <div class="stat-info">
                             <div class="stat-value">${taskCount}</div>
@@ -348,6 +457,7 @@
                         </div>
                     </div>
                     <div class="stat-card size">
+                        ${this.renderChangeBadge(changes.totalSize, true)}
                         <div class="stat-icon"><i class="fa fa-hdd-o"></i></div>
                         <div class="stat-info">
                             <div class="stat-value">${this.formatFileSize(this.stats.totalSize)}</div>
@@ -616,9 +726,17 @@
                 if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
                     const backendPage = document.getElementById('backend-page');
                     if (backendPage && !backendPage.classList.contains('hidden')) {
-                        if (!manager._initialized) {
+                        // 首次初始化
+                        if (!manager._bindingDone) {
                             manager.init();
-                            manager._initialized = true;
+                            manager._bindingDone = true;
+                        }
+                        // 每次进入页面都刷新数据
+                        manager.onPageShow();
+                    } else if (backendPage && backendPage.classList.contains('hidden')) {
+                        // 离开页面时保存统计数据
+                        if (manager.stats.totalFiles > 0) {
+                            manager.saveCurrentStats();
                         }
                     }
                 }

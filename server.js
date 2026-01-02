@@ -5,6 +5,7 @@ server.js
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');  // 添加 fs 模块
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -23,8 +24,97 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ===================== 仅新增这一段（不改动其他代码） =====================
-// 接收前端按钮点击的POST请求
+
+// ===================== Storage 文件列表 API =====================
+app.get('/api/storage/files', (req, res) => {
+    const storageDir = path.join(__dirname, 'storage');
+    
+    if (!fs.existsSync(storageDir)) {
+        return res.json({ success: false, error: 'storage 目录不存在', files: [] });
+    }
+
+    const files = [];
+    
+    function readDirRecursive(dir, relativePath = '') {
+        const items = fs.readdirSync(dir);
+        for (const item of items) {
+            const fullPath = path.join(dir, item);
+            const relPath = relativePath ? `${relativePath}/${item}` : item;
+            const stat = fs.statSync(fullPath);
+            
+            if (stat.isDirectory()) {
+                readDirRecursive(fullPath, relPath);
+            } else if (item.endsWith('.h5') || item.endsWith('.hdf5')) {
+                files.push({
+                    name: item,
+                    path: relPath,
+                    size: stat.size,
+                    lastModified: stat.mtimeMs
+                });
+            }
+        }
+    }
+    
+    try {
+        readDirRecursive(storageDir);
+        res.json({ success: true, files: files, count: files.length });
+    } catch (err) {
+        res.json({ success: false, error: err.message, files: [] });
+    }
+});
+
+// ===================== Config 配置文件列表 API =====================
+app.get('/api/config/files', (req, res) => {
+    const configDir = path.join(__dirname, 'config');
+    
+    if (!fs.existsSync(configDir)) {
+        return res.json({ success: false, error: 'config 目录不存在', files: [] });
+    }
+
+    try {
+        const items = fs.readdirSync(configDir);
+        const files = items
+            .filter(item => item.endsWith('.json'))
+            .map(item => {
+                const fullPath = path.join(configDir, item);
+                const stat = fs.statSync(fullPath);
+                return {
+                    name: item,
+                    size: stat.size,
+                    lastModified: stat.mtimeMs
+                };
+            });
+        
+        res.json({ success: true, files: files, count: files.length });
+    } catch (err) {
+        res.json({ success: false, error: err.message, files: [] });
+    }
+});
+
+// ===================== 读取单个配置文件内容 API =====================
+app.get('/api/config/load/:filename', (req, res) => {
+    const { filename } = req.params;
+    const configPath = path.join(__dirname, 'config', filename);
+    
+    // 安全检查：防止路径遍历攻击
+    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+        return res.json({ success: false, error: '无效的文件名' });
+    }
+    
+    if (!fs.existsSync(configPath)) {
+        return res.json({ success: false, error: '配置文件不存在' });
+    }
+
+    try {
+        const content = fs.readFileSync(configPath, 'utf-8');
+        const config = JSON.parse(content);
+        res.json({ success: true, config: config, filename: filename });
+    } catch (err) {
+        res.json({ success: false, error: '读取配置文件失败: ' + err.message });
+    }
+});
+
+// ===================== 接收前端按钮点击的POST请求 =====================
 app.post('/button-click', (req, res) => {
     // 获取前端传递的按钮名称
     const buttonName = req.body.buttonName;
@@ -38,7 +128,6 @@ app.post('/button-click', (req, res) => {
         data: { buttonName }
     });
 });
-// ===================== 新增代码结束 =====================
 
 // API路由 - 获取设备状态
 app.get('/api/device-status', (req, res) => {

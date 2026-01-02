@@ -1231,6 +1231,183 @@
             padding: 24px;
         }
 
+        /* ==================== 配置文件选择弹窗样式 ==================== */
+        .config-select-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(4px);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 3000;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .config-select-modal.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .config-select-modal .config-select-content {
+            background: white;
+            border-radius: 16px;
+            width: 480px;
+            max-width: 90vw;
+            max-height: 70vh;
+            box-shadow: 0 25px 80px rgba(0, 0, 0, 0.25);
+            transform: scale(0.9) translateY(20px);
+            transition: transform 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .config-select-modal.visible .config-select-content {
+            transform: scale(1) translateY(0);
+        }
+
+        .config-select-header {
+            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
+            color: white;
+            padding: 16px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .config-select-header h3 {
+            font-size: 16px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 0;
+        }
+
+        .config-select-close {
+            background: rgba(255, 255, 255, 0.2);
+            border: none;
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+        }
+
+        .config-select-close:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .config-select-body {
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .config-file-path {
+            background: #f3f4f6;
+            padding: 10px 16px;
+            font-size: 13px;
+            color: #6b7280;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .config-file-path i {
+            color: #f59e0b;
+        }
+
+        .config-file-list {
+            padding: 8px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .config-file-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 14px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid transparent;
+        }
+
+        .config-file-item:hover {
+            background: #eff6ff;
+            border-color: #bfdbfe;
+        }
+
+        .config-file-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #3b82f6 0%, #1e40af 100%);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 16px;
+        }
+
+        .config-file-info {
+            flex: 1;
+        }
+
+        .config-file-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1f2937;
+            margin-bottom: 2px;
+        }
+
+        .config-file-meta {
+            font-size: 12px;
+            color: #9ca3af;
+            display: flex;
+            gap: 12px;
+        }
+
+        .config-file-loading,
+        .config-file-empty,
+        .config-file-error {
+            text-align: center;
+            padding: 40px 20px;
+            color: #6b7280;
+        }
+
+        .config-file-loading i,
+        .config-file-empty i,
+        .config-file-error i {
+            font-size: 32px;
+            margin-bottom: 12px;
+            display: block;
+        }
+
+        .config-file-empty i {
+            color: #d1d5db;
+        }
+
+        .config-file-error i {
+            color: #ef4444;
+        }
+
+        .config-file-error {
+            color: #ef4444;
+        }
+
         /* 预览内容样式 */
         .preview-section {
             margin-bottom: 24px;
@@ -1597,10 +1774,63 @@
             align-items: center;
             gap: 12px;
             transition: transform 0.2s;
+            position: relative;
         }
 
         .stat-card:hover {
             transform: translateY(-2px);
+        }
+
+        /* 统计变化气泡 */
+        .stat-change-badge {
+            position: absolute;
+            top: -6px;
+            right: -6px;
+            min-width: 24px;
+            height: 24px;
+            padding: 0 6px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+            animation: badge-pop 0.3s ease-out;
+            z-index: 10;
+        }
+
+        .stat-change-badge.positive {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+        }
+
+        .stat-change-badge.negative {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            color: white;
+        }
+
+        .stat-change-badge.neutral {
+            background: #9ca3af;
+            color: white;
+        }
+
+        .stat-change-badge.hidden {
+            display: none;
+        }
+
+        @keyframes badge-pop {
+            0% {
+                transform: scale(0);
+                opacity: 0;
+            }
+            50% {
+                transform: scale(1.2);
+            }
+            100% {
+                transform: scale(1);
+                opacity: 1;
+            }
         }
 
         .stat-icon {
@@ -2567,11 +2797,8 @@
                 <h1 class="backend-title">数据管理后台</h1>
             </div>
             <div class="backend-header-right">
-                <button class="backend-btn" id="refreshBtn">
+                <button class="backend-btn backend-btn-primary" id="refreshBtn">
                     <i class="fa fa-refresh"></i>刷新
-                </button>
-                <button class="backend-btn backend-btn-primary" id="selectFolderBtn">
-                    <i class="fa fa-folder-open"></i>选择文件夹
                 </button>
             </div>
         </header>

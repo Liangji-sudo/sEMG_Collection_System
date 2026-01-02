@@ -136,10 +136,10 @@
          * 绑定UI事件
          */
         bindEvents() {
-            // 加载配置按钮
+            // 加载配置按钮 - 改为显示配置文件列表弹窗
             const loadBtn = document.getElementById('loadConfigBtn');
             if (loadBtn) {
-                loadBtn.addEventListener('click', () => this.openFileDialog());
+                loadBtn.addEventListener('click', () => this.showConfigSelectModal());
             }
 
             // 预览配置按钮
@@ -148,7 +148,7 @@
                 previewBtn.addEventListener('click', () => this.showPreviewModal());
             }
 
-            // 文件输入变化事件
+            // 文件输入变化事件（保留作为备用）
             const fileInput = document.getElementById('configFileInput');
             if (fileInput) {
                 fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
@@ -169,19 +169,202 @@
                 });
             }
 
+            // 配置选择弹窗遮罩关闭
+            const selectModal = document.getElementById('configSelectModal');
+            if (selectModal) {
+                selectModal.addEventListener('click', (e) => {
+                    if (e.target === selectModal) {
+                        this.closeConfigSelectModal();
+                    }
+                });
+            }
+
             console.log('[ConfigManager] 事件绑定完成');
         }
 
         /**
-         * 打开文件选择对话框
+         * 显示配置文件选择弹窗
          */
-        openFileDialog() {
-            const fileInput = document.getElementById('configFileInput');
-            if (fileInput) {
-                fileInput.click();
-            } else {
-                this.showToast('文件选择器未找到', 'error');
+        async showConfigSelectModal() {
+            // 创建弹窗（如果不存在）
+            let modal = document.getElementById('configSelectModal');
+            if (!modal) {
+                modal = this.createConfigSelectModal();
+                document.body.appendChild(modal);
             }
+
+            // 显示弹窗
+            modal.classList.add('visible');
+
+            // 加载配置文件列表
+            await this.loadConfigFileList();
+        }
+
+        /**
+         * 创建配置文件选择弹窗
+         */
+        createConfigSelectModal() {
+            const modal = document.createElement('div');
+            modal.id = 'configSelectModal';
+            modal.className = 'config-select-modal';
+            modal.innerHTML = `
+                <div class="config-select-content">
+                    <div class="config-select-header">
+                        <h3><i class="fas fa-folder-open"></i> 选择配置文件</h3>
+                        <button class="config-select-close" onclick="window.configManager.closeConfigSelectModal()">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="config-select-body">
+                        <div class="config-file-path">
+                            <i class="fas fa-folder"></i>
+                            <span>config/</span>
+                        </div>
+                        <div class="config-file-list" id="configFileList">
+                            <div class="config-file-loading">
+                                <i class="fas fa-spinner fa-spin"></i> 加载中...
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            return modal;
+        }
+
+        /**
+         * 加载配置文件列表
+         */
+        async loadConfigFileList() {
+            const listContainer = document.getElementById('configFileList');
+            if (!listContainer) return;
+
+            listContainer.innerHTML = '<div class="config-file-loading"><i class="fas fa-spinner fa-spin"></i> 加载中...</div>';
+
+            try {
+                const response = await fetch('/api/config/files');
+                const data = await response.json();
+
+                if (data.success && data.files.length > 0) {
+                    listContainer.innerHTML = data.files.map(file => `
+                        <div class="config-file-item" data-filename="${file.name}">
+                            <div class="config-file-icon">
+                                <i class="fas fa-file-code"></i>
+                            </div>
+                            <div class="config-file-info">
+                                <div class="config-file-name">${file.name}</div>
+                                <div class="config-file-meta">
+                                    <span>${this.formatFileSize(file.size)}</span>
+                                    <span>${this.formatDateTime(new Date(file.lastModified))}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('');
+
+                    // 绑定点击事件
+                    listContainer.querySelectorAll('.config-file-item').forEach(item => {
+                        item.addEventListener('click', () => {
+                            const filename = item.dataset.filename;
+                            this.loadConfigFromServer(filename);
+                        });
+                    });
+                } else if (data.success && data.files.length === 0) {
+                    listContainer.innerHTML = `
+                        <div class="config-file-empty">
+                            <i class="fas fa-folder-open"></i>
+                            <p>config/ 目录中没有 JSON 配置文件</p>
+                        </div>
+                    `;
+                } else {
+                    listContainer.innerHTML = `
+                        <div class="config-file-error">
+                            <i class="fas fa-exclamation-triangle"></i>
+                            <p>${data.error}</p>
+                        </div>
+                    `;
+                }
+            } catch (err) {
+                listContainer.innerHTML = `
+                    <div class="config-file-error">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        <p>无法连接到服务器</p>
+                    </div>
+                `;
+            }
+        }
+
+        /**
+         * 从服务端加载配置文件
+         */
+        async loadConfigFromServer(filename) {
+            console.log('[ConfigManager] 从服务端加载配置:', filename);
+
+            try {
+                const response = await fetch(`/api/config/load/${encodeURIComponent(filename)}`);
+                const data = await response.json();
+
+                if (data.success) {
+                    // 验证配置
+                    const validation = this.validateConfig(data.config);
+                    if (!validation.valid) {
+                        this.showToast(`配置验证失败: ${validation.errors[0]}`, 'error');
+                        return;
+                    }
+
+                    // 应用配置
+                    this.currentConfig = data.config;
+                    this.configFileName = filename;
+                    this.isLoaded = true;
+
+                    // 应用到采集系统
+                    this.applyConfigToSystem(data.config);
+
+                    // 更新UI
+                    this.updateConfigStatus();
+
+                    // 关闭选择弹窗
+                    this.closeConfigSelectModal();
+
+                    this.showToast(`配置 "${filename}" 加载成功！`, 'success');
+                    console.log('[ConfigManager] 配置加载成功:', data.config.configName);
+                } else {
+                    this.showToast(`加载失败: ${data.error}`, 'error');
+                }
+            } catch (err) {
+                this.showToast('加载配置文件失败', 'error');
+                console.error('[ConfigManager] 加载失败:', err);
+            }
+        }
+
+        /**
+         * 关闭配置选择弹窗
+         */
+        closeConfigSelectModal() {
+            const modal = document.getElementById('configSelectModal');
+            if (modal) {
+                modal.classList.remove('visible');
+            }
+        }
+
+        /**
+         * 格式化文件大小
+         */
+        formatFileSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        /**
+         * 格式化日期时间
+         */
+        formatDateTime(date) {
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            const hour = String(date.getHours()).padStart(2, '0');
+            const min = String(date.getMinutes()).padStart(2, '0');
+            return `${month}-${day} ${hour}:${min}`;
         }
 
         /**

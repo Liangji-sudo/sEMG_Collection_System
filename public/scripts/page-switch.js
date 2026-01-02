@@ -141,10 +141,13 @@
             if (collectionScreen) collectionScreen.style.display = 'none';
             if (backendPage) backendPage.classList.remove('hidden');
             
-            // 通知后台管理器页面已显示
-            if (window.backendManager && !window.backendManager._initialized) {
-                window.backendManager.init();
-                window.backendManager._initialized = true;
+            // 通知后台管理器页面已显示（每次进入都刷新）
+            if (window.backendManager) {
+                if (!window.backendManager._bindingDone) {
+                    window.backendManager.init();
+                    window.backendManager._bindingDone = true;
+                }
+                window.backendManager.onPageShow();
             }
         }
 
