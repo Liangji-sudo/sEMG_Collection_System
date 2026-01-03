@@ -215,10 +215,29 @@ class RealtimeEngine extends EventEmitter {
         console.log(`[realtimeEngine] ========== 停止采集 ==========`);
         console.log(`[realtimeEngine] 完成状态: ${completed ? '正常完成' : '手动停止'}`);
 
+        // 在关闭文件前，先刷新所有pending的数据
+        try {
+            // 如果有pending的stage_end，先发送它
+            if (this.stage_end_time > 0 && this.stage_name) {
+                console.log(`[realtimeEngine] 刷新pending Stage End: ${this.stage_name}`);
+                
+                const finalStageData = {
+                    stage_end_name: this.stage_name,
+                    stage_end_time: this.stage_end_time
+                };
+                
+                await this.sendStorageCommand('append', { data: finalStageData });
+            }
+        } catch (error) {
+            console.error('[realtimeEngine] 刷新pending数据失败:', error);
+        }
+
         this.isCollecting = false;
         this.collectionPaused = false;
         this.currentStageName = null;
         this.stage_started = false;
+        this.stage_end_time = 0;  // 清除
+        this.stage_name = null;
 
         // 关闭HDF5文件
         try {
