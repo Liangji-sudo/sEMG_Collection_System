@@ -96,12 +96,16 @@ HARDWARE_FRONTEND_GAIN = 5.9
 
 # ================= 滤波器配置 =================
 FILTER_ENABLED = True          # 总开关：是否启用滤波
-FILTER_LOWCUT = 20             # 带通下限 (Hz)
+FILTER_LOWCUT = 10             # 带通下限 (Hz) - 降低到10Hz保留更多低频信号
 FILTER_HIGHCUT = 450           # 带通上限 (Hz)
 FILTER_NOTCH_FREQ = 50         # 工频频率 (Hz)
 FILTER_NOTCH_Q = 30            # 陷波器Q值（越大越窄）
 FILTER_BANDPASS_ENABLED = True # 启用带通滤波
 FILTER_NOTCH_ENABLED = True    # 启用工频陷波
+
+# 注意：如果前端显示信号幅度太小，可以在前端调整 Offset 值
+# 典型EMG信号幅度：静息时 10-50μV，收缩时 100-500μV
+# 建议前端 Offset 设置：100-200μV (默认300可能太大)
 
 
 # ================= EMG实时滤波器类 =================
@@ -558,6 +562,25 @@ def create_notification_handler(dev: DeviceState):
             parsed = parse_packet(data, dev)
             if parsed:
                 parsed['t'] = ts
+                
+                # 生成每帧EMG的时间戳 (假设1kHz采样率，9帧/包)
+                fpkt = parsed.get('n', 9)
+                sample_rate = dev.config.get('sample_rate', 1000)
+                frame_interval = 1.0 / sample_rate
+                
+                # 为每帧生成时间戳（从当前时间向前推算）
+                emg_timestamps = []
+                for i in range(fpkt):
+                    # 最后一帧的时间是ts，往前推算
+                    frame_ts = ts - (fpkt - 1 - i) * frame_interval
+                    emg_timestamps.append(frame_ts)
+                parsed['emg_t'] = emg_timestamps
+                
+                # IMU时间戳（每包2帧IMU）
+                if parsed.get('imu'):
+                    imu_timestamps = [ts - 0.005, ts]  # 假设IMU 200Hz，间隔5ms
+                    parsed['imu_t'] = imu_timestamps
+                
                 dev.data_buffer.append(parsed)
         except Exception as e:
             log(f"[Dev{dev.device_id}] 回调错误: {e}")
