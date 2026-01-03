@@ -1,7 +1,6 @@
-// realtimeEngine.js
+// realtimeEngine.js - v2.0 (支持完整存储功能)
 const WebSocket = require('ws');
 const EventEmitter = require('events');
-// 新版 zeromq (v6+) 适配代码
 const zmq = require('zeromq');
 const { promisify } = require('util');
 const express = require('express');
@@ -10,12 +9,10 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-
 const { discrete_gesture_prompt_name, collection_task_name } = require('./constants.js');
 
-// 简化版（仅Node.js环境，更简洁）
+// 获取系统时间戳（秒，高精度）
 function getSysTimeNode() {
-    // Node.js v10.7+ 直接提供纳秒级UNIX时间戳
     const nsTimestamp = process.hrtime.bigint();
     const sTimestamp = Number(nsTimestamp) / 1000000000.0;
     return Math.round(sTimestamp * 1000000000) / 1000000000;
@@ -24,80 +21,78 @@ function getSysTimeNode() {
 class RealtimeEngine extends EventEmitter {
     constructor() {
         super();
-        // websocket server，用于index.html client的实时显示
+        // WebSocket服务器（给前端）
         this.websocket_server = null;
         this.clients = new Set();
         this.isRunning = false;
         this.dataBuffer = [];
         this.maxBufferSize = 1000;
 
-        // ===== 新增：ble_server 客户端配置 =====
-        this.ble_client = null; // 连接 Python 的 WebSocket 客户端实例
-        this.ble_clientUrl = 'ws://localhost:8766'; // Python 服务端的 WebSocket 地址（替换为你的实际地址）
-        this.reconnectInterval = 3000; // 重连间隔（3秒）
+        // ===== BLE服务器客户端配置 =====
+        this.ble_client = null;
+        this.ble_clientUrl = 'ws://localhost:8766';
+        this.reconnectInterval = 3000;
         this.maxReconnectTimes = 3;
-        this.currentReconnectTimes = 0; // 当前重连次数
-        this.reconnectTimer = null; // 重连计时器
-
+        this.currentReconnectTimes = 0;
+        this.reconnectTimer = null;
         this.connectTimeoutTimer = null;
-        this.emg_packet_count=0;
-        this.emg_5_packets_count=0;
-        this.emg_interval = 0.001; //1ms
 
+        // ===== 数据包计数 =====
+        this.emg_packet_count = 0;
+        this.emg_5_packets_count = 0;
+        this.dev1_packet_count = 0;
+        this.dev2_packet_count = 0;
 
-        // ===== 新增：storage_server zetomq连接配置 =====
+        // ===== Storage Server配置 =====
         this.storage_server_socket = new zmq.Request();
         this.storage_server_host = '127.0.0.1';
         this.storage_server_port = 5555;
-        this.file_id = 1;
-        this.write_enable = 0;    //1 用于表示当前正在打开文件中
+        this.storage_connected = false;
 
-        // ===== 新增：taskManager 发来的指令（stage start 信号， stage end信号，prompt信号）
-        this.storage_start_flag = 0;
-        this.storage_end_flag = 0;
-        this.prompt_flag = 0;
-        this.buttomname = 0;
+        // ===== 采集状态 =====
+        this.currentTaskId = null;
+        this.currentUser = null;
+        this.isCollecting = false;
+        this.collectionPaused = false;
+        this.currentStageName = null;
 
-        this.prompt_name = null;
-        this.prompt_time = 0;
-
+        // ===== Stage状态 =====
         this.stage_name = null;
-        this.stage_start = 0;
-        this.stage_end = 0;
+        this.stage_start_time = 0;
+        this.stage_end_time = 0;
+        this.stage_started = false;
+
+        // ===== Prompt状态 =====
+        this.pending_prompt = null;  // { name, time, stageName }
     }
 
-    // 0.0 启动 realtimeEngine 实时引擎模块
+    // ==================== 启动 ====================
     start(port = 8080) {
         return new Promise((resolve, reject) => {
             try {
-                /**
-                 * ===== 1. 连接ble_server，接受数据  =====
-                 */
+                // 1. 延迟连接BLE服务器
                 this.connectTimeoutTimer = setTimeout(() => {
                     this.ble_server_connect();
-                }, 1000); // 延迟 1000 毫秒（1秒）
+                }, 3000);
 
-
-                /**
-                 * ===== 2. 启动realtimeEngine >>> index.html websocket广播服务器， 实时显示 =====
-                 */ 
+                // 2. 启动WebSocket服务器（给前端）
                 this.websocket_server = new WebSocket.Server({ port });
 
-                //收到index.html client连接请求
                 this.websocket_server.on('connection', (ws) => {
                     console.log('[realtimeEngine] 前端client连接已建立');
                     this.clients.add(ws);
-                    
-                    // ACK to client : connect_established
-                    const connectMsg = JSON.stringify({
+
+                    // 发送连接确认
+                    ws.send(JSON.stringify({
                         type: 'connection_established',
                         message: '实时数据连接已建立',
                         timestamp: Date.now()
+                    }));
+
+                    // 监听前端消息
+                    ws.on('message', (message) => {
+                        this.handleFrontendMessage(message);
                     });
-
-                    //console.log(`[realtimeEngine] [${new Date().toISOString()}] 发送连接确认给前端:`, JSON.parse(connectMsg));
-                    ws.send(connectMsg);
-
 
                     ws.on('close', () => {
                         console.log('[realtimeEngine] 前端WebSocket连接已关闭');
@@ -111,36 +106,165 @@ class RealtimeEngine extends EventEmitter {
                 });
 
                 this.websocket_server.on('listening', () => {
-                    console.log(`实时引擎启动成功，WebSocket服务运行在端口 ${port}`);
+                    console.log(`[realtimeEngine] WebSocket服务运行在端口 ${port}`);
                     this.isRunning = true;
-                    
                     resolve();
                 });
 
                 this.websocket_server.on('error', (error) => {
-                    console.error('启动WebSocket服务器失败:', error);
+                    console.error('[realtimeEngine] WebSocket服务器启动失败:', error);
                     reject(error);
                 });
 
-
-                /**
-                 * ===== 3. 连接storage_server ， 数据存储 =====
-                 */
+                // 3. 连接Storage Server
                 this.storage_server_connect();
 
-
             } catch (error) {
-                console.error('[realtimeEngine] 启动实时引擎失败:', error);
+                console.error('[realtimeEngine] 启动失败:', error);
                 reject(error);
             }
         });
     }
 
+    // ==================== 前端消息处理 ====================
+    handleFrontendMessage(rawMessage) {
+        try {
+            const message = JSON.parse(rawMessage.toString());
 
-    // 0.1 websocket广播
+            if (message.type !== 'control_command') {
+                return;
+            }
+
+            const { action, data } = message;
+            console.log(`[realtimeEngine] <<< 收到前端命令: ${action}`, data);
+
+            switch (action) {
+                case 'task_change':
+                    this.onTaskChange(data.taskId);
+                    break;
+                case 'collection_start':
+                    this.onCollectionStart(data.taskId, data.user);
+                    break;
+                case 'collection_pause':
+                    this.onCollectionPause();
+                    break;
+                case 'collection_resume':
+                    this.onCollectionResume();
+                    break;
+                case 'collection_stop':
+                    this.onCollectionStop(data.completed);
+                    break;
+                case 'stage_start':
+                    this.onStageStart(data.stageName, data.stageIndex, data.timestamp);
+                    break;
+                case 'stage_end':
+                    this.onStageEnd(data.stageName, data.stageIndex, data.timestamp);
+                    break;
+                case 'prompt':
+                    this.onPrompt(data.name, data.stageName, data.timestamp);
+                    break;
+                default:
+                    console.log(`[realtimeEngine] 未知命令: ${action}`);
+            }
+
+        } catch (error) {
+            console.error('[realtimeEngine] 解析前端消息失败:', error);
+        }
+    }
+
+    // ==================== 采集控制回调 ====================
+
+    onTaskChange(taskId) {
+        console.log(`[realtimeEngine] ========== 任务切换: ${taskId} ==========`);
+        this.currentTaskId = taskId;
+    }
+
+    async onCollectionStart(taskId, user) {
+        console.log(`[realtimeEngine] ========== 开始采集 ==========`);
+        console.log(`[realtimeEngine] 任务: ${taskId}`);
+        console.log(`[realtimeEngine] 用户: ${user ? user.name : '未知'} (${user ? user.id : 'N/A'})`);
+
+        this.currentTaskId = taskId;
+        this.currentUser = user;
+        this.isCollecting = true;
+        this.collectionPaused = false;
+
+        // 创建新的HDF5文件
+        try {
+            const response = await this.sendStorageCommand('create', {
+                task_id: taskId,
+                user_id: user ? user.id : 'unknown'
+            });
+            console.log('[realtimeEngine] 创建存储文件响应:', response);
+        } catch (error) {
+            console.error('[realtimeEngine] 创建存储文件失败:', error);
+        }
+    }
+
+    onCollectionPause() {
+        console.log(`[realtimeEngine] ========== 暂停采集 ==========`);
+        this.collectionPaused = true;
+    }
+
+    onCollectionResume() {
+        console.log(`[realtimeEngine] ========== 继续采集 ==========`);
+        this.collectionPaused = false;
+    }
+
+    async onCollectionStop(completed = false) {
+        console.log(`[realtimeEngine] ========== 停止采集 ==========`);
+        console.log(`[realtimeEngine] 完成状态: ${completed ? '正常完成' : '手动停止'}`);
+
+        this.isCollecting = false;
+        this.collectionPaused = false;
+        this.currentStageName = null;
+        this.stage_started = false;
+
+        // 关闭HDF5文件
+        try {
+            const response = await this.sendStorageCommand('close', {});
+            console.log('[realtimeEngine] 关闭存储文件响应:', response);
+        } catch (error) {
+            console.error('[realtimeEngine] 关闭存储文件失败:', error);
+        }
+    }
+
+    onStageStart(stageName, stageIndex, timestamp) {
+        console.log(`[realtimeEngine] ========== Stage开始 ==========`);
+        console.log(`[realtimeEngine] Stage: ${stageName} (索引: ${stageIndex})`);
+        console.log(`[realtimeEngine] 时间戳: ${timestamp}`);
+
+        this.currentStageName = stageName;
+        this.stage_name = stageName;
+        this.stage_start_time = timestamp;
+        this.stage_started = true;
+    }
+
+    onStageEnd(stageName, stageIndex, timestamp) {
+        console.log(`[realtimeEngine] ========== Stage结束 ==========`);
+        console.log(`[realtimeEngine] Stage: ${stageName} (索引: ${stageIndex})`);
+        console.log(`[realtimeEngine] 时间戳: ${timestamp}`);
+
+        this.stage_end_time = timestamp;
+        this.stage_started = false;
+    }
+
+    onPrompt(name, stageName, timestamp) {
+        console.log(`[realtimeEngine] ========== Prompt信号 ==========`);
+        console.log(`[realtimeEngine] Prompt: ${name}, Stage: ${stageName}, Time: ${timestamp}`);
+
+        // 缓存prompt，等待下一次数据包一起发送
+        this.pending_prompt = {
+            name: name,
+            time: timestamp,
+            stageName: stageName
+        };
+    }
+
+    // ==================== WebSocket广播 ====================
     broadcastToClients(dataPacket) {
         const message = JSON.stringify(dataPacket);
-        
+
         this.clients.forEach((client) => {
             if (client.readyState === WebSocket.OPEN) {
                 try {
@@ -153,216 +277,198 @@ class RealtimeEngine extends EventEmitter {
         });
     }
 
-    // 0.2 获取realtimeEngine引擎状态
-    getStatus() {
-        return {
-            isRunning: this.isRunning,
-            clientCount: this.clients.size,
-            bufferSize: this.dataBuffer.length,
-            maxBufferSize: this.maxBufferSize,
-            port: this.websocket_server ? this.websocket_server.address().port : null
-        };
-    }
-
-    // 0.3 停止实时引擎
-    stop() {
-        return new Promise((resolve) => {
-            this.isRunning = false;
-            //this.stopDataBroadcast();
-
-            // 强制关闭所有客户端（设置code=1001表示正常退出，避免等待）
-            this.clients.forEach(client => {
-                if (client.readyState === WebSocket.OPEN) {
-                    client.close(1001, '服务器关闭'); // 带状态码的强制关闭
-                }
-            });
-            this.clients.clear(); // 立即清空集合，避免残留
-
-            // 关闭服务器时设置超时，避免无限等待
-            if (this.websocket_server) {
-                const closeTimeout = setTimeout(() => {
-                    console.warn('服务器关闭超时，强制退出');
-                    resolve();
-                }, 3000); // 3秒超时
-
-                this.websocket_server.close(() => {
-                    clearTimeout(closeTimeout); // 成功关闭则清除超时
-                    console.log('【实时引擎已停止】');
-                    resolve();
-                });
-            } else {
-                resolve();
-            }
-
-            // 关闭目标 Client 连接（主动关闭，不触发重连）
-            if (this.targetClient) {
-                this.targetClient.close(1000, '代理关闭');
-                this.targetClient = null;
-            }
-            // 清除重连计时器
-            clearTimeout(this.reconnectTimer);
-        });
-    }
-
-
-
-
-    /**
-     * 1. ble_server 数据传输部分
-     * 
-     */
-
-    // 1.1 连接ble_server 服务器
+    // ==================== BLE Server连接 ====================
     ble_server_connect() {
-        //关闭当前已有的连接
         if (this.ble_client) {
-                this.ble_client.close();
-                this.ble_client = null;
-            }
-        try {
-            // 创建新连接
-            this.ble_client = new WebSocket(this.ble_clientUrl);
-            console.log("[realtimeEngine] create ble_client successful");
+            this.ble_client.close();
+            this.ble_client = null;
+        }
 
-            // 连接成功回调
+        try {
+            this.ble_client = new WebSocket(this.ble_clientUrl);
+            console.log("[realtimeEngine] 创建BLE客户端连接...");
+
             this.ble_client.onopen = () => {
-                console.log(`[realtimeEngine] ble_server连接成功`);
-                this.currentReconnectTimes = 0; // 重置重连次数
+                console.log(`[realtimeEngine] BLE服务器连接成功`);
+                this.currentReconnectTimes = 0;
                 clearTimeout(this.reconnectTimer);
                 clearTimeout(this.connectTimeoutTimer);
             };
 
-            // 消息接收处理
             this.ble_client.onmessage = (event) => {
                 try {
                     const packet = JSON.parse(event.data);
-                    
-                    // ===== 调试打印：显示从ble_server接收到的数据包 =====
-                    // console.log(`\n[realtimeEngine] ========== 收到 ble_server 数据包 ==========`);
-                    // console.log(`[realtimeEngine] 数据包类型: ${packet.type}`);
-                    // console.log(`[realtimeEngine] 接收时间: ${new Date().toISOString()}`);
-                    // ===== 调试打印结束 =====
-                    
-                    // 处理新格式的数据包 type: "data"（来自双设备版ble_server）
+
                     if (packet.type === 'data') {
                         this.handleBleDataPacket(packet);
                         return;
                     }
-                    
-                    // 兼容旧格式 type: "emg_packet"
+
                     if (packet.type === 'emg_packet') {
                         this.attributeEMGData(packet);
                         return;
                     }
                 } catch (error) {
-                    console.error('[realtimeEngine] ble_server的emg消息解析失败:', error);
-                    console.error('[realtimeEngine] 原始数据:', event.data);
+                    console.error('[realtimeEngine] 解析BLE数据失败:', error);
                 }
             };
 
-            // 错误处理
             this.ble_client.onerror = (error) => {
-                console.error('[realtimeEngine] 错误:', error);
-                this.handleReconnect(); // 触发重连
+                console.error('[realtimeEngine] BLE连接错误:', error);
+                this.handleReconnect();
             };
 
-            // 关闭处理
             this.ble_client.onclose = (event) => {
-                //clearTimeout(connectionTimeout);
-                console.log(`[realtimeEngine] ble_server 连接关闭：code=${code}, reason=${reason.toString()}`);
-                // 非主动关闭（code !== 1000）且未达到最大重连次数时重连
+                const code = event.code || 0;
+                console.log(`[realtimeEngine] BLE连接关闭: code=${code}`);
                 if (code !== 1000) {
                     this.handleReconnect();
                 }
             };
 
         } catch (error) {
-            console.error('[realtimeEngine] realtimeEngine创建失败:', error);
+            console.error('[realtimeEngine] 创建BLE连接失败:', error);
             this.handleReconnect('创建连接失败');
         }
     }
 
-    // 1.2 处理新格式的BLE数据包 (type: "data", 来自双设备版ble_server)
+    handleReconnect(reason = '连接断开') {
+        if (this.currentReconnectTimes >= this.maxReconnectTimes) {
+            console.error(`[realtimeEngine] 达到最大重连次数，停止重连`);
+            return;
+        }
+
+        this.currentReconnectTimes++;
+        console.log(`[realtimeEngine] ${reason}，${this.reconnectInterval/1000}秒后重连(${this.currentReconnectTimes}/${this.maxReconnectTimes})...`);
+
+        this.reconnectTimer = setTimeout(() => {
+            this.ble_server_connect();
+        }, this.reconnectInterval);
+    }
+
+    // ==================== 处理BLE数据包 ====================
     handleBleDataPacket(packet) {
         if (!this.isRunning) return;
 
         try {
-            // 提取设备数据（优先使用dev1，如果没有则用dev2）
-            const devData = packet.dev1 || packet.dev2;
-            if (!devData) {
-                // console.log('[realtimeEngine] 无有效设备数据');
+            if (!packet.dev1 && !packet.dev2) {
                 return;
             }
 
-            // 提取EMG数据: uv是9帧×16通道的微伏值
-            const emgUv = devData.uv;  // [[ch0,ch1,...,ch15], [...], ...] 9帧
-            const emgRaw = devData.raw; // 原始ADC值
-            
-            // 提取IMU数据: imu[0]是第一个IMU传感器
-            const imuData = devData.imu;  // [[acc,gyr,mag], [acc,gyr,mag]]
-            
-            // 统计信息
-            const stats = devData.s;  // [total_frames, lost_frames]
-            const timestamp = devData.t;
+            // 准备数据容器
+            let emg1Data = null, emg2Data = null;
+            let emg1Timestamps = null, emg2Timestamps = null;
+            let imu1Data = null, imu2Data = null;
+            let imu1Timestamps = null, imu2Timestamps = null;
+            let timestamp = packet.ts;
+            let stats1 = null, stats2 = null;
+            let framesInPacket = 9;
 
-            // 更新包计数
-            const framesInPacket = devData.n || 9;
+            // ========== 处理设备1数据 ==========
+            if (packet.dev1) {
+                const dev1 = Array.isArray(packet.dev1) ? packet.dev1[0] : packet.dev1;
+
+                if (dev1) {
+                    if (dev1.uv && dev1.uv.length > 0) {
+                        emg1Data = this.transposeEMG(dev1.uv);
+                    }
+                    if (dev1.emg_t && dev1.emg_t.length > 0) {
+                        emg1Timestamps = dev1.emg_t;
+                    }
+                    if (dev1.imu && dev1.imu[0]) {
+                        imu1Data = {
+                            acc: dev1.imu[0][0],
+                            gyr: dev1.imu[0][1],
+                            mag: dev1.imu[0][2]
+                        };
+                    }
+                    if (dev1.imu_t && dev1.imu_t.length > 0) {
+                        imu1Timestamps = dev1.imu_t;
+                    }
+                    stats1 = dev1.s ? { total: dev1.s[0], lost: dev1.s[1] } : null;
+                    framesInPacket = dev1.n || 9;
+                    this.dev1_packet_count += framesInPacket;
+                }
+            }
+
+            // ========== 处理设备2数据 ==========
+            if (packet.dev2) {
+                const dev2 = Array.isArray(packet.dev2) ? packet.dev2[0] : packet.dev2;
+
+                if (dev2) {
+                    if (dev2.uv && dev2.uv.length > 0) {
+                        emg2Data = this.transposeEMG(dev2.uv);
+                    }
+                    if (dev2.emg_t && dev2.emg_t.length > 0) {
+                        emg2Timestamps = dev2.emg_t;
+                    }
+                    if (dev2.imu && dev2.imu[0]) {
+                        imu2Data = {
+                            acc: dev2.imu[0][0],
+                            gyr: dev2.imu[0][1],
+                            mag: dev2.imu[0][2]
+                        };
+                    }
+                    if (dev2.imu_t && dev2.imu_t.length > 0) {
+                        imu2Timestamps = dev2.imu_t;
+                    }
+                    stats2 = dev2.s ? { total: dev2.s[0], lost: dev2.s[1] } : null;
+                    this.dev2_packet_count += (dev2.n || 9);
+                }
+            }
+
             this.emg_packet_count += framesInPacket;
             this.emg_5_packets_count++;
 
-            /**
-             * 构造广播数据包 - 发送给前端显示
-             * 格式适配前端 waveform.js 的需求
-             */
-            const dataPacket = {
+            // ========== 构造广播数据包（给前端显示） ==========
+            const displayPacket = {
                 type: 'realtime_data',
                 data: {
-                    // EMG数据: 转置为 [通道][帧] 格式，方便前端渲染
-                    // 原始: uv[帧][通道] -> 转换为: emg[通道][帧]
-                    emg: this.transposeEMG(emgUv),
-                    
-                    // IMU数据: 使用第一个IMU传感器的数据
-                    // imu[0] = [[ax,ay,az], [gx,gy,gz], [mx,my,mz]]
-                    imu: imuData && imuData[0] ? {
-                        acc: imuData[0][0],  // [ax, ay, az]
-                        gyr: imuData[0][1],  // [gx, gy, gz]
-                        mag: imuData[0][2]   // [mx, my, mz]
-                    } : null,
-                    
-                    // 元数据
+                    emg1: emg1Data,
+                    emg2: emg2Data,
+                    emg1_t: emg1Timestamps,
+                    emg2_t: emg2Timestamps,
+                    imu1: imu1Data,
+                    imu2: imu2Data,
+                    imu1_t: imu1Timestamps,
+                    imu2_t: imu2Timestamps,
                     timestamp: timestamp,
                     packetCount: this.emg_packet_count,
-                    frameIndex: devData.f,
                     framesInPacket: framesInPacket,
-                    stats: {
-                        total: stats ? stats[0] : 0,
-                        lost: stats ? stats[1] : 0
-                    }
+                    stats1: stats1,
+                    stats2: stats2,
+                    activeDevices: packet.active || []
                 }
             };
 
             // 广播给前端
-            this.broadcastToClients(dataPacket);
+            this.broadcastToClients(displayPacket);
 
-            /**
-             * 存储数据包（如果需要）
-             * 注意：这里需要适配storage_manager的输入格式
-             */
-            // 暂时跳过存储，因为格式不同
-            // await this.storage_manager(emgRaw, [timestamp]);
+            // ========== 存储数据（如果正在采集） ==========
+            if (this.isCollecting && !this.collectionPaused) {
+                this.saveDataToStorage({
+                    emg1: emg1Data,
+                    emg2: emg2Data,
+                    emg1_t: emg1Timestamps,
+                    emg2_t: emg2Timestamps,
+                    imu1: imu1Data,
+                    imu2: imu2Data,
+                    imu1_t: imu1Timestamps,
+                    imu2_t: imu2Timestamps
+                });
+            }
 
         } catch (error) {
-            console.error('[realtimeEngine] 处理BLE数据包时发生错误:', error);
+            console.error('[realtimeEngine] 处理BLE数据包错误:', error);
         }
     }
 
-    // 辅助函数：转置EMG数据 [帧][通道] -> [通道][帧]
     transposeEMG(uvData) {
-        if (!uvData || uvData.length === 0) return [];
-        
-        const numFrames = uvData.length;      // 9帧
-        const numChannels = uvData[0].length; // 16通道
-        
+        if (!uvData || uvData.length === 0) return null;
+
+        const numFrames = uvData.length;
+        const numChannels = uvData[0].length;
+
         const transposed = [];
         for (let ch = 0; ch < numChannels; ch++) {
             const channelData = [];
@@ -374,382 +480,182 @@ class RealtimeEngine extends EventEmitter {
         return transposed;
     }
 
-    // 1.3 接受来自ble_server 的大包数据（5*32）数据，并即时广播出去（旧格式兼容）
-    async attributeEMGData(emgData) {
-        if (!this.isRunning) return;
+    // ==================== 存储相关 ====================
 
+    async storage_server_connect() {
         try {
-            // 确保 rawData 是数组类型，且包含 5 组数据
-            if (!Array.isArray(emgData.big_bag_raw_data)) {
-                console.error("[realtimeEngine] rawData 不是一个数组");
-                return;
-            }
-
-            // 确保是 5 组数据
-            if (emgData.big_bag_raw_data.length !== 5) {
-                console.error('[realtimeEngine] emg 数据组数不匹配，应该是 5 组');
-                return;
-            }
-
-            // 统计小包数量 + 5
-            this.emg_packet_count += 5;
-            this.emg_5_packets_count++;
-
-            /**
-             * 实时显示广播数据包
-             */
-
-            const dataPacket = {
-                type: 'emg_data',
-                data: {
-                    big_bag_raw_data: emgData.big_bag_raw_data,  // [string64, string64, string64, string64, string64]//大包的rawData[5]数组放入 big_bag_raw_data
-                    timestamp: emgData.timestamp_array, // [.9f, .9f, .9f, .9f, .9f] // 计算好大包内的5组的时间戳
-                    packetCount: this.emg_packet_count,
-                    interval: null // 现在不需要interval，可以以后加
-                }
-            };
-
-            // 广播出去
-            this.broadcastToClients(dataPacket);
-            //console.log('realtimeEngine.js 发送一个大包，大包统计：小包统计：', this.emg_5_packets_count,this.emg_packet_count);
-
-            /**
-             * 存储 数据包发送逻辑
-             */
-            await this.storage_manager(emgData.big_bag_raw_data, emgData.timestamp_array);
-
-
-        } catch (error) {
-            console.error('[realtimeEngine] 处理EMG数据时发生错误:', error);
-        }
-    }
-
-    
-
-    // 1.2.1 判断存储逻辑
-    async storage_manager(rawData_array, timestamp_array)
-    {
-        if(this.storage_start_flag == 1)
-        {
-            this.storage_start_flag = 0;
-            await this.storage_server_create_new_hdf5_file();
-            return;
-        }
-
-        if(this.storage_end_flag == 1)
-        {
-            this.storage_end_flag = 0;
-            await this.storage_server_close_hdf5_file();
-            return;
-        }
-
-        let prompt_name_temp = null;
-        let prompt_time_temp = 0;
-        if(this.prompt_flag == 1)
-        {
-            this.prompt_flag = 0;
-            prompt_name_temp = this.prompt_name;
-            prompt_time_temp = this.prompt_time;
-            this.prompt_name = null;
-            this.prompt_time = 0;
-        }
-
-        
-        const dataPacket_storage = {
-            data: {
-                task: 'discrete_gesture',     //采集任务（discrete/continual1/con2）
-
-                // data
-                big_bag_raw_data: rawData_array,  // [string64, string64, string64, string64, string64]//大包的rawData[5]数组放入 big_bag_raw_data
-                timestamp: timestamp_array, // [.9f, .9f, .9f, .9f, .9f] // 计算好大包内的5组的时间戳
-
-                // prompt
-                prompt_name: prompt_name_temp,
-                prompt_time: prompt_time_temp,
-
-                // stage
-                stage_name: null,
-                stage_start: 0,
-                stage_end: 0
-            }
-        };
-
-        await this.storage_server_append_hdf5_data(dataPacket_storage);
-        return;
-    }
-
-    // 1.3 断线重连逻辑
-    handleReconnect() {
-        // 检查是否达到最大重连次数
-        if (this.maxReconnectTimes > 0 && this.currentReconnectTimes >= this.maxReconnectTimes) {
-        console.error(`[realtimeEngine] ❌ 已达到最大重连次数（${this.maxReconnectTimes}），停止重连`);
-        return;
-        }
-
-        this.currentReconnectTimes++;
-        console.log(`[realtimeEngine] 🔄 正在进行第 ${this.currentReconnectTimes} 次重连目标服务器...`);
-
-        // 延迟重连（避免频繁连接）
-        this.reconnectTimer = setTimeout(() => {
-        this.connectTargetServer();
-        }, this.reconnectInterval);
-    }
-
-
-
-
-
-
-    // 2.1 连接storage_server
-    storage_server_connect() {
-        try {
-            this.storage_server_socket.connect(`tcp://${this.storage_server_host}:${this.storage_server_port}`);
-            console.log(`已连接到 HDF5 存储服务：${this.storage_server_host}:${this.storage_server_port}`);
+            const address = `tcp://${this.storage_server_host}:${this.storage_server_port}`;
+            await this.storage_server_socket.connect(address);
+            this.storage_connected = true;
+            console.log(`[realtimeEngine] 已连接到storage_server: ${address}`);
         } catch (err) {
-            throw new Error(`连接失败：${err.message}`);
+            console.error(`[realtimeEngine] 连接storage_server失败: ${err.message}`);
+            this.storage_connected = false;
         }
     }
 
-    /**
-     * 发送指令到 Python 服务端（适配新版 API）
-     * @param {string} cmd 指令类型：create/write/close
-     * @param {object} params 指令参数
-     * @returns {Promise<object>} 服务端响应
-     */
-    // 2.2 向storage_server 发送储存指令指令
-    storage_server_sendCommand(cmd, params = {}) {
+    async sendStorageCommand(cmd, params = {}) {
         try {
-            // 构造请求数据（JSON 序列化）
             const request = JSON.stringify({ cmd, params });
-            // 发送数据（新版 send 支持字符串，自动转 Buffer）
-            this.storage_server_socket.send(request);
-
-            // 接收响应（新版需用 iterator 接收，且响应是 Buffer 数组）
-            const [responseBuffer] = this.storage_server_socket.receive();
-            const response = JSON.parse(responseBuffer.toString('utf8'));
-            return response;
-        } catch (err) {
-            throw new Error(`指令发送失败（${cmd}）：${err.message}`);
-        }
-    } 
-
-
-    // 2.3 请求storage_server 创建新的文件
-    // 注意：函数必须声明为 async，因为 sendCommand 是异步函数
-    async storage_server_create_new_hdf5_file() {
-        try {
-            if(this.write_enable == 1)
-            {
-                throw new Error(`已经有正在写的文件`);
-            }
-
-            // 1. 生成系统时间戳（毫秒级，避免重复；也可改用秒级：Math.floor(Date.now()/1000)）
-            const timestamp = Date.now(); 
-            // 2. 拼接文件名：hdf5_ + file_id + 时间戳 + .h5
-            const fileName = `./storage/hdf5_${this.file_id}_${timestamp}.h5`;
-
-            // 3. 创建 HDF5 文件
-            console.log('\n=== 第一步：创建 HDF5 文件 ===, id = ', this.file_id);
-            // 关键：异步函数必须加 await，否则 createResponse 是 Promise 对象
-            const createResponse = await this.sendCommand('create', {
-                file_name: fileName, // 使用拼接后的文件名
-                group_name: 'emg_data'
-            });
-            console.log("创建响应：", createResponse);
-
-            if (createResponse.status !== 'success') {
-                throw new Error(`创建文件失败：${createResponse.msg}`);
-            }
-
-            // 可选：返回创建的文件名，方便后续使用
-            this.write_enable = 1;
-            
-            return fileName;
-            
-        } catch (error) {
-            console.error(`创建HDF5文件失败（file_id: ${this.file_id}）：`, error.message);
-            throw error; // 向上抛出错误，让调用方处理
-        }
-    }
-
-    // 2.4 关闭保存
-    async storage_server_close_hdf5_file() {
-        try {
-            if(this.write_enable == 0)
-            {
-                throw new Error(`当前没有文件在写，无需关闭`);
-            }
-
-            // 1. 打印日志（关联 fileId，方便定位）
-            console.log(`\n=== 关闭 HDF5 文件 ===, file_id = ${this.file_id}`);
-
-            // 2. 异步发送关闭指令（await 等待响应）
-            const closeResponse = await this.sendCommand('close');
-
-            // 3. 打印响应结果
-            console.log(`文件 ${this.file_id} 关闭响应：`, closeResponse);
-
-            // 4. 校验关闭结果，失败则主动抛出错误
-            if (closeResponse.status !== 'success' && closeResponse.status !== 'warning') {
-                throw new Error(`文件 ${this.file_id} 关闭失败：${closeResponse.msg}`);
-            }
-
-            // 5. 成功关闭，返回响应结果（供外层调用）
-            this.write_enable = 0;
-            this.file_id++;
-            return closeResponse;
-
-        } catch (error) {
-            // 6. 捕获所有错误（网络超时/指令失败等），打印日志后重新抛出
-            console.error(`关闭 HDF5 文件失败（file_id: ${this.file_id}）：`, error.message);
-            throw error; // 向上抛出，让调用方感知错误（可选择是否抛出）
-        }
-    }
-
-
-        /**
-     * 异步写入单批次传感器数据到 HDF5 文件
-     * @param {string} fileId - 文件ID（用于日志定位，关联对应的HDF5文件）
-     * @param {Array} sensorData - 单批次传感器数据（如 [25.1, 25.2, 25.3]）
-     * @param {Object} [options] - 可选配置项
-     * @param {string} [options.datasetName='temp_sensor_1'] - 数据集名称
-     * @param {string} [options.dtype='float64'] - 数据类型（float64/uint8/int32等）
-     * @returns {Promise<object>} 写入响应结果（包含status/msg/total_count等）
-     * @throws {Error} 参数错误/写入失败时抛出错误
-     */
-    //2.5 写一次数据
-    async storage_server_append_hdf5_data(dataPacket, options = {}) {
-        // 1. 默认配置（可通过options覆盖）
-        try {
-            // 2. 核心参数校验（提前拦截无效调用）
-            if (!this.file_id || this.write_enable == 0) {
-                // throw new Error('写入失败：fileId 不能为空（需关联具体的HDF5文件）');
-                return;
-            }
-            if (!Array.isArray(dataPacket.data.big_bag_raw_data) || dataPacket.data.big_bag_raw_data.length == 0) {
-                throw new Error(`文件 ${this.file_id} 写入失败：传感器数据必须是非空数组`);
-            }
-
-            // 3. 打印写入日志（关联fileId，方便溯源）
-            //console.log(`\n=== 写入 HDF5 数据 ===, file_id = ${this.file_id}`);
-            //console.log(`数据集：${datasetName} | 数据类型：${dtype} | 数据条数：${dataPacket.length}`);
-            //console.log(`写入数据：`, dataPacket);
-
-
-
-            // 4. 异步发送写入指令（await 等待服务端响应）
-            const writeResponse = await this.sendCommand('append', {
-                data: dataPacket.data
-            });
-
-
-
-            // 5. 校验写入结果，失败则主动抛出错误
-            if (writeResponse.status !== 'success') {
-                throw new Error(`文件 ${this.file_id} 写入失败：${writeResponse.msg || '未知错误'}`);
-            }
-
-            // 6. 打印成功日志并返回响应结果
-            //console.log(`文件 ${this.file_id} 写入成功 | 累计数据条数：${writeResponse.total_count}`);
-            return writeResponse;
-
-        } catch (error) {
-            // 7. 捕获所有错误，打印详情后重新抛出（让调用方感知）
-            console.error(`[写入错误] file_id = ${this.file_id}：`, error.message);
-            throw error;
-        }
-    }
-
-    /**
-     * 发送指令到 Python 服务端（适配新版 API）
-     * @param {string} cmd 指令类型：create/write/close
-     * @param {object} params 指令参数
-     * @returns {Promise<object>} 服务端响应
-     */
-    // 2.6 发送指令到服务器
-    async sendCommand(cmd, params = {}) {
-        try {
-            // 构造请求数据（JSON 序列化）
-            const request = JSON.stringify({ cmd, params });
-            // 发送数据（新版 send 支持字符串，自动转 Buffer）
             await this.storage_server_socket.send(request);
 
-            // 接收响应（新版需用 iterator 接收，且响应是 Buffer 数组）
             const [responseBuffer] = await this.storage_server_socket.receive();
             const response = JSON.parse(responseBuffer.toString('utf8'));
             return response;
         } catch (err) {
-            throw new Error(`指令发送失败（${cmd}）：${err.message}`);
+            throw new Error(`Storage命令失败(${cmd}): ${err.message}`);
         }
     }
 
+    async saveDataToStorage(sensorData) {
+        try {
+            // 构造存储数据包
+            const storageData = {
+                // EMG数据
+                emg1: sensorData.emg1,
+                emg2: sensorData.emg2,
+                emg1_t: sensorData.emg1_t,
+                emg2_t: sensorData.emg2_t,
 
+                // IMU数据
+                imu1: sensorData.imu1,
+                imu2: sensorData.imu2,
+                imu1_t: sensorData.imu1_t,
+                imu2_t: sensorData.imu2_t
+            };
 
+            // 添加Prompt数据（如果有）
+            if (this.pending_prompt) {
+                storageData.prompt_name = this.pending_prompt.name;
+                storageData.prompt_time = this.pending_prompt.time;
+                storageData.prompt_stage = this.pending_prompt.stageName;
+                this.pending_prompt = null;  // 清除已发送的prompt
+            }
 
-    /**
-     * 
-     *  3.1 接收taskManager (lab.js) 的控制储存起始结束按钮
-     */
+            // 添加Stage Start（如果是新开始的stage）
+            if (this.stage_started && this.stage_start_time > 0) {
+                storageData.stage_start_name = this.stage_name;
+                storageData.stage_start_time = this.stage_start_time;
+                // 只发送一次
+                this.stage_start_time = 0;
+            }
 
-    taskManager_get_command(buttomname)
-    {
-        //console.log(`realtimeEngine 收到按钮点击`, buttomname);
-        this.buttomname = buttomname;
-        switch (this.buttomname) {
-            case 'start':
-                this.taskManager_send_start();
-                break;
-            case 'stop':
-                this.taskManager_send_end();
-                break;
-            case 'prompt1':
-                this.taskManager_send_prompt(0);
-                break;
-            case 'prompt2':
-                this.taskManager_send_prompt(1);
-                break;
-            case 'prompt3':
-                this.taskManager_send_prompt(2);
-                break;
-            case 'prompt4':
-                this.taskManager_send_prompt(3);
-                break;
-            case 'prompt5':
-                this.taskManager_send_prompt(4);
-                break;
-            default:
-                break;
+            // 添加Stage End（如果stage刚结束）
+            if (!this.stage_started && this.stage_end_time > 0) {
+                storageData.stage_end_name = this.stage_name;
+                storageData.stage_end_time = this.stage_end_time;
+                // 只发送一次
+                this.stage_end_time = 0;
+            }
+
+            // 发送给storage server
+            const response = await this.sendStorageCommand('append', {
+                data: storageData
+            });
+
+            // 可选：检查响应状态
+            if (response.status !== 'success') {
+                console.warn('[realtimeEngine] 存储响应警告:', response.msg);
+            }
+
+        } catch (error) {
+            // 存储错误不应中断数据流，只记录日志
+            console.error('[realtimeEngine] 存储数据失败:', error.message);
         }
-
-
-    }
-    taskManager_send_start()
-    {
-        //console.log("realtimeEngine storage start");
-        this.storage_start_flag = 1;
-        //this.storage_server_create_new_hdf5_file();
     }
 
-    taskManager_send_end()
-    {
-        //console.log("realtimeEngine storage end");
-        this.storage_end_flag = 1;
-        //this.storage_server_close_hdf5_file();
+    // ==================== 兼容旧格式 ====================
+    async attributeEMGData(emgData) {
+        if (!this.isRunning) return;
+
+        try {
+            if (!Array.isArray(emgData.big_bag_raw_data)) {
+                console.error("[realtimeEngine] rawData不是数组");
+                return;
+            }
+
+            if (emgData.big_bag_raw_data.length !== 5) {
+                console.error('[realtimeEngine] EMG数据组数不匹配');
+                return;
+            }
+
+            this.emg_packet_count += 5;
+            this.emg_5_packets_count++;
+
+            const dataPacket = {
+                type: 'realtime_data',
+                data: {
+                    emg: emgData.big_bag_raw_data,
+                    imu: null,
+                    timestamp: Date.now(),
+                    packetCount: this.emg_packet_count,
+                    framesInPacket: 5
+                }
+            };
+
+            this.broadcastToClients(dataPacket);
+
+        } catch (error) {
+            console.error('[realtimeEngine] 处理EMG数据错误:', error);
+        }
     }
 
-    taskManager_send_prompt(i)
-    {
-        //console.log("realtimeEngine storage prompt = ", discrete_gesture_prompt_name[i]);
-        this.prompt_flag = 1;
-        this.prompt_name = discrete_gesture_prompt_name[i];
-        this.prompt_time = getSysTimeNode();
-        
+    // ==================== 状态和控制 ====================
+
+    getStatus() {
+        return {
+            isRunning: this.isRunning,
+            isCollecting: this.isCollecting,
+            collectionPaused: this.collectionPaused,
+            currentTaskId: this.currentTaskId,
+            currentStageName: this.currentStageName,
+            clientCount: this.clients.size,
+            packetCount: this.emg_packet_count,
+            storageConnected: this.storage_connected
+        };
     }
 
+    stop() {
+        return new Promise((resolve) => {
+            this.isRunning = false;
+            this.isCollecting = false;
 
+            // 关闭所有客户端
+            this.clients.forEach(client => {
+                if (client.readyState === WebSocket.OPEN) {
+                    client.close(1001, '服务器关闭');
+                }
+            });
+            this.clients.clear();
+
+            // 关闭WebSocket服务器
+            if (this.websocket_server) {
+                const closeTimeout = setTimeout(() => {
+                    console.warn('[realtimeEngine] 服务器关闭超时');
+                    resolve();
+                }, 3000);
+
+                this.websocket_server.close(() => {
+                    clearTimeout(closeTimeout);
+                    console.log('[realtimeEngine] 已停止');
+                    resolve();
+                });
+            } else {
+                resolve();
+            }
+
+            // 关闭BLE客户端
+            if (this.ble_client) {
+                this.ble_client.close(1000, '服务关闭');
+                this.ble_client = null;
+            }
+
+            clearTimeout(this.reconnectTimer);
+        });
+    }
 }
 
-// 创建单例实例
+// 创建单例
 const realtimeEngine = new RealtimeEngine();
 
 module.exports = realtimeEngine;

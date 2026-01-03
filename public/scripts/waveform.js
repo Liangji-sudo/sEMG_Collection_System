@@ -1,10 +1,10 @@
 /**
  * waveform.js - 主入口文件
  * 
- * 整合渲染器和数据生成器，提供完整的波形显示功能。
- * 支持两种数据源：
- *   1. WebSocket实时数据（来自realtimeEngine.js，端口8080）
- *   2. 模拟数据生成器（用于测试）
+ * 整合渲染器，提供完整的波形显示功能。
+ * 数据源：WebSocket实时数据（来自realtimeEngine.js，端口8080）
+ * 
+ * 修复：移除对data-generator.js的依赖，所有模拟数据由ble_server.py生成
  */
 
 (function() {
@@ -111,7 +111,7 @@
                     return;
                 }
 
-                // 处理实时数据包 (来自realtimeEngine.js的新格式)
+                // 处理实时数据包 (来自realtimeEngine.js)
                 if (packet.type === 'realtime_data') {
                     this.renderRealtimeData(packet.data);
                     return;
@@ -119,7 +119,6 @@
 
                 // 兼容旧格式 emg_data
                 if (packet.type === 'emg_data') {
-                    // 旧格式处理（如果需要）
                     console.log('[Waveform] 收到旧格式数据包');
                     return;
                 }
@@ -131,66 +130,95 @@
 
         /**
          * 渲染实时数据
-         * @param {Object} data - 数据包
-         *   data.emg: [[ch0_p1, ch0_p2, ...], [ch1_p1, ...], ...] 16通道×9帧
-         *   data.imu: { acc: [ax,ay,az], gyr: [gx,gy,gz], mag: [mx,my,mz] }
+         * 
+         * @param {Object} data - 数据包（来自realtimeEngine.js）
+         *   data.emg1: 设备1的EMG数据 [[ch0_p1, ch0_p2, ...], [ch1_p1, ...], ...] 16通道×N帧
+         *   data.emg2: 设备2的EMG数据
+         *   data.imu1: 设备1的IMU数据 { acc: [ax,ay,az], gyr: [gx,gy,gz], mag: [mx,my,mz] }
+         *   data.imu2: 设备2的IMU数据
+         *   data.activeDevices: 活跃设备列表 [1] 或 [2] 或 [1,2]
          */
         renderRealtimeData(data) {
             if (!this.controller || !this.controller.rendererManager) return;
 
             const rm = this.controller.rendererManager;
+            
+            // 获取活跃设备列表
+            const activeDevices = data.activeDevices || [];
 
-            // ===== EMG数据渲染 =====
-            if (data.emg && data.emg.length > 0) {
-                // data.emg 格式: [通道][帧] - 16通道×9帧
-                // 渲染器需要的格式也是 [通道][帧]
-                
-                // EMG1 和 EMG2 显示相同数据
-                const emg1 = rm.get('emg1');
-                const emg2 = rm.get('emg2');
-                
-                if (emg1) emg1.renderPoints(data.emg);
-                if (emg2) emg2.renderPoints(data.emg);
+            // ===== EMG1数据渲染（仅当设备1有数据时） =====
+            if (data.emg1 && data.emg1.length > 0) {
+                const emg1Renderer = rm.get('emg1');
+                if (emg1Renderer) {
+                    emg1Renderer.renderPoints(data.emg1);
+                }
+                // 更新帧计数
+                this.controller.frameCount1 += (data.framesInPacket || data.emg1[0].length || 9);
             }
 
-            // ===== IMU数据渲染 =====
-            if (data.imu) {
+            // ===== EMG2数据渲染（仅当设备2有数据时） =====
+            if (data.emg2 && data.emg2.length > 0) {
+                const emg2Renderer = rm.get('emg2');
+                if (emg2Renderer) {
+                    emg2Renderer.renderPoints(data.emg2);
+                }
+                // 更新帧计数
+                this.controller.frameCount2 += (data.framesInPacket || data.emg2[0].length || 9);
+            }
+
+            // ===== IMU1数据渲染（仅当设备1有数据时） =====
+            if (data.imu1) {
                 // 加速度计: acc = [ax, ay, az]
-                // 渲染器需要格式: [[ax], [ay], [az]] 或 [[ax,...], [ay,...], [az,...]]
-                if (data.imu.acc) {
-                    const accData = data.imu.acc.map(v => [v]);  // 转为 [[ax], [ay], [az]]
+                if (data.imu1.acc) {
+                    const accData = data.imu1.acc.map(v => [v]);  // 转为 [[ax], [ay], [az]]
                     const imu1Acc = rm.get('imu1Acc');
-                    const imu2Acc = rm.get('imu2Acc');
                     if (imu1Acc) imu1Acc.renderPoints(accData);
-                    if (imu2Acc) imu2Acc.renderPoints(accData);
                 }
 
                 // 陀螺仪: gyr = [gx, gy, gz]
-                if (data.imu.gyr) {
-                    const gyrData = data.imu.gyr.map(v => [v]);
+                if (data.imu1.gyr) {
+                    const gyrData = data.imu1.gyr.map(v => [v]);
                     const imu1Gyr = rm.get('imu1Gyr');
-                    const imu2Gyr = rm.get('imu2Gyr');
                     if (imu1Gyr) imu1Gyr.renderPoints(gyrData);
-                    if (imu2Gyr) imu2Gyr.renderPoints(gyrData);
                 }
 
                 // 磁力计: mag = [mx, my, mz]
-                if (data.imu.mag) {
-                    const magData = data.imu.mag.map(v => [v]);
+                if (data.imu1.mag) {
+                    const magData = data.imu1.mag.map(v => [v]);
                     const imu1Mag = rm.get('imu1Mag');
-                    const imu2Mag = rm.get('imu2Mag');
                     if (imu1Mag) imu1Mag.renderPoints(magData);
+                }
+            }
+
+            // ===== IMU2数据渲染（仅当设备2有数据时） =====
+            if (data.imu2) {
+                if (data.imu2.acc) {
+                    const accData = data.imu2.acc.map(v => [v]);
+                    const imu2Acc = rm.get('imu2Acc');
+                    if (imu2Acc) imu2Acc.renderPoints(accData);
+                }
+
+                if (data.imu2.gyr) {
+                    const gyrData = data.imu2.gyr.map(v => [v]);
+                    const imu2Gyr = rm.get('imu2Gyr');
+                    if (imu2Gyr) imu2Gyr.renderPoints(gyrData);
+                }
+
+                if (data.imu2.mag) {
+                    const magData = data.imu2.mag.map(v => [v]);
+                    const imu2Mag = rm.get('imu2Mag');
                     if (imu2Mag) imu2Mag.renderPoints(magData);
                 }
             }
 
             // ===== 更新统计信息 =====
-            if (data.stats) {
-                this.controller.updateStats(data.stats, data.packetCount);
+            if (data.stats1) {
+                this.controller.updateDeviceStats(1, data.stats1);
+            }
+            if (data.stats2) {
+                this.controller.updateDeviceStats(2, data.stats2);
             }
             
-            // 更新帧计数
-            this.controller.frameCount += (data.framesInPacket || 9);
             this.controller.updateFrameCount();
         }
 
@@ -198,7 +226,6 @@
          * 更新连接状态显示
          */
         updateConnectionStatus(connected) {
-            // 可以在这里更新UI上的连接状态指示器
             const statusElement = document.getElementById('ws-status');
             if (statusElement) {
                 statusElement.textContent = connected ? '已连接' : '未连接';
@@ -211,13 +238,15 @@
     class WaveformController {
         constructor() {
             this.rendererManager = new RendererManager();
-            this.dataGenerator = new DataGenerator();
             this.dataReceiver = new RealtimeDataReceiver(this);
             
             this.isRunning = false;
-            this.useRealData = false;  // 是否使用真实数据
-            this.frameCount = 0;
-            this.intervalId = null;
+            this.frameCount1 = 0;  // 设备1帧计数
+            this.frameCount2 = 0;  // 设备2帧计数
+            
+            // 设备统计
+            this.stats1 = { total: 0, lost: 0 };
+            this.stats2 = { total: 0, lost: 0 };
             
             this.init();
         }
@@ -259,8 +288,7 @@
             this.updateTimeDisplay();
             setInterval(() => this.updateTimeDisplay(), 1000);
 
-            // 不自动开始，等待用户操作
-            // this.start();
+            console.log('[Waveform] 渲染器初始化完成');
         }
 
         updateTimeDisplay() {
@@ -278,34 +306,13 @@
         }
 
         /**
-         * 启动显示（使用模拟数据）
-         */
-        start() {
-            if (this.isRunning) return;
-            this.isRunning = true;
-            this.useRealData = false;
-            
-            // 100Hz更新频率
-            const interval = 10;
-            
-            this.intervalId = setInterval(() => {
-                this.update();
-            }, interval);
-            
-            console.log('[Waveform] 启动模拟数据显示');
-        }
-
-        /**
-         * 启动显示（使用真实BLE数据）
+         * 启动实时数据显示
+         * 连接到realtimeEngine.js接收来自ble_server.py的数据
          */
         startRealtime() {
-            if (this.isRunning && this.useRealData) return;
-            
-            // 停止模拟数据
-            this.stop();
+            if (this.isRunning) return;
             
             this.isRunning = true;
-            this.useRealData = true;
             
             // 连接WebSocket接收真实数据
             this.dataReceiver.connect();
@@ -314,52 +321,19 @@
         }
 
         /**
+         * 兼容旧接口：start() 现在等同于 startRealtime()
+         */
+        start() {
+            this.startRealtime();
+        }
+
+        /**
          * 停止显示
          */
         stop() {
             this.isRunning = false;
-            
-            if (this.intervalId) {
-                clearInterval(this.intervalId);
-                this.intervalId = null;
-            }
-            
-            if (this.useRealData) {
-                this.dataReceiver.disconnect();
-            }
-            
-            this.useRealData = false;
+            this.dataReceiver.disconnect();
             console.log('[Waveform] 停止显示');
-        }
-
-        /**
-         * 更新显示（模拟数据模式）
-         */
-        update() {
-            if (this.useRealData) return; // 真实数据模式下不使用此函数
-            
-            // 生成模拟数据
-            const emgData = this.dataGenerator.generateEMGPacket();
-            const imuAccData = this.dataGenerator.generateIMUAccPacket();
-            const imuGyrData = this.dataGenerator.generateIMUGyrPacket();
-            const imuMagData = this.dataGenerator.generateIMUMagPacket();
-
-            // EMG1和EMG2显示相同数据
-            this.rendererManager.get('emg1').renderPoints(emgData);
-            this.rendererManager.get('emg2').renderPoints(emgData);
-
-            // IMU1和IMU2显示相同数据
-            this.rendererManager.get('imu1Acc').renderPoints(imuAccData);
-            this.rendererManager.get('imu1Gyr').renderPoints(imuGyrData);
-            this.rendererManager.get('imu1Mag').renderPoints(imuMagData);
-
-            this.rendererManager.get('imu2Acc').renderPoints(imuAccData);
-            this.rendererManager.get('imu2Gyr').renderPoints(imuGyrData);
-            this.rendererManager.get('imu2Mag').renderPoints(imuMagData);
-
-            // 更新帧计数
-            this.frameCount++;
-            this.updateFrameCount();
         }
 
         /**
@@ -368,24 +342,25 @@
         updateFrameCount() {
             const emg1Frames = document.getElementById('emg1-frames');
             const emg2Frames = document.getElementById('emg2-frames');
-            if (emg1Frames) emg1Frames.textContent = this.frameCount;
-            if (emg2Frames) emg2Frames.textContent = this.frameCount;
+            if (emg1Frames) emg1Frames.textContent = this.frameCount1;
+            if (emg2Frames) emg2Frames.textContent = this.frameCount2;
         }
 
         /**
-         * 更新统计信息显示
+         * 更新设备统计信息
          */
-        updateStats(stats, packetCount) {
-            // 更新丢包率等统计信息（如果UI中有对应元素）
-            const lostElement = document.getElementById('lost-frames');
-            const totalElement = document.getElementById('total-frames');
+        updateDeviceStats(deviceId, stats) {
+            if (deviceId === 1) {
+                this.stats1 = stats;
+            } else if (deviceId === 2) {
+                this.stats2 = stats;
+            }
             
-            if (lostElement && stats.lost !== undefined) {
-                lostElement.textContent = stats.lost;
-            }
-            if (totalElement && stats.total !== undefined) {
-                totalElement.textContent = stats.total;
-            }
+            // 更新UI显示（如果有对应元素）
+            const totalEl = document.getElementById(`dev${deviceId}-total`);
+            const lostEl = document.getElementById(`dev${deviceId}-lost`);
+            if (totalEl) totalEl.textContent = stats.total;
+            if (lostEl) lostEl.textContent = stats.lost;
         }
 
         /**
@@ -393,8 +368,8 @@
          */
         clearAll() {
             this.rendererManager.clearAll();
-            this.dataGenerator.reset();
-            this.frameCount = 0;
+            this.frameCount1 = 0;
+            this.frameCount2 = 0;
             this.updateFrameCount();
         }
 
@@ -403,13 +378,6 @@
          */
         getRendererManager() {
             return this.rendererManager;
-        }
-
-        /**
-         * 获取数据生成器
-         */
-        getDataGenerator() {
-            return this.dataGenerator;
         }
 
         /**
@@ -423,7 +391,7 @@
          * 检查是否正在使用真实数据
          */
         isUsingRealData() {
-            return this.useRealData && this.dataReceiver.isConnected;
+            return this.dataReceiver.isConnected;
         }
     }
 
@@ -437,15 +405,14 @@
         window.waveformController = controller;
         
         // 便捷方法
-        window.startSimulation = () => controller.start();
         window.startRealtime = () => controller.startRealtime();
+        window.startSimulation = () => controller.startRealtime(); // 兼容旧接口
         window.stopWaveform = () => controller.stop();
         window.clearWaveform = () => controller.clearAll();
         
         console.log('[Waveform] 系统初始化完成');
         console.log('[Waveform] 可用命令:');
-        console.log('  - startSimulation(): 启动模拟数据显示');
-        console.log('  - startRealtime(): 启动实时BLE数据显示');
+        console.log('  - startRealtime(): 启动实时数据显示');
         console.log('  - stopWaveform(): 停止显示');
         console.log('  - clearWaveform(): 清除显示');
     });

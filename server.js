@@ -2,9 +2,24 @@
 server.js
 负责启动采集模式的所有模块，包括（deviceSync, ble_server, realtimeEngine, taskManager, storage）
 */ 
+
+// ===================== 路径管理（必须最先执行）=====================
+const { PATHS, isPackaged } = require('./paths');
+
+// ===================== 日志系统初始化 =====================
+const { initLogger } = require('./logger');
+const logger = initLogger({
+    logDir: PATHS.log,               // 使用统一的日志目录
+    maxFileSize: 20 * 1024 * 1024,   // 20MB
+    maxFiles: 10,                     // 最多保留 10 个日志文件
+    filePrefix: 'server'              // 日志文件前缀
+});
+
+// ===================== 其他模块引入 =====================
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -21,10 +36,99 @@ const dataStorage = require('./dataStorage');
 // 中间件配置， 用于给前端获取数据的接口
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(PATHS.public));
 
-// ===================== 仅新增这一段（不改动其他代码） =====================
-// 接收前端按钮点击的POST请求
+
+// ===================== Storage 文件列表 API =====================
+app.get('/api/storage/files', (req, res) => {
+    const storageDir = PATHS.storage;
+    
+    if (!fs.existsSync(storageDir)) {
+        return res.json({ success: false, error: 'storage 目录不存在', files: [] });
+    }
+
+    const files = [];
+    
+    function readDirRecursive(dir, relativePath = '') {
+        const items = fs.readdirSync(dir);
+        for (const item of items) {
+            const fullPath = path.join(dir, item);
+            const relPath = relativePath ? `${relativePath}/${item}` : item;
+            const stat = fs.statSync(fullPath);
+            
+            if (stat.isDirectory()) {
+                readDirRecursive(fullPath, relPath);
+            } else if (item.endsWith('.h5') || item.endsWith('.hdf5')) {
+                files.push({
+                    name: item,
+                    path: relPath,
+                    size: stat.size,
+                    lastModified: stat.mtimeMs
+                });
+            }
+        }
+    }
+    
+    try {
+        readDirRecursive(storageDir);
+        res.json({ success: true, files: files, count: files.length });
+    } catch (err) {
+        res.json({ success: false, error: err.message, files: [] });
+    }
+});
+
+// ===================== Config 配置文件列表 API =====================
+app.get('/api/config/files', (req, res) => {
+    const configDir = PATHS.config;
+    
+    if (!fs.existsSync(configDir)) {
+        return res.json({ success: false, error: 'config 目录不存在', files: [] });
+    }
+
+    try {
+        const items = fs.readdirSync(configDir);
+        const files = items
+            .filter(item => item.endsWith('.json'))
+            .map(item => {
+                const fullPath = path.join(configDir, item);
+                const stat = fs.statSync(fullPath);
+                return {
+                    name: item,
+                    size: stat.size,
+                    lastModified: stat.mtimeMs
+                };
+            });
+        
+        res.json({ success: true, files: files, count: files.length });
+    } catch (err) {
+        res.json({ success: false, error: err.message, files: [] });
+    }
+});
+
+// ===================== 读取单个配置文件内容 API =====================
+app.get('/api/config/load/:filename', (req, res) => {
+    const { filename } = req.params;
+    const configPath = path.join(PATHS.config, filename);
+    
+    // 安全检查：防止路径遍历攻击
+    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+        return res.json({ success: false, error: '无效的文件名' });
+    }
+    
+    if (!fs.existsSync(configPath)) {
+        return res.json({ success: false, error: '配置文件不存在' });
+    }
+
+    try {
+        const content = fs.readFileSync(configPath, 'utf-8');
+        const config = JSON.parse(content);
+        res.json({ success: true, config: config, filename: filename });
+    } catch (err) {
+        res.json({ success: false, error: '读取配置文件失败: ' + err.message });
+    }
+});
+
+// ===================== 接收前端按钮点击的POST请求 =====================
 app.post('/button-click', (req, res) => {
     // 获取前端传递的按钮名称
     const buttonName = req.body.buttonName;
@@ -38,7 +142,6 @@ app.post('/button-click', (req, res) => {
         data: { buttonName }
     });
 });
-// ===================== 新增代码结束 =====================
 
 // API路由 - 获取设备状态
 app.get('/api/device-status', (req, res) => {
@@ -162,7 +265,7 @@ app.get('/api/preview-file/:filename', (req, res) => {
 
 // 所有路由都指向index.html（支持前端路由）
 app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    res.sendFile(path.join(PATHS.public, 'index.html'));
 });
 
 
@@ -199,6 +302,12 @@ function setupGracefulShutdown() {
             await deviceSync.close();
             await realtimeEngine.stop();
             await dataStorage.close();
+            
+            // 关闭日志系统
+            if (logger) {
+                logger.close();
+            }
+            
             console.log('服务器关闭完成');
             process.exit(0);
         } catch (error) {

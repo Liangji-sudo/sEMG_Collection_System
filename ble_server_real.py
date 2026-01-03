@@ -44,15 +44,6 @@ import json
 import websockets
 from bleak import BleakScanner, BleakClient, BleakError
 
-# 尝试导入scipy用于滤波
-try:
-    from scipy import signal as scipy_signal
-    import numpy as np
-    HAS_SCIPY = True
-except ImportError:
-    HAS_SCIPY = False
-    print("[警告] scipy未安装，滤波功能不可用。请运行: pip install scipy numpy", file=sys.stderr)
-
 # ================= 编码配置 =================
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', line_buffering=True)
@@ -93,227 +84,6 @@ SCALE_GYRO = 2000.0 / 32768.0
 SCALE_MAG = 0.15
 BASE_LSB_24BIT = 0.476837
 HARDWARE_FRONTEND_GAIN = 5.9
-
-# ================= 滤波器配置 =================
-FILTER_ENABLED = True          # 总开关：是否启用滤波
-FILTER_LOWCUT = 10             # 带通下限 (Hz) - 降低到10Hz保留更多低频信号
-FILTER_HIGHCUT = 450           # 带通上限 (Hz)
-FILTER_NOTCH_FREQ = 50         # 工频频率 (Hz)
-FILTER_NOTCH_Q = 30            # 陷波器Q值（越大越窄）
-FILTER_BANDPASS_ENABLED = True # 启用带通滤波
-FILTER_NOTCH_ENABLED = True    # 启用工频陷波
-
-# 注意：如果前端显示信号幅度太小，可以在前端调整 Offset 值
-# 典型EMG信号幅度：静息时 10-50μV，收缩时 100-500μV
-# 建议前端 Offset 设置：100-200μV (默认300可能太大)
-
-
-# ================= EMG实时滤波器类 =================
-class EMGRealtimeFilter:
-    """
-    EMG实时滤波器
-    
-    功能：
-    - 带通滤波 (默认20-450Hz)：去除直流分量和高频噪声
-    - 工频陷波 (50Hz及谐波)：去除电源干扰
-    
-    使用IIR滤波器，保持状态实现流式处理
-    """
-    
-    def __init__(self, fs=1000, num_channels=16, 
-                 lowcut=FILTER_LOWCUT, highcut=FILTER_HIGHCUT,
-                 notch_freq=FILTER_NOTCH_FREQ, notch_q=FILTER_NOTCH_Q,
-                 enable_bandpass=FILTER_BANDPASS_ENABLED,
-                 enable_notch=FILTER_NOTCH_ENABLED):
-        """
-        初始化滤波器
-        
-        参数:
-            fs: 采样率 (Hz)
-            num_channels: 通道数
-            lowcut: 带通下限 (Hz)
-            highcut: 带通上限 (Hz)
-            notch_freq: 工频频率 (Hz)
-            notch_q: 陷波器Q值
-            enable_bandpass: 是否启用带通滤波
-            enable_notch: 是否启用工频陷波
-        """
-        if not HAS_SCIPY:
-            log("[滤波器] scipy未安装，滤波功能不可用")
-            self.enabled = False
-            return
-        
-        self.enabled = True
-        self.fs = fs
-        self.num_channels = num_channels
-        self.lowcut = lowcut
-        self.highcut = min(highcut, fs / 2 - 1)  # 不能超过奈奎斯特频率
-        self.notch_freq = notch_freq
-        self.notch_q = notch_q
-        self.enable_bandpass = enable_bandpass
-        self.enable_notch = enable_notch
-        
-        # 滤波器系数
-        self.b_hp = None  # 高通滤波器
-        self.a_hp = None
-        self.b_lp = None  # 低通滤波器
-        self.a_lp = None
-        self.notch_filters = []  # 陷波滤波器列表 [(b, a), ...]
-        
-        # 滤波器状态 (每个通道独立)
-        self.zi_hp = None
-        self.zi_lp = None
-        self.zi_notch = None
-        
-        # 初始化滤波器
-        self._init_filters()
-        
-        log(f"[滤波器] 初始化完成: fs={fs}Hz, 带通={lowcut}-{highcut}Hz, 陷波={notch_freq}Hz")
-    
-    def _init_filters(self):
-        """初始化滤波器系数和状态"""
-        if not self.enabled:
-            return
-        
-        # 1. 高通滤波器 (去除直流)
-        if self.enable_bandpass:
-            self.b_hp, self.a_hp = scipy_signal.butter(
-                2, self.lowcut, btype='highpass', fs=self.fs
-            )
-            # 初始化状态
-            zi = scipy_signal.lfilter_zi(self.b_hp, self.a_hp)
-            self.zi_hp = np.tile(zi[:, np.newaxis], (1, self.num_channels))
-            
-            # 低通滤波器 (去除高频噪声)
-            self.b_lp, self.a_lp = scipy_signal.butter(
-                2, self.highcut, btype='lowpass', fs=self.fs
-            )
-            zi = scipy_signal.lfilter_zi(self.b_lp, self.a_lp)
-            self.zi_lp = np.tile(zi[:, np.newaxis], (1, self.num_channels))
-        
-        # 2. 工频陷波滤波器 (50Hz及谐波)
-        if self.enable_notch:
-            self.notch_filters = []
-            self.zi_notch = []
-            
-            # 陷波50Hz及其谐波 (100Hz, 150Hz, ...)
-            for freq in range(self.notch_freq, int(self.fs / 2), self.notch_freq):
-                b, a = scipy_signal.iirnotch(freq, self.notch_q, self.fs)
-                self.notch_filters.append((b, a))
-                
-                zi = scipy_signal.lfilter_zi(b, a)
-                self.zi_notch.append(np.tile(zi[:, np.newaxis], (1, self.num_channels)))
-    
-    def reset(self):
-        """重置滤波器状态"""
-        if not self.enabled:
-            return
-        self._init_filters()
-        log("[滤波器] 状态已重置")
-    
-    def filter_frame(self, uv_data: list) -> list:
-        """
-        滤波单帧数据 (16通道)
-        
-        参数:
-            uv_data: 16通道的μV数据列表 [ch0, ch1, ..., ch15]
-        
-        返回:
-            滤波后的数据列表
-        """
-        if not self.enabled or not HAS_SCIPY:
-            return uv_data
-        
-        # 转换为numpy数组 (1, num_channels)
-        data = np.array(uv_data, dtype=np.float64).reshape(1, -1)
-        
-        # 应用高通滤波 (去除直流)
-        if self.enable_bandpass and self.b_hp is not None:
-            data, self.zi_hp = scipy_signal.lfilter(
-                self.b_hp, self.a_hp, data, axis=0, zi=self.zi_hp
-            )
-            # 应用低通滤波
-            data, self.zi_lp = scipy_signal.lfilter(
-                self.b_lp, self.a_lp, data, axis=0, zi=self.zi_lp
-            )
-        
-        # 应用工频陷波
-        if self.enable_notch and self.notch_filters:
-            for i, (b, a) in enumerate(self.notch_filters):
-                data, self.zi_notch[i] = scipy_signal.lfilter(
-                    b, a, data, axis=0, zi=self.zi_notch[i]
-                )
-        
-        return data.flatten().tolist()
-    
-    def filter_batch(self, uv_data_batch: list) -> list:
-        """
-        滤波批量数据 (多帧)
-        
-        参数:
-            uv_data_batch: 多帧数据 [[ch0, ch1, ...], [ch0, ch1, ...], ...]
-        
-        返回:
-            滤波后的数据列表
-        """
-        if not self.enabled or not HAS_SCIPY:
-            return uv_data_batch
-        
-        # 转换为numpy数组 (num_frames, num_channels)
-        data = np.array(uv_data_batch, dtype=np.float64)
-        
-        # 应用高通滤波 (去除直流)
-        if self.enable_bandpass and self.b_hp is not None:
-            data, self.zi_hp = scipy_signal.lfilter(
-                self.b_hp, self.a_hp, data, axis=0, zi=self.zi_hp
-            )
-            # 应用低通滤波
-            data, self.zi_lp = scipy_signal.lfilter(
-                self.b_lp, self.a_lp, data, axis=0, zi=self.zi_lp
-            )
-        
-        # 应用工频陷波
-        if self.enable_notch and self.notch_filters:
-            for i, (b, a) in enumerate(self.notch_filters):
-                data, self.zi_notch[i] = scipy_signal.lfilter(
-                    b, a, data, axis=0, zi=self.zi_notch[i]
-                )
-        
-        return data.tolist()
-
-
-# ================= 全局滤波器实例 =================
-# 设备1和设备2各自独立的滤波器
-emg_filter_dev1 = None
-emg_filter_dev2 = None
-
-def init_filters():
-    """初始化全局滤波器"""
-    global emg_filter_dev1, emg_filter_dev2
-    
-    if not FILTER_ENABLED:
-        log("[滤波器] 滤波功能已禁用")
-        return
-    
-    if not HAS_SCIPY:
-        log("[滤波器] scipy未安装，无法初始化滤波器")
-        return
-    
-    emg_filter_dev1 = EMGRealtimeFilter(
-        fs=DEFAULT_CONFIG['sample_rate'],
-        num_channels=16,
-        enable_bandpass=FILTER_BANDPASS_ENABLED,
-        enable_notch=FILTER_NOTCH_ENABLED
-    )
-    
-    emg_filter_dev2 = EMGRealtimeFilter(
-        fs=DEFAULT_CONFIG['sample_rate'],
-        num_channels=16,
-        enable_bandpass=FILTER_BANDPASS_ENABLED,
-        enable_notch=FILTER_NOTCH_ENABLED
-    )
-    
-    log("[滤波器] 双设备滤波器初始化完成")
 
 # ================= 连接配置 =================
 CONNECT_TIMEOUT = 30.0
@@ -356,12 +126,6 @@ class DeviceState:
         self.lost_frames = 0
         self.last_frame_index = -1
         self.data_buffer.clear()
-        
-        # 重置对应设备的滤波器状态
-        if FILTER_ENABLED and HAS_SCIPY:
-            emg_filter = emg_filter_dev1 if self.device_id == 1 else emg_filter_dev2
-            if emg_filter:
-                emg_filter.reset()
     
     def is_connected(self) -> bool:
         if self.client is None:
@@ -525,25 +289,11 @@ def parse_packet(data: bytearray, dev: DeviceState) -> Optional[dict]:
         
         dev.last_frame_index = start_frame + fpkt - 1
         
-        # ===== 应用滤波 =====
-        emg_uv_filtered = emg_uv  # 默认使用原始数据
-        
-        if FILTER_ENABLED and HAS_SCIPY:
-            # 根据设备ID选择对应的滤波器
-            emg_filter = emg_filter_dev1 if dev.device_id == 1 else emg_filter_dev2
-            
-            if emg_filter and emg_filter.enabled:
-                try:
-                    emg_uv_filtered = emg_filter.filter_batch(emg_uv)
-                except Exception as e:
-                    log(f"[Dev{dev.device_id}] 滤波错误: {e}")
-                    emg_uv_filtered = emg_uv  # 滤波失败时使用原始数据
-        
         return {
             'f': start_frame,
             'n': fpkt,
             'raw': emg_raw,
-            'uv': emg_uv_filtered,  # 使用滤波后的数据
+            'uv': emg_uv,
             'imu': imu,
             's': [dev.total_frames, dev.lost_frames],
         }
@@ -562,25 +312,6 @@ def create_notification_handler(dev: DeviceState):
             parsed = parse_packet(data, dev)
             if parsed:
                 parsed['t'] = ts
-                
-                # 生成每帧EMG的时间戳 (假设1kHz采样率，9帧/包)
-                fpkt = parsed.get('n', 9)
-                sample_rate = dev.config.get('sample_rate', 1000)
-                frame_interval = 1.0 / sample_rate
-                
-                # 为每帧生成时间戳（从当前时间向前推算）
-                emg_timestamps = []
-                for i in range(fpkt):
-                    # 最后一帧的时间是ts，往前推算
-                    frame_ts = ts - (fpkt - 1 - i) * frame_interval
-                    emg_timestamps.append(frame_ts)
-                parsed['emg_t'] = emg_timestamps
-                
-                # IMU时间戳（每包2帧IMU）
-                if parsed.get('imu'):
-                    imu_timestamps = [ts - 0.005, ts]  # 假设IMU 200Hz，间隔5ms
-                    parsed['imu_t'] = imu_timestamps
-                
                 dev.data_buffer.append(parsed)
         except Exception as e:
             log(f"[Dev{dev.device_id}] 回调错误: {e}")
@@ -1260,9 +991,6 @@ async def handle_data_client(websocket):
 async def main():
     state.main_loop = asyncio.get_running_loop()
     
-    # 初始化滤波器
-    init_filters()
-    
     # 启动数据发送线程
     state.stop_thread = False
     state.data_thread = threading.Thread(target=data_sender_thread, daemon=True)
@@ -1274,10 +1002,6 @@ async def main():
     log(f"控制端口: ws://{WEBSOCKET_HOST}:{CONTROL_PORT} (index.html)")
     log(f"数据端口: ws://{WEBSOCKET_HOST}:{DATA_PORT} (realtimeEngine.js)")
     log(f"目标设备: {TARGET_DEVICE_NAME}")
-    log(f"滤波功能: {'启用' if FILTER_ENABLED and HAS_SCIPY else '禁用'}")
-    if FILTER_ENABLED and HAS_SCIPY:
-        log(f"  - 带通滤波: {FILTER_LOWCUT}-{FILTER_HIGHCUT}Hz")
-        log(f"  - 工频陷波: {FILTER_NOTCH_FREQ}Hz (Q={FILTER_NOTCH_Q})")
     log("=" * 60)
     log("控制命令:")
     log("  scan, connect1/2, disconnect1/2")
