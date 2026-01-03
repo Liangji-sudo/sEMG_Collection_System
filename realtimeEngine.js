@@ -73,7 +73,7 @@ class RealtimeEngine extends EventEmitter {
                 // 1. 延迟连接BLE服务器
                 this.connectTimeoutTimer = setTimeout(() => {
                     this.ble_server_connect();
-                }, 1000);
+                }, 3000);
 
                 // 2. 启动WebSocket服务器（给前端）
                 this.websocket_server = new WebSocket.Server({ port });
