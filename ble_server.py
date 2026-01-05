@@ -1,29 +1,20 @@
 """
-BLE Server for ESP32S3_EMG Device (Dual Device + Dual WebSocket)
+BLE Server Mock - 模拟ESP32S3_EMG设备 (无硬件测试版本)
 =================================================================
+这是一个模拟版本，不需要实际的BLE硬件设备。
+它会生成模拟的EMG和IMU数据，供前端调试使用。
+
 支持：
-  - 两个蓝牙设备（独立控制）
+  - 两个模拟蓝牙设备（独立控制）
   - 两个 WebSocket 客户端：
     * 控制端（index.html）: 端口 8764，处理控制命令
     * 数据端（realtimeEngine.js）: 端口 8766，接收数据流
 
 依赖安装：
-  pip install websockets bleak msgpack
+  pip install websockets msgpack numpy
 
-架构：
-  ┌─────────────────┐     ┌─────────────────┐
-  │  index.html     │     │ realtimeEngine  │
-  │  (控制端)       │     │   (数据端)      │
-  └────────┬────────┘     └────────┬────────┘
-           │ :8764                 │ :8766
-           │ 控制命令              │ 数据流
-           ▼                       ▼
-  ┌─────────────────────────────────────────┐
-  │            ble_server.py                │
-  │  ┌─────────────┐   ┌─────────────┐     │
-  │  │   Device 1  │   │   Device 2  │     │
-  │  └─────────────┘   └─────────────┘     │
-  └─────────────────────────────────────────┘
+使用方法：
+  python ble_server.py
 """
 
 import asyncio
@@ -32,6 +23,8 @@ import time
 import traceback
 import sys
 import io
+import math
+import random
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List, Set
@@ -42,16 +35,14 @@ import itertools
 import msgpack
 import json
 import websockets
-from bleak import BleakScanner, BleakClient, BleakError
 
-# 尝试导入scipy用于滤波
+# 尝试导入numpy，如果没有则使用纯Python实现
 try:
-    from scipy import signal as scipy_signal
     import numpy as np
-    HAS_SCIPY = True
+    HAS_NUMPY = True
 except ImportError:
-    HAS_SCIPY = False
-    print("[警告] scipy未安装，滤波功能不可用。请运行: pip install scipy numpy", file=sys.stderr)
+    HAS_NUMPY = False
+    print("[警告] numpy未安装，将使用纯Python生成数据（性能较低）")
 
 # ================= 编码配置 =================
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
@@ -62,19 +53,16 @@ WEBSOCKET_HOST = "localhost"
 CONTROL_PORT = 8764   # 控制端口（index.html）
 DATA_PORT = 8766      # 数据端口（realtimeEngine.js）
 
-# ================= ESP32 设备配置 =================
-TARGET_DEVICE_NAME = "ESP32S3_EMG"
+# ================= 模拟设备配置 =================
+MOCK_DEVICE_PREFIX = "ESP32S3_EMG"
 
-CONTROL_CHAR_UUID = "9e5c100d-afc2-4e4b-b132-f2c0032f7a0b"
-EMG_DATA_CHAR_UUID = "9e5c100d-afc2-4e4b-b132-f2c0032f7a0c"
-
-CMD_MAP = {
-    '500Hz': 0x10,
-    '1kHz': 0x11,
-    '2kHz': 0x12,
-    'START': 0xA0,
-    'STOP': 0xA1,
-}
+# 模拟扫描到的设备列表
+MOCK_DEVICES = [
+    {"name": "ESP32S3_EMG_001", "mac": "AA:BB:CC:DD:EE:01", "rssi": -45},
+    {"name": "ESP32S3_EMG_002", "mac": "AA:BB:CC:DD:EE:02", "rssi": -52},
+    {"name": "ESP32S3_EMG_003", "mac": "AA:BB:CC:DD:EE:03", "rssi": -68},
+    {"name": "Other_BLE_Device", "mac": "11:22:33:44:55:66", "rssi": -75},
+]
 
 # ================= 默认配置 =================
 DEFAULT_CONFIG = {
@@ -94,235 +82,8 @@ SCALE_MAG = 0.15
 BASE_LSB_24BIT = 0.476837
 HARDWARE_FRONTEND_GAIN = 5.9
 
-# ================= 滤波器配置 =================
-FILTER_ENABLED = True          # 总开关：是否启用滤波
-FILTER_LOWCUT = 10             # 带通下限 (Hz) - 降低到10Hz保留更多低频信号
-FILTER_HIGHCUT = 450           # 带通上限 (Hz)
-FILTER_NOTCH_FREQ = 50         # 工频频率 (Hz)
-FILTER_NOTCH_Q = 30            # 陷波器Q值（越大越窄）
-FILTER_BANDPASS_ENABLED = True # 启用带通滤波
-FILTER_NOTCH_ENABLED = True    # 启用工频陷波
-
-# 注意：如果前端显示信号幅度太小，可以在前端调整 Offset 值
-# 典型EMG信号幅度：静息时 10-50μV，收缩时 100-500μV
-# 建议前端 Offset 设置：100-200μV (默认300可能太大)
-
-
-# ================= EMG实时滤波器类 =================
-class EMGRealtimeFilter:
-    """
-    EMG实时滤波器
-    
-    功能：
-    - 带通滤波 (默认20-450Hz)：去除直流分量和高频噪声
-    - 工频陷波 (50Hz及谐波)：去除电源干扰
-    
-    使用IIR滤波器，保持状态实现流式处理
-    """
-    
-    def __init__(self, fs=1000, num_channels=16, 
-                 lowcut=FILTER_LOWCUT, highcut=FILTER_HIGHCUT,
-                 notch_freq=FILTER_NOTCH_FREQ, notch_q=FILTER_NOTCH_Q,
-                 enable_bandpass=FILTER_BANDPASS_ENABLED,
-                 enable_notch=FILTER_NOTCH_ENABLED):
-        """
-        初始化滤波器
-        
-        参数:
-            fs: 采样率 (Hz)
-            num_channels: 通道数
-            lowcut: 带通下限 (Hz)
-            highcut: 带通上限 (Hz)
-            notch_freq: 工频频率 (Hz)
-            notch_q: 陷波器Q值
-            enable_bandpass: 是否启用带通滤波
-            enable_notch: 是否启用工频陷波
-        """
-        if not HAS_SCIPY:
-            log("[滤波器] scipy未安装，滤波功能不可用")
-            self.enabled = False
-            return
-        
-        self.enabled = True
-        self.fs = fs
-        self.num_channels = num_channels
-        self.lowcut = lowcut
-        self.highcut = min(highcut, fs / 2 - 1)  # 不能超过奈奎斯特频率
-        self.notch_freq = notch_freq
-        self.notch_q = notch_q
-        self.enable_bandpass = enable_bandpass
-        self.enable_notch = enable_notch
-        
-        # 滤波器系数
-        self.b_hp = None  # 高通滤波器
-        self.a_hp = None
-        self.b_lp = None  # 低通滤波器
-        self.a_lp = None
-        self.notch_filters = []  # 陷波滤波器列表 [(b, a), ...]
-        
-        # 滤波器状态 (每个通道独立)
-        self.zi_hp = None
-        self.zi_lp = None
-        self.zi_notch = None
-        
-        # 初始化滤波器
-        self._init_filters()
-        
-        log(f"[滤波器] 初始化完成: fs={fs}Hz, 带通={lowcut}-{highcut}Hz, 陷波={notch_freq}Hz")
-    
-    def _init_filters(self):
-        """初始化滤波器系数和状态"""
-        if not self.enabled:
-            return
-        
-        # 1. 高通滤波器 (去除直流)
-        if self.enable_bandpass:
-            self.b_hp, self.a_hp = scipy_signal.butter(
-                2, self.lowcut, btype='highpass', fs=self.fs
-            )
-            # 初始化状态
-            zi = scipy_signal.lfilter_zi(self.b_hp, self.a_hp)
-            self.zi_hp = np.tile(zi[:, np.newaxis], (1, self.num_channels))
-            
-            # 低通滤波器 (去除高频噪声)
-            self.b_lp, self.a_lp = scipy_signal.butter(
-                2, self.highcut, btype='lowpass', fs=self.fs
-            )
-            zi = scipy_signal.lfilter_zi(self.b_lp, self.a_lp)
-            self.zi_lp = np.tile(zi[:, np.newaxis], (1, self.num_channels))
-        
-        # 2. 工频陷波滤波器 (50Hz及谐波)
-        if self.enable_notch:
-            self.notch_filters = []
-            self.zi_notch = []
-            
-            # 陷波50Hz及其谐波 (100Hz, 150Hz, ...)
-            for freq in range(self.notch_freq, int(self.fs / 2), self.notch_freq):
-                b, a = scipy_signal.iirnotch(freq, self.notch_q, self.fs)
-                self.notch_filters.append((b, a))
-                
-                zi = scipy_signal.lfilter_zi(b, a)
-                self.zi_notch.append(np.tile(zi[:, np.newaxis], (1, self.num_channels)))
-    
-    def reset(self):
-        """重置滤波器状态"""
-        if not self.enabled:
-            return
-        self._init_filters()
-        log("[滤波器] 状态已重置")
-    
-    def filter_frame(self, uv_data: list) -> list:
-        """
-        滤波单帧数据 (16通道)
-        
-        参数:
-            uv_data: 16通道的μV数据列表 [ch0, ch1, ..., ch15]
-        
-        返回:
-            滤波后的数据列表
-        """
-        if not self.enabled or not HAS_SCIPY:
-            return uv_data
-        
-        # 转换为numpy数组 (1, num_channels)
-        data = np.array(uv_data, dtype=np.float64).reshape(1, -1)
-        
-        # 应用高通滤波 (去除直流)
-        if self.enable_bandpass and self.b_hp is not None:
-            data, self.zi_hp = scipy_signal.lfilter(
-                self.b_hp, self.a_hp, data, axis=0, zi=self.zi_hp
-            )
-            # 应用低通滤波
-            data, self.zi_lp = scipy_signal.lfilter(
-                self.b_lp, self.a_lp, data, axis=0, zi=self.zi_lp
-            )
-        
-        # 应用工频陷波
-        if self.enable_notch and self.notch_filters:
-            for i, (b, a) in enumerate(self.notch_filters):
-                data, self.zi_notch[i] = scipy_signal.lfilter(
-                    b, a, data, axis=0, zi=self.zi_notch[i]
-                )
-        
-        return data.flatten().tolist()
-    
-    def filter_batch(self, uv_data_batch: list) -> list:
-        """
-        滤波批量数据 (多帧)
-        
-        参数:
-            uv_data_batch: 多帧数据 [[ch0, ch1, ...], [ch0, ch1, ...], ...]
-        
-        返回:
-            滤波后的数据列表
-        """
-        if not self.enabled or not HAS_SCIPY:
-            return uv_data_batch
-        
-        # 转换为numpy数组 (num_frames, num_channels)
-        data = np.array(uv_data_batch, dtype=np.float64)
-        
-        # 应用高通滤波 (去除直流)
-        if self.enable_bandpass and self.b_hp is not None:
-            data, self.zi_hp = scipy_signal.lfilter(
-                self.b_hp, self.a_hp, data, axis=0, zi=self.zi_hp
-            )
-            # 应用低通滤波
-            data, self.zi_lp = scipy_signal.lfilter(
-                self.b_lp, self.a_lp, data, axis=0, zi=self.zi_lp
-            )
-        
-        # 应用工频陷波
-        if self.enable_notch and self.notch_filters:
-            for i, (b, a) in enumerate(self.notch_filters):
-                data, self.zi_notch[i] = scipy_signal.lfilter(
-                    b, a, data, axis=0, zi=self.zi_notch[i]
-                )
-        
-        return data.tolist()
-
-
-# ================= 全局滤波器实例 =================
-# 设备1和设备2各自独立的滤波器
-emg_filter_dev1 = None
-emg_filter_dev2 = None
-
-def init_filters():
-    """初始化全局滤波器"""
-    global emg_filter_dev1, emg_filter_dev2
-    
-    if not FILTER_ENABLED:
-        log("[滤波器] 滤波功能已禁用")
-        return
-    
-    if not HAS_SCIPY:
-        log("[滤波器] scipy未安装，无法初始化滤波器")
-        return
-    
-    emg_filter_dev1 = EMGRealtimeFilter(
-        fs=DEFAULT_CONFIG['sample_rate'],
-        num_channels=16,
-        enable_bandpass=FILTER_BANDPASS_ENABLED,
-        enable_notch=FILTER_NOTCH_ENABLED
-    )
-    
-    emg_filter_dev2 = EMGRealtimeFilter(
-        fs=DEFAULT_CONFIG['sample_rate'],
-        num_channels=16,
-        enable_bandpass=FILTER_BANDPASS_ENABLED,
-        enable_notch=FILTER_NOTCH_ENABLED
-    )
-    
-    log("[滤波器] 双设备滤波器初始化完成")
-
-# ================= 连接配置 =================
-CONNECT_TIMEOUT = 30.0
-SCAN_TIMEOUT = 5.0
-MAX_RETRIES = 3
-RETRY_DELAY = 2.0
-
 # ================= 批量发送配置 =================
-BATCH_INTERVAL = 0.005  # 5ms
+BATCH_INTERVAL = 0.01  # 10ms，对应100Hz数据率
 
 # ================= 优先级 =================
 PRIORITY_CONTROL = 0   # 控制命令（最高优先级）
@@ -330,14 +91,183 @@ PRIORITY_HIGH = 1      # 控制响应
 PRIORITY_LOW = 2       # 传感器数据
 
 
+# ================= 模拟数据生成器 =================
+class MockDataGenerator:
+    """模拟EMG和IMU数据生成器"""
+    
+    def __init__(self, device_id: int):
+        self.device_id = device_id
+        self.frame_index = 0
+        self.time = 0.0
+        self.dt = 1.0 / 1000.0  # 1kHz采样率
+        
+        # EMG模拟参数 - 每个设备有不同的特征
+        self.emg_base_freqs = [20 + random.uniform(-5, 5) + i * 3 for i in range(16)]
+        self.emg_amplitudes = [50 + random.uniform(-20, 20) for _ in range(16)]
+        self.emg_phases = [random.uniform(0, 2 * math.pi) for _ in range(16)]
+        self.emg_noise_level = 15 + device_id * 5  # 不同设备有不同噪声水平
+        
+        # EMG肌肉活动模拟
+        self.muscle_activity = [0.5] * 16
+        self.muscle_targets = [0.5] * 16
+        
+        # IMU模拟参数
+        self.acc_bias = [random.uniform(-0.05, 0.05) for _ in range(3)]
+        self.gyr_bias = [random.uniform(-1, 1) for _ in range(3)]
+        self.mag_base = [25 + random.uniform(-5, 5), 
+                        random.uniform(-10, 10), 
+                        -40 + random.uniform(-5, 5)]
+        
+        # 运动模拟
+        self.motion_phase = random.uniform(0, 2 * math.pi)
+        self.motion_freq = 0.5 + random.uniform(-0.2, 0.2)
+    
+    def generate_emg_frame(self) -> List[float]:
+        """生成一帧16通道EMG数据（单位：μV）"""
+        emg_data = []
+        
+        for ch in range(16):
+            # 更新肌肉活动（缓慢变化）
+            if random.random() < 0.02:
+                self.muscle_targets[ch] = 0.2 + random.random() * 0.8
+            
+            diff = self.muscle_targets[ch] - self.muscle_activity[ch]
+            self.muscle_activity[ch] += diff * 0.05
+            
+            # 基础EMG信号（多个频率成分）
+            t = self.time
+            freq = self.emg_base_freqs[ch]
+            phase = self.emg_phases[ch]
+            amp = self.emg_amplitudes[ch] * self.muscle_activity[ch]
+            
+            # 主频成分
+            signal = amp * math.sin(2 * math.pi * freq * t + phase)
+            
+            # 添加谐波
+            signal += amp * 0.3 * math.sin(2 * math.pi * freq * 2 * t + phase * 1.5)
+            signal += amp * 0.15 * math.sin(2 * math.pi * freq * 0.5 * t + phase * 0.7)
+            
+            # 添加随机爆发（模拟肌电爆发）
+            if random.random() < 0.01:
+                signal += random.uniform(-100, 100) * self.muscle_activity[ch]
+            
+            # 添加噪声
+            if HAS_NUMPY:
+                noise = np.random.normal(0, self.emg_noise_level)
+            else:
+                # Box-Muller变换生成高斯噪声
+                u1, u2 = random.random(), random.random()
+                noise = math.sqrt(-2 * math.log(u1)) * math.cos(2 * math.pi * u2) * self.emg_noise_level
+            
+            signal += noise
+            emg_data.append(signal)
+        
+        self.time += self.dt
+        return emg_data
+    
+    def generate_emg_packet(self, frames_per_packet: int = 9) -> Dict:
+        """生成一个EMG数据包，每帧都有独立的时间戳"""
+        emg_raw = []
+        emg_uv = []
+        emg_timestamps = []  # 每帧的时间戳
+        
+        start_frame = self.frame_index
+        base_time = time.time()  # 包的基准时间
+        
+        for i in range(frames_per_packet):
+            frame_data = self.generate_emg_frame()
+            # raw数据（模拟ADC原始值）
+            raw_frame = [int(v / 0.5) for v in frame_data]  # 假设0.5 μV/LSB
+            emg_raw.append(raw_frame)
+            emg_uv.append(frame_data)
+            # 每帧时间戳 = 基准时间 + 帧索引 * 采样间隔(1ms)
+            emg_timestamps.append(base_time + i * self.dt)
+            self.frame_index += 1
+        
+        return {
+            'raw': emg_raw,
+            'uv': emg_uv,
+            't': emg_timestamps,  # 改为时间戳数组
+            'start_frame': start_frame,
+            'frames': frames_per_packet,
+        }
+    
+    def generate_imu_data(self) -> Dict:
+        """生成IMU数据（2组，每组包含加速度计、陀螺仪、磁力计，以及独立时间戳）"""
+        imu_data = []
+        imu_timestamps = []  # 每组IMU的时间戳
+        
+        base_time = time.time()
+        imu_interval = 0.005  # IMU采样间隔5ms (200Hz)
+        
+        for i in range(2):  # 2组IMU数据
+            t = self.time
+            
+            # 加速度计 (g)
+            acc = [
+                self.acc_bias[0] + 0.1 * math.sin(2 * math.pi * self.motion_freq * t + self.motion_phase),
+                self.acc_bias[1] + 0.1 * math.cos(2 * math.pi * self.motion_freq * t + self.motion_phase),
+                1.0 + self.acc_bias[2] + 0.05 * math.sin(2 * math.pi * self.motion_freq * 2 * t),
+            ]
+            # 添加噪声
+            acc = [a + random.uniform(-0.02, 0.02) for a in acc]
+            
+            # 陀螺仪 (deg/s)
+            gyr = [
+                self.gyr_bias[0] + 10 * math.sin(2 * math.pi * self.motion_freq * t),
+                self.gyr_bias[1] + 10 * math.cos(2 * math.pi * self.motion_freq * t),
+                self.gyr_bias[2] + 5 * math.sin(2 * math.pi * self.motion_freq * 0.5 * t),
+            ]
+            gyr = [g + random.uniform(-2, 2) for g in gyr]
+            
+            # 磁力计 (μT)
+            mag = [
+                self.mag_base[0] + 2 * math.sin(2 * math.pi * 0.1 * t),
+                self.mag_base[1] + 2 * math.cos(2 * math.pi * 0.1 * t),
+                self.mag_base[2] + 1 * math.sin(2 * math.pi * 0.05 * t),
+            ]
+            mag = [m + random.uniform(-1, 1) for m in mag]
+            
+            imu_data.append([acc, gyr, mag])
+            # 每组IMU时间戳 = 基准时间 + 组索引 * IMU采样间隔
+            imu_timestamps.append(base_time + i * imu_interval)
+        
+        return {
+            'data': imu_data,
+            't': imu_timestamps,  # IMU时间戳数组
+        }
+    
+    def generate_packet(self) -> Dict:
+        """生成完整的数据包"""
+        emg = self.generate_emg_packet()
+        imu = self.generate_imu_data()
+        
+        return {
+            'f': emg['start_frame'],
+            'n': emg['frames'],
+            'raw': emg['raw'],
+            'uv': emg['uv'],
+            'emg_t': emg['t'],       # EMG时间戳数组（每帧一个）
+            'imu': imu['data'],       # IMU数据
+            'imu_t': imu['t'],        # IMU时间戳数组（每组一个）
+        }
+    
+    def reset(self):
+        """重置生成器"""
+        self.frame_index = 0
+        self.time = 0.0
+        self.muscle_activity = [0.5] * 16
+        self.muscle_targets = [0.5] * 16
+
+
 # ================= 单设备状态类 =================
 @dataclass
 class DeviceState:
-    """单个 BLE 设备的状态"""
+    """单个模拟BLE设备的状态"""
     device_id: int
     
-    client: Optional[BleakClient] = None
-    device: Any = None
+    # 模拟连接状态
+    _connected: bool = False
     mac: Optional[str] = None
     name: Optional[str] = None
     rssi: Optional[int] = None
@@ -351,26 +281,25 @@ class DeviceState:
     data_buffer: deque = field(default_factory=lambda: deque(maxlen=500))
     connect_task: Any = None
     
+    # 数据生成器
+    data_generator: Optional[MockDataGenerator] = None
+    
+    def __post_init__(self):
+        self.data_generator = MockDataGenerator(self.device_id)
+    
     def reset_stats(self):
         self.total_frames = 0
         self.lost_frames = 0
         self.last_frame_index = -1
         self.data_buffer.clear()
-        
-        # 重置对应设备的滤波器状态
-        if FILTER_ENABLED and HAS_SCIPY:
-            emg_filter = emg_filter_dev1 if self.device_id == 1 else emg_filter_dev2
-            if emg_filter:
-                emg_filter.reset()
+        if self.data_generator:
+            self.data_generator.reset()
     
     def is_connected(self) -> bool:
-        if self.client is None:
-            return False
-        try:
-            # 显式转换为 bool，避免 _DeprecatedIsConnectedReturn 类型无法 JSON 序列化
-            return bool(self.client.is_connected)
-        except:
-            return False
+        return self._connected
+    
+    def set_connected(self, connected: bool):
+        self._connected = connected
     
     def to_dict(self) -> dict:
         """转换为字典（用于状态响应）"""
@@ -435,162 +364,13 @@ state = ServerState()
 # ================= 工具函数 =================
 
 def log(message: str):
-    print(f"[BLE-Server] {message}", file=sys.stderr)
-
-
-def calculate_lsb_uv(config: dict) -> float:
-    lsb_uv = BASE_LSB_24BIT / (config['gain'] * HARDWARE_FRONTEND_GAIN)
-    if config['is_16bit']:
-        lsb_uv = lsb_uv * (2 ** config['shift'])
-    return lsb_uv
-
-
-def get_packet_params(config: dict) -> dict:
-    bps = 2 if config['is_16bit'] else 3
-    emg_len = config['frames_per_packet'] * 16 * bps
-    imu_len = 36 if config['imu_enabled'] else 0
-    return {
-        'bps': bps,
-        'emg_len': emg_len,
-        'imu_len': imu_len,
-        'total_len': 4 + emg_len + imu_len,
-        'fpkt': config['frames_per_packet'],
-    }
-
-
-# ================= 数据解析 =================
-
-def parse_packet(data: bytearray, dev: DeviceState) -> Optional[dict]:
-    params = get_packet_params(dev.config)
-    
-    if len(data) != params['total_len']:
-        log(f"[Dev{dev.device_id}] 包长错误: {len(data)} != {params['total_len']}")
-        return None
-    
-    try:
-        config = dev.config
-        lsb_uv = calculate_lsb_uv(config)
-        bps = params['bps']
-        fpkt = params['fpkt']
-        emg_len = params['emg_len']
-        imu_len = params['imu_len']
-        
-        start_frame = struct.unpack('<I', data[0:4])[0]
-        
-        emg_raw = []
-        emg_uv = []
-        raw_bytes = data[4: 4 + emg_len]
-        stride = 16 * bps
-        
-        for i in range(fpkt):
-            offset = i * stride
-            raw_row = []
-            uv_row = []
-            
-            for ch in range(16):
-                ch_offset = offset + ch * bps
-                chunk = raw_bytes[ch_offset: ch_offset + bps]
-                val = int.from_bytes(chunk, 'big', signed=True)
-                raw_row.append(val)
-                uv_row.append(val * lsb_uv)
-            
-            emg_raw.append(raw_row)
-            emg_uv.append(uv_row)
-        
-        imu = None
-        if config['imu_enabled'] and imu_len > 0:
-            imu_start = 4 + emg_len
-            imu_bytes = data[imu_start: imu_start + imu_len]
-            
-            def parse_imu(b):
-                ag = struct.unpack('>6h', b[0:12])
-                m = struct.unpack('<3h', b[12:18])
-                return [
-                    [x * SCALE_ACCEL for x in ag[0:3]],
-                    [x * SCALE_GYRO for x in ag[3:6]],
-                    [x * SCALE_MAG for x in m[0:3]],
-                ]
-            
-            imu = [
-                parse_imu(imu_bytes[0:18]),
-                parse_imu(imu_bytes[18:36]),
-            ]
-        
-        dev.total_frames += fpkt
-        
-        if dev.last_frame_index >= 0:
-            expected = dev.last_frame_index + 1
-            if start_frame != expected and start_frame > expected:
-                dev.lost_frames += start_frame - expected
-        
-        dev.last_frame_index = start_frame + fpkt - 1
-        
-        # ===== 应用滤波 =====
-        emg_uv_filtered = emg_uv  # 默认使用原始数据
-        
-        if FILTER_ENABLED and HAS_SCIPY:
-            # 根据设备ID选择对应的滤波器
-            emg_filter = emg_filter_dev1 if dev.device_id == 1 else emg_filter_dev2
-            
-            if emg_filter and emg_filter.enabled:
-                try:
-                    emg_uv_filtered = emg_filter.filter_batch(emg_uv)
-                except Exception as e:
-                    log(f"[Dev{dev.device_id}] 滤波错误: {e}")
-                    emg_uv_filtered = emg_uv  # 滤波失败时使用原始数据
-        
-        return {
-            'f': start_frame,
-            'n': fpkt,
-            'raw': emg_raw,
-            'uv': emg_uv_filtered,  # 使用滤波后的数据
-            'imu': imu,
-            's': [dev.total_frames, dev.lost_frames],
-        }
-        
-    except Exception as e:
-        log(f"[Dev{dev.device_id}] 解析错误: {e}")
-        return None
-
-
-# ================= BLE 回调 =================
-
-def create_notification_handler(dev: DeviceState):
-    def handler(sender: int, data: bytearray):
-        try:
-            ts = time.time()
-            parsed = parse_packet(data, dev)
-            if parsed:
-                parsed['t'] = ts
-                
-                # 生成每帧EMG的时间戳 (假设1kHz采样率，9帧/包)
-                fpkt = parsed.get('n', 9)
-                sample_rate = dev.config.get('sample_rate', 1000)
-                frame_interval = 1.0 / sample_rate
-                
-                # 为每帧生成时间戳（从当前时间向前推算）
-                emg_timestamps = []
-                for i in range(fpkt):
-                    # 最后一帧的时间是ts，往前推算
-                    frame_ts = ts - (fpkt - 1 - i) * frame_interval
-                    emg_timestamps.append(frame_ts)
-                parsed['emg_t'] = emg_timestamps
-                
-                # IMU时间戳（每包2帧IMU）
-                if parsed.get('imu'):
-                    imu_timestamps = [ts - 0.005, ts]  # 假设IMU 200Hz，间隔5ms
-                    parsed['imu_t'] = imu_timestamps
-                
-                dev.data_buffer.append(parsed)
-        except Exception as e:
-            log(f"[Dev{dev.device_id}] 回调错误: {e}")
-    return handler
+    print(f"[BLE-Mock] {message}", file=sys.stderr)
 
 
 # ================= 消息队列 =================
 
 def data_sender_thread():
-    """数据发送线程 - 发送到数据端"""
+    """数据发送线程 - 生成模拟数据并发送到数据端"""
     log("数据发送线程启动")
     
     while not state.stop_thread:
@@ -601,19 +381,19 @@ def data_sender_thread():
                 dev1_data = None
                 dev2_data = None
                 
-                if state.dev1.is_streaming and state.dev1.data_buffer:
-                    batch1 = []
-                    while state.dev1.data_buffer and len(batch1) < 5:
-                        batch1.append(state.dev1.data_buffer.popleft())
-                    if batch1:
-                        dev1_data = batch1 if len(batch1) > 1 else batch1[0]
+                # 为设备1生成数据
+                if state.dev1.is_streaming and state.dev1.data_generator:
+                    packet = state.dev1.data_generator.generate_packet()
+                    state.dev1.total_frames += packet['n']
+                    packet['s'] = [state.dev1.total_frames, state.dev1.lost_frames]
+                    dev1_data = packet
                 
-                if state.dev2.is_streaming and state.dev2.data_buffer:
-                    batch2 = []
-                    while state.dev2.data_buffer and len(batch2) < 5:
-                        batch2.append(state.dev2.data_buffer.popleft())
-                    if batch2:
-                        dev2_data = batch2 if len(batch2) > 1 else batch2[0]
+                # 为设备2生成数据
+                if state.dev2.is_streaming and state.dev2.data_generator:
+                    packet = state.dev2.data_generator.generate_packet()
+                    state.dev2.total_frames += packet['n']
+                    packet['s'] = [state.dev2.total_frames, state.dev2.lost_frames]
+                    dev2_data = packet
                 
                 if dev1_data is not None or dev2_data is not None:
                     msg = {
@@ -630,6 +410,7 @@ def data_sender_thread():
         except Exception as e:
             if not state.stop_thread:
                 log(f"发送线程错误: {e}")
+                traceback.print_exc()
     
     log("数据发送线程结束")
 
@@ -666,7 +447,6 @@ async def process_queue():
             prio, seq, msg_type, data, target_ws = q.get_nowait()
             
             try:
-                #payload = msgpack.packb(data)
                 payload = json.dumps(data, ensure_ascii=False)
                 
                 if msg_type == 'control':
@@ -715,98 +495,62 @@ async def broadcast_event(event: str, data: dict):
     add_to_queue(PRIORITY_HIGH, 'broadcast', msg)
 
 
-# ================= BLE 操作 =================
+# ================= 模拟BLE操作 =================
 
 async def scan_devices(ws):
-    """扫描设备"""
-    log(f"扫描设备（{SCAN_TIMEOUT}秒）...")
+    """模拟扫描设备"""
+    log(f"模拟扫描设备...")
     
-    try:
-        state.devices_found.clear()
-        state.scan_results.clear()
+    # 模拟扫描延迟
+    await asyncio.sleep(1.5)
+    
+    state.devices_found.clear()
+    state.scan_results.clear()
+    
+    for dev in MOCK_DEVICES:
+        display = f"{dev['name']} ({dev['mac']})"
+        state.devices_found[display] = dev
         
-        devices = await BleakScanner.discover(
-            timeout=SCAN_TIMEOUT,
-            return_adv=True,
-            scanning_mode="active"
-        )
-        
-        targets = []
-        
-        for d, adv in devices.values():
-            if d.address and not any(_d['mac'] == d.address for _d in targets):
-
-                display = f"{d.name} ({d.address})"
-                state.devices_found[display] = d
-                
-                # 尝试获取 RSSI
-                #rssi = getattr(d, 'rssi', None) or -100
-                
-                info = {
-                    'name': d.name or adv.local_name or "未知设备",
-                    'mac': d.address.upper(),
-                    'display': display,
-                    "rssi": adv.rssi if adv.rssi is not None else None,
-                    "manufacturer": str(adv.manufacturer_data)[:50]
-                }
-                state.scan_results.append(info)
-                
-                # if d.name == TARGET_DEVICE_NAME:
-                #     targets.append(info)
-        
-        # 按 RSSI 排序
-        state.scan_results.sort(key=lambda x: x['rssi'], reverse=True)
-        
-        #log(f"找到 {len(state.scan_results)} 个设备，目标 {len(targets)} 个")
-        log(f"找到 {len(state.scan_results)} 个设备")
-        
-        await send_to_control(ws, 'scan', {
-            'success': True,
-            'devices': state.scan_results,
-            'count': len(state.scan_results),
-            'targets': targets,
-        })
-        
-    except Exception as e:
-        log(f"扫描失败: {e}")
-        await send_to_control(ws, 'scan', {
-            'success': False,
-            'error': str(e),
-        })
+        info = {
+            'name': dev['name'],
+            'mac': dev['mac'],
+            'display': display,
+            'rssi': dev['rssi'],
+            'manufacturer': 'Mock Device'
+        }
+        state.scan_results.append(info)
+    
+    # 按RSSI排序
+    state.scan_results.sort(key=lambda x: x['rssi'], reverse=True)
+    
+    log(f"模拟扫描完成，找到 {len(state.scan_results)} 个设备")
+    
+    await send_to_control(ws, 'scan', {
+        'success': True,
+        'devices': state.scan_results,
+        'count': len(state.scan_results),
+        'targets': [d for d in state.scan_results if MOCK_DEVICE_PREFIX in d['name']],
+    })
 
 
 async def connect_device(ws, device_id: int, mac_or_name: str):
-    """连接设备"""
+    """模拟连接设备"""
     dev = state.get_device(device_id)
     action = f'connect{device_id}'
     
     # 查找设备
-    device = None
-    rssi = None
+    device_info = None
     
     if mac_or_name in state.devices_found:
-        device = state.devices_found[mac_or_name]
+        device_info = state.devices_found[mac_or_name]
     else:
         mac_upper = mac_or_name.upper()
         for info in state.scan_results:
-            if info['mac'] == mac_upper:
-                device = state.devices_found.get(info['display'])
-                rssi = info.get('rssi')
+            if info['mac'].upper() == mac_upper:
+                device_info = info
                 break
-        
-        if device is None:
-            for name, d in state.devices_found.items():
-                if d.address.upper() == mac_upper:
-                    device = d
-                    break
     
-    if device is None:
-        log(f"[Dev{device_id}] 直接查找: {mac_or_name}")
-        device = await BleakScanner.find_device_by_address(
-            mac_or_name.upper(), timeout=5.0
-        )
-    
-    if device is None:
+    if device_info is None:
         await send_to_control(ws, action, {
             'success': False,
             'device_id': device_id,
@@ -814,71 +558,55 @@ async def connect_device(ws, device_id: int, mac_or_name: str):
         })
         return
     
-    mac = device.address.upper()
-    log(f"[Dev{device_id}] 连接: {device.name} ({mac})")
+    mac = device_info['mac']
+    name = device_info['name']
+    rssi = device_info.get('rssi', -50)
     
+    log(f"[Dev{device_id}] 模拟连接: {name} ({mac})")
+    
+    # 如果已连接，先断开
     if dev.is_connected():
         await disconnect_device(ws, device_id, silent=True)
     
-    for retry in range(MAX_RETRIES):
-        try:
-            await send_to_control(ws, action, {
-                'success': None,
-                'device_id': device_id,
-                'message': f"连接中 ({retry+1}/{MAX_RETRIES})...",
-                'mac': mac,
-            })
-            
-            client = BleakClient(device, timeout=CONNECT_TIMEOUT)
-            await client.connect()
-            
-            if client.is_connected:
-                dev.client = client
-                dev.device = device
-                dev.mac = mac
-                dev.name = device.name
-                dev.rssi = rssi
-                dev.reset_stats()
-                
-                log(f"[Dev{device_id}] 连接成功: {mac}")
-                
-                await send_to_control(ws, action, {
-                    'success': True,
-                    'device_id': device_id,
-                    'mac': mac,
-                    'name': device.name,
-                    'rssi': rssi,
-                    'connected': state.get_connected_devices(),
-                })
-                
-                # 广播连接事件
-                await broadcast_event('device_connected', {
-                    'device_id': device_id,
-                    'mac': mac,
-                    'name': device.name,
-                })
-                return
-                
-        except TimeoutError:
-            log(f"[Dev{device_id}] 连接超时")
-        except BleakError as e:
-            log(f"[Dev{device_id}] BLE 错误: {e}")
-        except Exception as e:
-            log(f"[Dev{device_id}] 连接异常: {e}")
-        
-        if retry < MAX_RETRIES - 1:
-            await asyncio.sleep(RETRY_DELAY)
+    # 模拟连接过程
+    await send_to_control(ws, action, {
+        'success': None,
+        'device_id': device_id,
+        'message': f"连接中...",
+        'mac': mac,
+    })
+    
+    # 模拟连接延迟
+    await asyncio.sleep(0.5 + random.random() * 0.5)
+    
+    # 设置连接状态
+    dev.set_connected(True)
+    dev.mac = mac
+    dev.name = name
+    dev.rssi = rssi
+    dev.reset_stats()
+    
+    log(f"[Dev{device_id}] 连接成功: {mac}")
     
     await send_to_control(ws, action, {
-        'success': False,
+        'success': True,
         'device_id': device_id,
-        'error': f"连接失败（已重试 {MAX_RETRIES} 次）",
         'mac': mac,
+        'name': name,
+        'rssi': rssi,
+        'connected': state.get_connected_devices(),
+    })
+    
+    # 广播连接事件
+    await broadcast_event('device_connected', {
+        'device_id': device_id,
+        'mac': mac,
+        'name': name,
     })
 
 
 async def disconnect_device(ws, device_id: int, silent=False):
-    """断开设备"""
+    """模拟断开设备"""
     dev = state.get_device(device_id)
     action = f'disconnect{device_id}'
     mac = dev.mac
@@ -887,14 +615,7 @@ async def disconnect_device(ws, device_id: int, silent=False):
         if dev.is_streaming:
             await stop_stream(ws, device_id, silent=True)
         
-        if dev.client:
-            try:
-                await dev.client.disconnect()
-            except:
-                pass
-            dev.client = None
-        
-        dev.device = None
+        dev.set_connected(False)
         dev.mac = None
         dev.name = None
         dev.rssi = None
@@ -926,7 +647,7 @@ async def disconnect_device(ws, device_id: int, silent=False):
 
 
 async def start_stream(ws, device_id: int):
-    """开始采集"""
+    """开始模拟采集"""
     dev = state.get_device(device_id)
     action = f'start{device_id}'
     
@@ -946,44 +667,25 @@ async def start_stream(ws, device_id: int):
         })
         return
     
-    try:
-        dev.reset_stats()
-        
-        handler = create_notification_handler(dev)
-        await dev.client.start_notify(EMG_DATA_CHAR_UUID, handler)
-        log(f"[Dev{device_id}] 已订阅")
-        
-        await dev.client.write_gatt_char(
-            CONTROL_CHAR_UUID,
-            bytes([CMD_MAP['START']]),
-            response=False
-        )
-        log(f"[Dev{device_id}] 已发送 START")
-        
-        dev.is_streaming = True
-        
-        await send_to_control(ws, action, {
-            'success': True,
-            'device_id': device_id,
-            'active': state.get_active_devices(),
-        })
-        
-        await broadcast_event('stream_started', {
-            'device_id': device_id,
-            'active': state.get_active_devices(),
-        })
-        
-    except Exception as e:
-        log(f"[Dev{device_id}] 启动失败: {e}")
-        await send_to_control(ws, action, {
-            'success': False,
-            'device_id': device_id,
-            'error': str(e),
-        })
+    dev.reset_stats()
+    dev.is_streaming = True
+    
+    log(f"[Dev{device_id}] 开始模拟采集")
+    
+    await send_to_control(ws, action, {
+        'success': True,
+        'device_id': device_id,
+        'active': state.get_active_devices(),
+    })
+    
+    await broadcast_event('stream_started', {
+        'device_id': device_id,
+        'active': state.get_active_devices(),
+    })
 
 
 async def stop_stream(ws, device_id: int, silent=False):
-    """停止采集"""
+    """停止模拟采集"""
     dev = state.get_device(device_id)
     action = f'stop{device_id}'
     
@@ -996,48 +698,29 @@ async def stop_stream(ws, device_id: int, silent=False):
             })
         return
     
-    try:
-        if dev.client and dev.is_connected():
-            await dev.client.write_gatt_char(
-                CONTROL_CHAR_UUID,
-                bytes([CMD_MAP['STOP']]),
-                response=False
-            )
-            log(f"[Dev{device_id}] 已发送 STOP")
-            
-            await dev.client.stop_notify(EMG_DATA_CHAR_UUID)
-            log(f"[Dev{device_id}] 已取消订阅")
+    dev.is_streaming = False
+    
+    log(f"[Dev{device_id}] 停止模拟采集")
+    
+    if not silent:
+        await send_to_control(ws, action, {
+            'success': True,
+            'device_id': device_id,
+            'total': dev.total_frames,
+            'lost': dev.lost_frames,
+            'active': state.get_active_devices(),
+        })
         
-        dev.is_streaming = False
-        
-        if not silent:
-            await send_to_control(ws, action, {
-                'success': True,
-                'device_id': device_id,
-                'total': dev.total_frames,
-                'lost': dev.lost_frames,
-                'active': state.get_active_devices(),
-            })
-            
-            await broadcast_event('stream_stopped', {
-                'device_id': device_id,
-                'total': dev.total_frames,
-                'lost': dev.lost_frames,
-                'active': state.get_active_devices(),
-            })
-            
-    except Exception as e:
-        log(f"[Dev{device_id}] 停止失败: {e}")
-        if not silent:
-            await send_to_control(ws, action, {
-                'success': False,
-                'device_id': device_id,
-                'error': str(e),
-            })
+        await broadcast_event('stream_stopped', {
+            'device_id': device_id,
+            'total': dev.total_frames,
+            'lost': dev.lost_frames,
+            'active': state.get_active_devices(),
+        })
 
 
 async def start_all(ws):
-    """同时开始"""
+    """同时开始所有已连接设备"""
     started = []
     
     if state.dev1.is_connected() and not state.dev1.is_streaming:
@@ -1058,7 +741,7 @@ async def start_all(ws):
 
 
 async def stop_all(ws):
-    """同时停止"""
+    """同时停止所有设备"""
     stopped = []
     
     if state.dev1.is_streaming:
@@ -1101,7 +784,7 @@ async def handle_control_client(websocket):
     
     # 发送当前状态
     await send_to_control(websocket, 'welcome', {
-        'message': '控制端已连接',
+        'message': '控制端已连接 (模拟模式)',
         'dev1': state.dev1.to_dict(),
         'dev2': state.dev2.to_dict(),
         'connected': state.get_connected_devices(),
@@ -1114,7 +797,6 @@ async def handle_control_client(websocket):
                 if isinstance(message, bytes):
                     data = msgpack.unpackb(message)
                 else:
-                    import json
                     data = json.loads(message)
                 
                 action = data.get('action', '')
@@ -1211,12 +893,11 @@ async def handle_data_client(websocket):
     # 发送欢迎消息
     welcome = {
         'type': 'welcome',
-        'message': '数据端已连接',
+        'message': '数据端已连接 (模拟模式)',
         'active': state.get_active_devices(),
         'connected': state.get_connected_devices(),
     }
     try:
-        #await websocket.send(msgpack.packb(welcome))
         await websocket.send(json.dumps(welcome, ensure_ascii=False))
     except:
         pass
@@ -1228,7 +909,6 @@ async def handle_data_client(websocket):
                 if isinstance(message, bytes):
                     data = msgpack.unpackb(message)
                 else:
-                    import json
                     data = json.loads(message)
                 
                 action = data.get('action', '')
@@ -1242,7 +922,6 @@ async def handle_data_client(websocket):
                         'dev1': state.dev1.to_dict(),
                         'dev2': state.dev2.to_dict(),
                     }
-                    #await websocket.send(msgpack.packb(status))
                     await websocket.send(json.dumps(status, ensure_ascii=False))
                     
             except Exception as e:
@@ -1260,24 +939,20 @@ async def handle_data_client(websocket):
 async def main():
     state.main_loop = asyncio.get_running_loop()
     
-    # 初始化滤波器
-    init_filters()
-    
     # 启动数据发送线程
     state.stop_thread = False
     state.data_thread = threading.Thread(target=data_sender_thread, daemon=True)
     state.data_thread.start()
     
     log("=" * 60)
-    log("BLE Server (Dual Device + Dual WebSocket) 已启动")
+    log("BLE Server (模拟模式 - 无需硬件) 已启动")
     log("=" * 60)
     log(f"控制端口: ws://{WEBSOCKET_HOST}:{CONTROL_PORT} (index.html)")
     log(f"数据端口: ws://{WEBSOCKET_HOST}:{DATA_PORT} (realtimeEngine.js)")
-    log(f"目标设备: {TARGET_DEVICE_NAME}")
-    log(f"滤波功能: {'启用' if FILTER_ENABLED and HAS_SCIPY else '禁用'}")
-    if FILTER_ENABLED and HAS_SCIPY:
-        log(f"  - 带通滤波: {FILTER_LOWCUT}-{FILTER_HIGHCUT}Hz")
-        log(f"  - 工频陷波: {FILTER_NOTCH_FREQ}Hz (Q={FILTER_NOTCH_Q})")
+    log("=" * 60)
+    log("模拟设备列表:")
+    for dev in MOCK_DEVICES:
+        log(f"  - {dev['name']} ({dev['mac']}) RSSI: {dev['rssi']}")
     log("=" * 60)
     log("控制命令:")
     log("  scan, connect1/2, disconnect1/2")
