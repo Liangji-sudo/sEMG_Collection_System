@@ -105,6 +105,28 @@
                 sortBtn.addEventListener('click', () => this.toggleSort());
             }
 
+            // 后台页面标签切换（统计/配置）
+            document.querySelectorAll('.backend-tab-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const contentId = e.currentTarget.dataset.content;
+                    
+                    // 更新标签状态
+                    document.querySelectorAll('.backend-tab-btn').forEach(b => {
+                        b.classList.toggle('active', b.dataset.content === contentId);
+                    });
+                    
+                    // 更新内容显示
+                    document.querySelectorAll('.backend-content').forEach(content => {
+                        content.classList.toggle('active', content.dataset.content === contentId);
+                    });
+                    
+                    // 如果切换到配置页，初始化配置管理器
+                    if (contentId === 'config' && window.templateConfigManager) {
+                        window.templateConfigManager.init();
+                    }
+                });
+            });
+
             console.log('[BackendManager] 事件绑定完成');
         }
 

@@ -2314,6 +2314,713 @@
             padding-left: 24px;
             border-left: 2px solid #e5e7eb;
         }
+
+        /* ==================== 后台配置页面样式 ==================== */
+
+        /* 后台页面标签切换 */
+        .backend-tabs {
+            display: flex;
+            gap: 0;
+            background: #f3f4f6;
+            border-radius: 8px;
+            padding: 4px;
+            margin-left: 24px;
+        }
+
+        .backend-tab-btn {
+            padding: 8px 20px;
+            border: none;
+            background: transparent;
+            color: #6b7280;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            border-radius: 6px;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .backend-tab-btn:hover {
+            color: #3b82f6;
+        }
+
+        .backend-tab-btn.active {
+            background: white;
+            color: #3b82f6;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        /* 后台内容区切换 */
+        .backend-content {
+            display: none !important;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .backend-content.active {
+            display: flex !important;
+        }
+
+        /* 配置页面布局 */
+        .config-container.active {
+            display: flex !important;
+            flex-direction: column;
+        }
+
+        .config-container {
+            flex: 1;
+            flex-direction: column;
+            padding: 24px;
+            overflow: hidden;
+        }
+
+        .config-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-shrink: 0;
+        }
+
+        .config-header-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .config-header-left h2 {
+            font-size: 18px;
+            font-weight: 600;
+            color: #1f2937;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .config-header-left h2 i {
+            color: #3b82f6;
+        }
+
+        .template-name-input {
+            padding: 8px 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            font-size: 14px;
+            width: 200px;
+        }
+
+        .template-name-input:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+
+        .config-header-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        /* 配置标签页 */
+        .config-tabs {
+            display: flex;
+            gap: 0;
+            background: #f3f4f6;
+            border-radius: 8px;
+            padding: 4px;
+            margin-bottom: 20px;
+            flex-shrink: 0;
+        }
+
+        .config-tab-btn {
+            padding: 10px 20px;
+            border: none;
+            background: transparent;
+            color: #6b7280;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            border-radius: 6px;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .config-tab-btn:hover {
+            color: #3b82f6;
+        }
+
+        .config-tab-btn.active {
+            background: white;
+            color: #3b82f6;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        /* 配置内容区 */
+        .config-tab-content {
+            display: none;
+            flex: 1;
+            overflow-y: auto;
+            padding-right: 8px;
+        }
+
+        .config-tab-content.active {
+            display: block;
+        }
+
+        /* 配置区块 */
+        .config-section {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 16px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+
+        .config-section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .config-section-header h3 {
+            font-size: 15px;
+            font-weight: 600;
+            color: #1f2937;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .config-section-header h3 i {
+            color: #3b82f6;
+            width: 20px;
+        }
+
+        .config-hint {
+            font-size: 12px;
+            color: #9ca3af;
+            margin: -8px 0 16px 0;
+        }
+
+        .config-add-btn {
+            padding: 6px 12px;
+            border: 1px dashed #d1d5db;
+            background: transparent;
+            color: #6b7280;
+            font-size: 12px;
+            cursor: pointer;
+            border-radius: 6px;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .config-add-btn:hover {
+            border-color: #3b82f6;
+            color: #3b82f6;
+            background: rgba(59, 130, 246, 0.05);
+        }
+
+        /* 配置项网格（任务选择） */
+        .config-items-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .config-item-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 16px;
+            background: #f9fafb;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .config-item-checkbox:hover {
+            background: #f3f4f6;
+        }
+
+        .config-item-checkbox input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+        }
+
+        .checkbox-label {
+            font-size: 13px;
+            color: #374151;
+        }
+
+        /* 配置项列表 */
+        .config-items-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .config-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            background: #f9fafb;
+            border-radius: 8px;
+            transition: all 0.2s;
+        }
+
+        .config-item:hover {
+            background: #f3f4f6;
+        }
+
+        .config-item-drag {
+            color: #d1d5db;
+            cursor: grab;
+            padding: 4px;
+        }
+
+        .config-item-drag:hover {
+            color: #9ca3af;
+        }
+
+        .config-item-input {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            font-size: 13px;
+            background: white;
+        }
+
+        .config-item-input:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+
+        .config-item-stage .config-item-fields {
+            flex: 1;
+            display: flex;
+            gap: 8px;
+        }
+
+        .config-item-stage .config-item-input {
+            flex: 1;
+        }
+
+        .config-item-instruction {
+            flex: 2 !important;
+            color: #6b7280;
+        }
+
+        .config-item-delete {
+            padding: 6px 8px;
+            border: none;
+            background: transparent;
+            color: #d1d5db;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+
+        .config-item-delete:hover {
+            color: #ef4444;
+            background: rgba(239, 68, 68, 0.1);
+        }
+
+        .category-label-input {
+            border: none;
+            background: transparent;
+            font-size: 15px;
+            font-weight: 600;
+            color: #1f2937;
+            width: 120px;
+            padding: 4px 8px;
+            margin-left: 4px;
+            border-radius: 4px;
+        }
+
+        .category-label-input:hover {
+            background: #f3f4f6;
+        }
+
+        .category-label-input:focus {
+            outline: none;
+            background: #f3f4f6;
+        }
+
+        /* 手势配置 */
+        .config-gestures-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 12px;
+        }
+
+        /* 采集任务区块样式 */
+        .task-config-block {
+            background: #f9fafb;
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        .task-config-block:last-child {
+            margin-bottom: 0;
+        }
+
+        .task-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .task-checkbox {
+            background: transparent !important;
+            padding: 0 !important;
+        }
+
+        .task-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1f2937;
+        }
+
+        .task-gesture-count {
+            font-size: 12px;
+            color: #6b7280;
+            background: white;
+            padding: 4px 10px;
+            border-radius: 12px;
+        }
+
+        .task-description {
+            font-size: 12px;
+            color: #9ca3af;
+            margin: 0;
+            padding-left: 24px;
+        }
+
+        /* 手势卡片网格 */
+        .task-gestures-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding-left: 24px;
+        }
+
+        .gesture-chip {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            background: white;
+            border: 2px solid #e5e7eb;
+            border-radius: 20px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .gesture-chip:hover {
+            border-color: #3b82f6;
+        }
+
+        .gesture-chip.enabled {
+            background: rgba(16, 185, 129, 0.1);
+            border-color: #10b981;
+        }
+
+        .gesture-chip.disabled {
+            opacity: 0.5;
+            background: #f3f4f6;
+        }
+
+        .gesture-chip-icon {
+            font-size: 14px;
+        }
+
+        .gesture-chip-name {
+            color: #374151;
+            max-width: 80px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .gesture-chip-toggle {
+            background: none;
+            border: none;
+            padding: 2px;
+            cursor: pointer;
+            color: #9ca3af;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+        }
+
+        .gesture-chip.enabled .gesture-chip-toggle {
+            color: #10b981;
+        }
+
+        .gesture-chip-toggle:hover {
+            color: #3b82f6;
+        }
+
+        .add-gesture-chip {
+            border-style: dashed;
+            color: #9ca3af;
+            background: transparent;
+        }
+
+        .add-gesture-chip:hover {
+            color: #3b82f6;
+            border-color: #3b82f6;
+            background: rgba(59, 130, 246, 0.05);
+        }
+
+        .config-gesture-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px;
+            background: #f9fafb;
+            border-radius: 8px;
+            border: 2px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .config-gesture-item.enabled {
+            background: rgba(16, 185, 129, 0.1);
+            border-color: rgba(16, 185, 129, 0.3);
+        }
+
+        .config-gesture-item.disabled {
+            opacity: 0.6;
+        }
+
+        .gesture-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+        }
+
+        .gesture-checkbox input {
+            width: 16px;
+            height: 16px;
+        }
+
+        .gesture-icon {
+            font-size: 20px;
+        }
+
+        .gesture-name-input {
+            flex: 1;
+            padding: 6px 10px;
+            border: 1px solid #e5e7eb;
+            border-radius: 4px;
+            font-size: 12px;
+            background: white;
+            min-width: 0;
+        }
+
+        .gesture-delete-btn {
+            padding: 4px 6px;
+            border: none;
+            background: transparent;
+            color: #d1d5db;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 10px;
+        }
+
+        .gesture-delete-btn:hover {
+            color: #ef4444;
+        }
+
+        .gesture-stats {
+            display: flex;
+            gap: 24px;
+            padding: 16px;
+            background: #f9fafb;
+            border-radius: 8px;
+        }
+
+        .gesture-stats .stat-item {
+            text-align: center;
+        }
+
+        .gesture-stats .stat-value {
+            display: block;
+            font-size: 24px;
+            font-weight: 700;
+            color: #3b82f6;
+        }
+
+        .gesture-stats .stat-label {
+            font-size: 12px;
+            color: #6b7280;
+        }
+
+        /* 执行参数配置 */
+        .config-params-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 16px;
+        }
+
+        .config-param-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px;
+            background: #f9fafb;
+            border-radius: 8px;
+        }
+
+        .config-param-item label {
+            flex: 1;
+            font-size: 13px;
+            color: #374151;
+        }
+
+        .config-param-item input {
+            width: 80px;
+            padding: 8px 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            font-size: 14px;
+            text-align: center;
+        }
+
+        .config-param-item input:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+
+        .param-unit {
+            font-size: 12px;
+            color: #9ca3af;
+            width: 30px;
+        }
+
+        /* 时间估算 */
+        .estimation-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 12px;
+        }
+
+        .estimation-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            background: #f9fafb;
+            border-radius: 8px;
+        }
+
+        .estimation-item.estimation-total {
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+        }
+
+        .estimation-label {
+            font-size: 13px;
+            color: #6b7280;
+        }
+
+        .estimation-value {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1f2937;
+        }
+
+        .estimation-total .estimation-value {
+            color: #3b82f6;
+        }
+
+        /* 受试者字段配置 */
+        .config-fields-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .config-field-item {
+            background: #f9fafb;
+            border-radius: 8px;
+            padding: 12px;
+        }
+
+        .field-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .field-drag {
+            color: #d1d5db;
+            cursor: grab;
+            padding: 4px;
+        }
+
+        .field-label-input {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+
+        .field-type-select {
+            padding: 8px 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            font-size: 13px;
+            background: white;
+            min-width: 100px;
+        }
+
+        .field-required {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: #6b7280;
+            cursor: pointer;
+        }
+
+        .field-required input {
+            width: 14px;
+            height: 14px;
+        }
+
+        .field-delete-btn {
+            padding: 6px 8px;
+            border: none;
+            background: transparent;
+            color: #d1d5db;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+
+        .field-delete-btn:hover {
+            color: #ef4444;
+        }
+
+        /* 隐藏的文件输入 */
+        #importTemplateInput {
+            display: none;
+        }
     </style>
 </head>
 <body class="font-inter bg-light-2 text-dark min-h-screen overflow-x-hidden">
@@ -2786,7 +3493,7 @@
         </div>
     </div>
 
-    <!-- 3.1 后台管理界面（左右分栏版） -->
+    <!-- 3.1 后台管理界面（带配置页面） -->
     <div id="backend-page" class="hidden">
         <!-- 顶部导航 -->
         <header class="backend-header">
@@ -2795,6 +3502,16 @@
                     <i class="fa fa-arrow-left"></i>返回
                 </button>
                 <h1 class="backend-title">数据管理后台</h1>
+                
+                <!-- 页面切换标签 -->
+                <div class="backend-tabs">
+                    <button class="backend-tab-btn active" data-content="stats">
+                        <i class="fa fa-chart-bar"></i> 统计
+                    </button>
+                    <button class="backend-tab-btn" data-content="config">
+                        <i class="fa fa-cog"></i> 配置
+                    </button>
+                </div>
             </div>
             <div class="backend-header-right">
                 <button class="backend-btn backend-btn-primary" id="refreshBtn">
@@ -2803,8 +3520,8 @@
             </div>
         </header>
 
-        <!-- 主内容区域 - 左右分栏 -->
-        <main class="backend-main">
+        <!-- ========== 统计页面内容 ========== -->
+        <main class="backend-main backend-content active" data-content="stats">
             <!-- 左侧统计面板 -->
             <div class="backend-panel stats-panel-container">
                 <div class="panel-header">
@@ -2834,6 +3551,68 @@
                 </div>
             </div>
         </main>
+
+        <!-- ========== 配置页面内容 ========== -->
+        <div class="backend-content config-container" data-content="config">
+            <!-- 配置页头部 -->
+            <div class="config-header">
+                <div class="config-header-left">
+                    <h2><i class="fa fa-cog"></i> 采集模板配置</h2>
+                    <input type="text" id="templateNameInput" class="template-name-input" placeholder="模板名称">
+                </div>
+                <div class="config-header-actions">
+                    <button class="backend-btn" id="resetTemplateBtn">
+                        <i class="fa fa-undo"></i> 重置
+                    </button>
+                    <button class="backend-btn" id="importTemplateBtn">
+                        <i class="fa fa-upload"></i> 导入
+                    </button>
+                    <input type="file" id="importTemplateInput" accept=".json">
+                    <button class="backend-btn" id="exportTemplateBtn">
+                        <i class="fa fa-download"></i> 导出
+                    </button>
+                    <button class="backend-btn backend-btn-primary" id="saveTemplateBtn">
+                        <i class="fa fa-save"></i> 保存
+                    </button>
+                </div>
+            </div>
+
+            <!-- 配置标签页 -->
+            <div class="config-tabs">
+                <button class="config-tab-btn active" data-tab="categories">
+                    <i class="fa fa-sitemap"></i> 分类配置
+                </button>
+                <button class="config-tab-btn" data-tab="gestures">
+                    <i class="fa fa-hand-paper"></i> 手势库
+                </button>
+                <button class="config-tab-btn" data-tab="execution">
+                    <i class="fa fa-clock"></i> 执行参数
+                </button>
+                <button class="config-tab-btn" data-tab="subject">
+                    <i class="fa fa-user"></i> 受试者字段
+                </button>
+            </div>
+
+            <!-- 分类配置标签页 -->
+            <div class="config-tab-content active" data-tab="categories" id="categoriesTabContent">
+                <!-- 由JS动态渲染 -->
+            </div>
+
+            <!-- 手势库标签页 -->
+            <div class="config-tab-content" data-tab="gestures" id="gesturesTabContent">
+                <!-- 由JS动态渲染 -->
+            </div>
+
+            <!-- 执行参数标签页 -->
+            <div class="config-tab-content" data-tab="execution" id="executionTabContent">
+                <!-- 由JS动态渲染 -->
+            </div>
+
+            <!-- 受试者字段标签页 -->
+            <div class="config-tab-content" data-tab="subject" id="subjectTabContent">
+                <!-- 由JS动态渲染 -->
+            </div>
+        </div>
     </div>
 
 
@@ -2870,6 +3649,8 @@
     <script defer src="scripts/config-manager.js"></script>
     <!-- 后台数据管理 -->
     <script defer src="scripts/backend-manager.js"></script>
+    <!-- 采集模板配置管理 -->
+    <script defer src="scripts/template-config.js"></script>
     <!-- 采集任务控制器 -->
     <script defer src="scripts/collection-controller.js"></script>
 
