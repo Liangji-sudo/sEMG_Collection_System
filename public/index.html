@@ -3536,6 +3536,354 @@
             padding: 60px 20px;
             color: #9ca3af;
         }
+
+        
+        /* ==================== 采集选择流程样式 ==================== */
+        .selector-modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 3000;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s, visibility 0.3s;
+            backdrop-filter: blur(4px);
+        }
+
+        .selector-modal-overlay.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .selector-modal {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 25px 80px rgba(0, 0, 0, 0.3);
+            width: 720px;
+            max-width: 95vw;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            transform: scale(0.9) translateY(20px);
+            transition: transform 0.3s;
+            overflow: hidden;
+        }
+
+        .selector-modal-overlay.visible .selector-modal {
+            transform: scale(1) translateY(0);
+        }
+
+        .selector-modal-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: linear-gradient(145deg, #f8fafc 0%, #f1f5f9 100%);
+        }
+
+        .selector-modal-title {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 18px;
+            font-weight: 600;
+            color: #1e40af;
+        }
+
+        .selector-modal-close {
+            width: 36px;
+            height: 36px;
+            border: none;
+            background: transparent;
+            color: #9ca3af;
+            cursor: pointer;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            transition: all 0.2s;
+        }
+
+        .selector-modal-close:hover {
+            background: #f3f4f6;
+            color: #374151;
+        }
+
+        .selector-step-indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px 24px;
+            background: #fafbfc;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .step-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            min-width: 70px;
+        }
+
+        .step-number {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: #e5e7eb;
+            color: #9ca3af;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .step-item.active .step-number {
+            background: linear-gradient(145deg, #3b82f6 0%, #1e40af 100%);
+            color: white;
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+        }
+
+        .step-item.completed .step-number {
+            background: #22c55e;
+            color: white;
+        }
+
+        .step-label {
+            font-size: 11px;
+            color: #9ca3af;
+            font-weight: 500;
+            text-align: center;
+        }
+
+        .step-item.active .step-label {
+            color: #1e40af;
+            font-weight: 600;
+        }
+
+        .step-item.completed .step-label {
+            color: #16a34a;
+        }
+
+        .step-line {
+            flex: 1;
+            height: 2px;
+            background: #e5e7eb;
+            margin: 0 8px;
+            margin-bottom: 20px;
+            max-width: 50px;
+        }
+
+        .selector-modal-body {
+            flex: 1;
+            padding: 24px;
+            overflow-y: auto;
+        }
+
+        .selector-step-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #374151;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .selector-step-title i {
+            color: #3b82f6;
+        }
+
+        .selector-options-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+        }
+
+        .selector-option {
+            background: #f9fafb;
+            border: 2px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 20px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            position: relative;
+            min-height: 120px;
+        }
+
+        .selector-option:hover {
+            border-color: #93c5fd;
+            background: #eff6ff;
+            transform: translateY(-2px);
+        }
+
+        .selector-option.selected {
+            border-color: #3b82f6;
+            background: linear-gradient(145deg, #eff6ff 0%, #dbeafe 100%);
+            box-shadow: 0 4px 16px rgba(59, 130, 246, 0.25);
+        }
+
+        .option-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            background: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            color: #6b7280;
+            margin-bottom: 12px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+
+        .selector-option:hover .option-icon,
+        .selector-option.selected .option-icon {
+            color: #3b82f6;
+        }
+
+        .option-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: #374151;
+        }
+
+        .option-check {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transform: scale(0.8);
+            transition: all 0.2s;
+        }
+
+        .selector-option.selected .option-check {
+            opacity: 1;
+            transform: scale(1);
+            background: #22c55e;
+            color: white;
+        }
+
+        .selector-empty {
+            text-align: center;
+            padding: 40px;
+            color: #9ca3af;
+        }
+
+        .selector-empty i {
+            font-size: 48px;
+            margin-bottom: 16px;
+            color: #d1d5db;
+        }
+
+        .selector-subject-form .form-row {
+            display: flex;
+            gap: 16px;
+        }
+
+        .selector-subject-form .form-group {
+            flex: 1;
+            margin-bottom: 16px;
+        }
+
+        .selector-subject-form label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            color: #374151;
+            margin-bottom: 6px;
+        }
+
+        .selector-subject-form .required {
+            color: #ef4444;
+        }
+
+        .selector-subject-form input,
+        .selector-subject-form select {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        .selector-subject-form input:focus,
+        .selector-subject-form select:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        .selector-modal-footer {
+            padding: 16px 24px;
+            border-top: 1px solid #e5e7eb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #fafbfc;
+        }
+
+        .selector-nav-btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.2s;
+        }
+
+        .selector-nav-btn.prev {
+            background: white;
+            color: #6b7280;
+            border: 1px solid #d1d5db;
+        }
+
+        .selector-nav-btn.prev:hover {
+            background: #f3f4f6;
+        }
+
+        .selector-nav-btn.next {
+            background: linear-gradient(145deg, #3b82f6 0%, #1e40af 100%);
+            color: white;
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+        }
+
+        .selector-nav-btn.next:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 16px rgba(59, 130, 246, 0.4);
+        }
+
+        .selector-nav-btn.next:disabled {
+            background: #d1d5db;
+            box-shadow: none;
+            cursor: not-allowed;
+            transform: none;
+        }
+
     </style>
 </head>
 <body class="font-inter bg-light-2 text-dark min-h-screen overflow-x-hidden">
@@ -3697,6 +4045,36 @@
                 </div>
             </div>
         </footer>
+    </div>
+    
+    <!-- ==================== 采集选择流程弹窗 ==================== -->
+    <div class="selector-modal-overlay" id="collectionSelectorModal">
+        <div class="selector-modal">
+            <div class="selector-modal-header">
+                <div class="selector-modal-title">
+                    <i class="fas fa-clipboard-list"></i>
+                    采集配置向导
+                </div>
+                <button class="selector-modal-close" id="closeSelectorModal">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="selector-step-indicator" id="selectorStepIndicator"></div>
+            <div class="selector-modal-body">
+                <div class="selector-step-title" id="selectorStepTitle">
+                    <i class="fas fa-tasks"></i> 选择采集任务
+                </div>
+                <div id="selectorStepContent"></div>
+            </div>
+            <div class="selector-modal-footer">
+                <button class="selector-nav-btn prev" id="selectorPrevBtn" style="visibility: hidden;">
+                    <i class="fas fa-arrow-left"></i> 上一步
+                </button>
+                <button class="selector-nav-btn next" id="selectorNextBtn">
+                    下一步 <i class="fas fa-arrow-right"></i>
+                </button>
+            </div>
+        </div>
     </div>
 
     <!-- ==================== 用户信息弹窗 ==================== -->
@@ -4158,6 +4536,10 @@
     -->
     <!-- 动画控制器（开场动画、stage动画等） -->
     <script src="scripts/animation-controller.js"></script>
+    
+    <!-- 采集选择流程控制器 -->
+    <script defer src="scripts/collection-selector.js"></script>
+
     <!-- 页面切换控制 -->
     <script defer src="scripts/page-switch.js"></script>
     <!-- 配置管理器（加载/预览配置文件） -->

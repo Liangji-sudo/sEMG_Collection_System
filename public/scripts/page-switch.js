@@ -7,7 +7,7 @@
  * 3. 波形显示控制
  * 4. Toast提示
  * 
- * 不包含：采集任务的具体控制逻辑（由collection-controller.js负责）
+ * 修改：点击"开始采集"按钮时，打开采集选择流程（而不是直接显示用户信息弹窗）
  */
 
 (function() {
@@ -32,12 +32,20 @@
         }
 
         bindEvents() {
-            // 开始采集按钮（首页）
+            // 开始采集按钮（首页）- 使用新的采集选择流程
             const startCollectionBtn = document.getElementById('startCollectionBtn');
             if (startCollectionBtn) {
                 startCollectionBtn.addEventListener('click', () => {
                     console.log('[PageSwitch] 点击开始采集');
-                    this.showUserModal();
+                    
+                    // 使用新的采集选择流程
+                    if (window.collectionSelector) {
+                        window.collectionSelector.open();
+                    } else {
+                        // 降级到旧的用户信息弹窗
+                        console.warn('[PageSwitch] 采集选择器未加载，使用旧模式');
+                        this.showUserModal();
+                    }
                 });
             }
 
@@ -50,7 +58,7 @@
                 });
             }
 
-            // 用户表单提交
+            // 用户表单提交（旧模式降级用）
             const userForm = document.getElementById('userForm');
             if (userForm) {
                 userForm.addEventListener('submit', (e) => {
@@ -159,7 +167,7 @@
         }
 
         /**
-         * 显示用户信息模态框
+         * 显示用户信息模态框（旧模式）
          */
         showUserModal() {
             const modal = document.getElementById('userModal');
@@ -203,7 +211,7 @@
         // ==================== 用户信息管理 ====================
 
         /**
-         * 提交用户信息
+         * 提交用户信息（旧模式）
          */
         submitUserInfo() {
             const user = {

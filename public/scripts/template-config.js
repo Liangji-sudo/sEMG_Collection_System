@@ -500,12 +500,6 @@
                         ${template.category1.map((item, index) => this.renderCategoryItem('category1', item, index)).join('')}
                     </div>
                 </div>
-                        </button>
-                    </div>
-                    <div class="config-items-list" data-category="category1">
-                        ${template.category1.map((item, index) => this.renderCategoryItem('category1', item, index)).join('')}
-                    </div>
-                </div>
 
                 <!-- 分类2: 大场景 -->
                 <div class="config-section">
