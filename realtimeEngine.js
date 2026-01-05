@@ -1,4 +1,4 @@
-// realtimeEngine.js - v2.0 (支持完整存储功能)
+// realtimeEngine.js - v4.1 (修复BLE数据处理 + 支持多级目录结构)
 const WebSocket = require('ws');
 const EventEmitter = require('events');
 const zmq = require('zeromq');
@@ -48,19 +48,27 @@ class RealtimeEngine extends EventEmitter {
         this.storage_server_host = '127.0.0.1';
         this.storage_server_port = 5555;
         this.storage_connected = false;
+        
+        // 【新增】ZMQ请求队列（解决并发问题）
+        this.storageRequestQueue = [];
+        this.isStorageRequestPending = false;
 
         // ===== 采集状态 =====
         this.currentTaskId = null;
         this.currentUser = null;
         this.isCollecting = false;
         this.collectionPaused = false;
-        this.currentStageName = null;
+        
+        // ===== 采集配置信息（用于文件命名）=====
+        this.collectionConfig = null;  // 包含 category1, category2, category4 等
 
         // ===== Stage状态 =====
-        this.stage_name = null;
+        this.currentStageName = null;
+        this.stageFileOpen = false;  // 当前Stage是否有打开的文件
         this.stage_start_time = 0;
-        this.stage_end_time = 0;
-        this.stage_started = false;
+        
+        // 【新增】防止重复关闭的标志
+        this.isClosingStageFile = false;
 
         // ===== Prompt状态 =====
         this.pending_prompt = null;  // { name, time, stageName }
@@ -143,7 +151,7 @@ class RealtimeEngine extends EventEmitter {
                     this.onTaskChange(data.taskId);
                     break;
                 case 'collection_start':
-                    this.onCollectionStart(data.taskId, data.user);
+                    this.onCollectionStart(data);
                     break;
                 case 'collection_pause':
                     this.onCollectionPause();
@@ -154,11 +162,20 @@ class RealtimeEngine extends EventEmitter {
                 case 'collection_stop':
                     this.onCollectionStop(data.completed);
                     break;
+                case 'stage_change':
+                    this.onStageChange(data.stageIndex, data.stageName);
+                    break;
                 case 'stage_start':
                     this.onStageStart(data.stageName, data.stageIndex, data.timestamp);
                     break;
                 case 'stage_end':
-                    this.onStageEnd(data.stageName, data.stageIndex, data.timestamp);
+                    this.onStageEnd(data.stageName, data.timestamp);
+                    break;
+                case 'prompt_start':
+                    this.onPromptStart(data.promptName, data.promptIndex);
+                    break;
+                case 'prompt_end':
+                    this.onPromptEnd(data.promptName, data.promptIndex);
                     break;
                 case 'prompt':
                     this.onPrompt(data.name, data.stageName, data.timestamp);
@@ -179,25 +196,25 @@ class RealtimeEngine extends EventEmitter {
         this.currentTaskId = taskId;
     }
 
-    async onCollectionStart(taskId, user) {
-        console.log(`[realtimeEngine] ========== 开始采集 ==========`);
+    async onCollectionStart(data) {
+        console.log(`[realtimeEngine] ========== 开始采集会话 ==========`);
+        
+        const { taskId, stageName, userId, config } = data;
+        
         console.log(`[realtimeEngine] 任务: ${taskId}`);
-        console.log(`[realtimeEngine] 用户: ${user ? user.name : '未知'} (${user ? user.id : 'N/A'})`);
+        console.log(`[realtimeEngine] 用户ID: ${userId}`);
+        console.log(`[realtimeEngine] 配置:`, config);
 
         this.currentTaskId = taskId;
-        this.currentUser = user;
+        this.currentUser = { id: userId, ...config?.subject };
+        this.collectionConfig = config;
         this.isCollecting = true;
         this.collectionPaused = false;
-
-        // 创建新的HDF5文件
-        try {
-            const response = await this.sendStorageCommand('create', {
-                task_id: taskId,
-                user_id: user ? user.id : 'unknown'
-            });
-            console.log('[realtimeEngine] 创建存储文件响应:', response);
-        } catch (error) {
-            console.error('[realtimeEngine] 创建存储文件失败:', error);
+        this.currentStageName = stageName;
+        
+        // 自动开始第一个Stage的文件
+        if (stageName) {
+            await this.createStageFile(stageName);
         }
     }
 
@@ -215,69 +232,138 @@ class RealtimeEngine extends EventEmitter {
         console.log(`[realtimeEngine] ========== 停止采集 ==========`);
         console.log(`[realtimeEngine] 完成状态: ${completed ? '正常完成' : '手动停止'}`);
 
-        // 在关闭文件前，先刷新所有pending的数据
-        try {
-            // 如果有pending的stage_end，先发送它
-            if (this.stage_end_time > 0 && this.stage_name) {
-                console.log(`[realtimeEngine] 刷新pending Stage End: ${this.stage_name}`);
-                
-                const finalStageData = {
-                    stage_end_name: this.stage_name,
-                    stage_end_time: this.stage_end_time
-                };
-                
-                await this.sendStorageCommand('append', { data: finalStageData });
-            }
-        } catch (error) {
-            console.error('[realtimeEngine] 刷新pending数据失败:', error);
+        if (this.stageFileOpen && !this.isClosingStageFile) {
+            await this.closeStageFile();
         }
 
         this.isCollecting = false;
         this.collectionPaused = false;
-        this.currentStageName = null;
-        this.stage_started = false;
-        this.stage_end_time = 0;  // 清除
-        this.stage_name = null;
-
-        // 关闭HDF5文件
-        try {
-            const response = await this.sendStorageCommand('close', {});
-            console.log('[realtimeEngine] 关闭存储文件响应:', response);
-        } catch (error) {
-            console.error('[realtimeEngine] 关闭存储文件失败:', error);
-        }
     }
 
-    onStageStart(stageName, stageIndex, timestamp) {
+    onStageChange(stageIndex, stageName) {
+        console.log(`[realtimeEngine] ========== Stage切换 ==========`);
+        console.log(`[realtimeEngine] 新Stage: ${stageName} (索引: ${stageIndex})`);
+        this.currentStageName = stageName;
+    }
+
+    async onStageStart(stageName, stageIndex, timestamp) {
         console.log(`[realtimeEngine] ========== Stage开始 ==========`);
         console.log(`[realtimeEngine] Stage: ${stageName} (索引: ${stageIndex})`);
         console.log(`[realtimeEngine] 时间戳: ${timestamp}`);
 
+        if (this.stageFileOpen && !this.isClosingStageFile) {
+            console.log(`[realtimeEngine] 关闭上一个Stage的文件...`);
+            await this.closeStageFile();
+        }
+
         this.currentStageName = stageName;
-        this.stage_name = stageName;
         this.stage_start_time = timestamp;
-        this.stage_started = true;
+
+        await this.createStageFile(stageName);
     }
 
-    onStageEnd(stageName, stageIndex, timestamp) {
+    async onStageEnd(stageName, timestamp) {
         console.log(`[realtimeEngine] ========== Stage结束 ==========`);
-        console.log(`[realtimeEngine] Stage: ${stageName} (索引: ${stageIndex})`);
+        console.log(`[realtimeEngine] Stage: ${stageName}`);
         console.log(`[realtimeEngine] 时间戳: ${timestamp}`);
 
-        this.stage_end_time = timestamp;
-        this.stage_started = false;
+        if (this.stageFileOpen && !this.isClosingStageFile) {
+            await this.closeStageFile();
+        }
+    }
+
+    onPromptStart(promptName, promptIndex) {
+        console.log(`[realtimeEngine] ========== Prompt开始 ==========`);
+        console.log(`[realtimeEngine] Prompt: ${promptName} (索引: ${promptIndex})`);
+        
+        this.pending_prompt = {
+            name: promptName,
+            time: getSysTimeNode(),
+            stageName: this.currentStageName,
+            index: promptIndex
+        };
+    }
+
+    onPromptEnd(promptName, promptIndex) {
+        console.log(`[realtimeEngine] ========== Prompt结束 ==========`);
+        console.log(`[realtimeEngine] Prompt: ${promptName} (索引: ${promptIndex})`);
     }
 
     onPrompt(name, stageName, timestamp) {
         console.log(`[realtimeEngine] ========== Prompt信号 ==========`);
         console.log(`[realtimeEngine] Prompt: ${name}, Stage: ${stageName}, Time: ${timestamp}`);
 
-        // 缓存prompt，等待下一次数据包一起发送
         this.pending_prompt = {
             name: name,
-            time: timestamp,
-            stageName: stageName
+            time: timestamp || getSysTimeNode(),
+            stageName: stageName || this.currentStageName
         };
+    }
+
+    // ==================== Stage文件管理 ====================
+
+    async createStageFile(stageName) {
+        try {
+            const config = this.collectionConfig || {};
+            const userId = this.currentUser?.id || 'unknown';
+            
+            const createParams = {
+                task_id: this.currentTaskId || 'discrete_gesture',
+                user_id: userId,
+                stage_name: stageName,
+                category1: config.category1 || 'default',
+                category2: config.category2 || 'default', 
+                category4: config.category4 || 'default',
+                subject_info: this.currentUser || {},
+                template_name: config.templateName || 'default'
+            };
+
+            console.log(`[realtimeEngine] 创建Stage文件:`, createParams);
+
+            const response = await this.sendStorageCommand('create', createParams);
+            
+            if (response.status === 'success') {
+                this.stageFileOpen = true;
+                console.log(`[realtimeEngine] ✅ Stage文件创建成功: ${response.file_path}`);
+            } else {
+                console.error(`[realtimeEngine] ❌ Stage文件创建失败: ${response.msg}`);
+            }
+            
+            return response;
+        } catch (error) {
+            console.error('[realtimeEngine] 创建Stage文件失败:', error);
+            return { status: 'error', msg: error.message };
+        }
+    }
+
+    async closeStageFile() {
+        if (this.isClosingStageFile) {
+            console.log('[realtimeEngine] Stage文件正在关闭中，跳过');
+            return { status: 'skipped', msg: '正在关闭中' };
+        }
+        
+        this.isClosingStageFile = true;
+        
+        try {
+            console.log(`[realtimeEngine] 关闭Stage文件...`);
+            
+            const response = await this.sendStorageCommand('close', {});
+            
+            if (response.status === 'success') {
+                this.stageFileOpen = false;
+                console.log(`[realtimeEngine] ✅ Stage文件已关闭: ${response.file_path}`);
+                console.log(`[realtimeEngine] 📊 统计:`, response.stats);
+            } else {
+                console.error(`[realtimeEngine] ❌ 关闭文件失败: ${response.msg}`);
+            }
+            
+            return response;
+        } catch (error) {
+            console.error('[realtimeEngine] 关闭Stage文件失败:', error);
+            return { status: 'error', msg: error.message };
+        } finally {
+            this.isClosingStageFile = false;
+        }
     }
 
     // ==================== WebSocket广播 ====================
@@ -308,21 +394,31 @@ class RealtimeEngine extends EventEmitter {
             console.log("[realtimeEngine] 创建BLE客户端连接...");
 
             this.ble_client.onopen = () => {
-                console.log(`[realtimeEngine] BLE服务器连接成功`);
+                console.log(`[realtimeEngine] ✅ BLE服务器连接成功`);
                 this.currentReconnectTimes = 0;
                 clearTimeout(this.reconnectTimer);
                 clearTimeout(this.connectTimeoutTimer);
+                
+                // 通知前端
+                this.broadcastToClients({
+                    type: 'ble_connection_status',
+                    connected: true,
+                    message: 'BLE服务器已连接'
+                });
             };
 
+            // 【关键修复】正确处理BLE消息
             this.ble_client.onmessage = (event) => {
                 try {
                     const packet = JSON.parse(event.data);
 
+                    // 处理 type: 'data' 的数据包
                     if (packet.type === 'data') {
                         this.handleBleDataPacket(packet);
                         return;
                     }
 
+                    // 兼容旧格式
                     if (packet.type === 'emg_packet') {
                         this.attributeEMGData(packet);
                         return;
@@ -333,13 +429,20 @@ class RealtimeEngine extends EventEmitter {
             };
 
             this.ble_client.onerror = (error) => {
-                console.error('[realtimeEngine] BLE连接错误:', error);
+                console.error('[realtimeEngine] BLE连接错误:', error.message || error);
                 this.handleReconnect();
             };
 
             this.ble_client.onclose = (event) => {
                 const code = event.code || 0;
                 console.log(`[realtimeEngine] BLE连接关闭: code=${code}`);
+                
+                this.broadcastToClients({
+                    type: 'ble_connection_status',
+                    connected: false,
+                    message: 'BLE服务器连接已断开'
+                });
+                
                 if (code !== 1000) {
                     this.handleReconnect();
                 }
@@ -365,7 +468,7 @@ class RealtimeEngine extends EventEmitter {
         }, this.reconnectInterval);
     }
 
-    // ==================== 处理BLE数据包 ====================
+    // ==================== 处理BLE数据包（关键修复：使用正确的字段名） ====================
     handleBleDataPacket(packet) {
         if (!this.isRunning) return;
 
@@ -388,12 +491,15 @@ class RealtimeEngine extends EventEmitter {
                 const dev1 = Array.isArray(packet.dev1) ? packet.dev1[0] : packet.dev1;
 
                 if (dev1) {
+                    // EMG数据（字段名: uv）
                     if (dev1.uv && dev1.uv.length > 0) {
                         emg1Data = this.transposeEMG(dev1.uv);
                     }
+                    // EMG时间戳（字段名: emg_t）
                     if (dev1.emg_t && dev1.emg_t.length > 0) {
                         emg1Timestamps = dev1.emg_t;
                     }
+                    // IMU数据
                     if (dev1.imu && dev1.imu[0]) {
                         imu1Data = {
                             acc: dev1.imu[0][0],
@@ -401,9 +507,11 @@ class RealtimeEngine extends EventEmitter {
                             mag: dev1.imu[0][2]
                         };
                     }
+                    // IMU时间戳
                     if (dev1.imu_t && dev1.imu_t.length > 0) {
                         imu1Timestamps = dev1.imu_t;
                     }
+                    // 统计信息
                     stats1 = dev1.s ? { total: dev1.s[0], lost: dev1.s[1] } : null;
                     framesInPacket = dev1.n || 9;
                     this.dev1_packet_count += framesInPacket;
@@ -463,8 +571,8 @@ class RealtimeEngine extends EventEmitter {
             // 广播给前端
             this.broadcastToClients(displayPacket);
 
-            // ========== 存储数据（如果正在采集） ==========
-            if (this.isCollecting && !this.collectionPaused) {
+            // ========== 存储数据（如果正在采集且文件已打开） ==========
+            if (this.isCollecting && !this.collectionPaused && this.stageFileOpen && !this.isClosingStageFile) {
                 this.saveDataToStorage({
                     emg1: emg1Data,
                     emg2: emg2Data,
@@ -513,72 +621,77 @@ class RealtimeEngine extends EventEmitter {
         }
     }
 
+    /**
+     * 发送存储命令（使用队列防止并发）
+     */
     async sendStorageCommand(cmd, params = {}) {
-        try {
-            const request = JSON.stringify({ cmd, params });
-            await this.storage_server_socket.send(request);
-
-            const [responseBuffer] = await this.storage_server_socket.receive();
-            const response = JSON.parse(responseBuffer.toString('utf8'));
-            return response;
-        } catch (err) {
-            throw new Error(`Storage命令失败(${cmd}): ${err.message}`);
+        return new Promise((resolve, reject) => {
+            this.storageRequestQueue.push({ cmd, params, resolve, reject });
+            
+            if (!this.isStorageRequestPending) {
+                this._processStorageQueue();
+            }
+        });
+    }
+    
+    async _processStorageQueue() {
+        if (this.isStorageRequestPending || this.storageRequestQueue.length === 0) {
+            return;
         }
+        
+        this.isStorageRequestPending = true;
+        
+        while (this.storageRequestQueue.length > 0) {
+            const { cmd, params, resolve, reject } = this.storageRequestQueue.shift();
+            
+            try {
+                const request = JSON.stringify({ cmd, params });
+                await this.storage_server_socket.send(request);
+
+                const [responseBuffer] = await this.storage_server_socket.receive();
+                const response = JSON.parse(responseBuffer.toString('utf8'));
+                resolve(response);
+            } catch (err) {
+                reject(new Error(`Storage命令失败(${cmd}): ${err.message}`));
+            }
+        }
+        
+        this.isStorageRequestPending = false;
     }
 
     async saveDataToStorage(sensorData) {
+        if (this.isClosingStageFile || !this.stageFileOpen) {
+            return;
+        }
+        
         try {
-            // 构造存储数据包
             const storageData = {
-                // EMG数据
                 emg1: sensorData.emg1,
                 emg2: sensorData.emg2,
                 emg1_t: sensorData.emg1_t,
                 emg2_t: sensorData.emg2_t,
-
-                // IMU数据
                 imu1: sensorData.imu1,
                 imu2: sensorData.imu2,
                 imu1_t: sensorData.imu1_t,
                 imu2_t: sensorData.imu2_t
             };
 
-            // 添加Prompt数据（如果有）
             if (this.pending_prompt) {
                 storageData.prompt_name = this.pending_prompt.name;
                 storageData.prompt_time = this.pending_prompt.time;
                 storageData.prompt_stage = this.pending_prompt.stageName;
-                this.pending_prompt = null;  // 清除已发送的prompt
+                this.pending_prompt = null;
             }
 
-            // 添加Stage Start（如果是新开始的stage）
-            if (this.stage_started && this.stage_start_time > 0) {
-                storageData.stage_start_name = this.stage_name;
-                storageData.stage_start_time = this.stage_start_time;
-                // 只发送一次
-                this.stage_start_time = 0;
-            }
-
-            // 添加Stage End（如果stage刚结束）
-            if (!this.stage_started && this.stage_end_time > 0) {
-                storageData.stage_end_name = this.stage_name;
-                storageData.stage_end_time = this.stage_end_time;
-                // 只发送一次
-                this.stage_end_time = 0;
-            }
-
-            // 发送给storage server
             const response = await this.sendStorageCommand('append', {
                 data: storageData
             });
 
-            // 可选：检查响应状态
             if (response.status !== 'success') {
                 console.warn('[realtimeEngine] 存储响应警告:', response.msg);
             }
 
         } catch (error) {
-            // 存储错误不应中断数据流，只记录日志
             console.error('[realtimeEngine] 存储数据失败:', error.message);
         }
     }
@@ -628,18 +741,24 @@ class RealtimeEngine extends EventEmitter {
             collectionPaused: this.collectionPaused,
             currentTaskId: this.currentTaskId,
             currentStageName: this.currentStageName,
+            stageFileOpen: this.stageFileOpen,
             clientCount: this.clients.size,
             packetCount: this.emg_packet_count,
-            storageConnected: this.storage_connected
+            storageConnected: this.storage_connected,
+            pendingStorageRequests: this.storageRequestQueue.length
         };
     }
 
     stop() {
-        return new Promise((resolve) => {
+        return new Promise(async (resolve) => {
             this.isRunning = false;
+            
+            if (this.stageFileOpen && !this.isClosingStageFile) {
+                await this.closeStageFile();
+            }
+            
             this.isCollecting = false;
 
-            // 关闭所有客户端
             this.clients.forEach(client => {
                 if (client.readyState === WebSocket.OPEN) {
                     client.close(1001, '服务器关闭');
@@ -647,7 +766,6 @@ class RealtimeEngine extends EventEmitter {
             });
             this.clients.clear();
 
-            // 关闭WebSocket服务器
             if (this.websocket_server) {
                 const closeTimeout = setTimeout(() => {
                     console.warn('[realtimeEngine] 服务器关闭超时');
@@ -663,7 +781,6 @@ class RealtimeEngine extends EventEmitter {
                 resolve();
             }
 
-            // 关闭BLE客户端
             if (this.ble_client) {
                 this.ble_client.close(1000, '服务关闭');
                 this.ble_client = null;

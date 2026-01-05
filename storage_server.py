@@ -1,20 +1,36 @@
 """
-storage_server.py - HDF5数据存储服务 (v2.1)
+storage_server.py - HDF5数据存储服务 (v4.1)
 
-功能:
-1. 接收来自realtimeEngine.js的双设备EMG+IMU数据
-2. 存储stage信息（name, start, end）
-3. 存储prompt信息（仅离散手势任务需要）
-4. 支持多任务类型
-5. [新增] 支持通过命令行参数指定存储路径，适配Electron打包环境
+新特性:
+1. 多级目录结构存储（增加受试者编号层级）
+2. 目录层级: task -> category1 -> category2 -> category4 -> user_id
+3. 文件命名: [受试者编号]_[stage]_[年月日]_[时分秒].h5
+4. 存储完整的metadata（受试者信息、分类信息、stage信息）
 
-数据结构:
-- emg1/emg2: 16通道EMG
-- imu1/imu2: 9轴IMU
-- prompts/stages: 标注数据
-
-文件命名:
-{task_id}_{user_id}_{YYYYMMDD}_{HHMMSS}.h5
+目录结构示例:
+storage/
+├── discrete_gesture/              # 采集任务 (task)
+│   ├── static/                    # 大类 (category1)
+│   │   ├── sitting/               # 大场景 (category2)
+│   │   │   ├── normal/            # 人群 (category4)
+│   │   │   │   ├── S001/          # 受试者编号 (user_id) ← 新增层级
+│   │   │   │   │   ├── S001_palm_up_20260105_143000.h5
+│   │   │   │   │   ├── S001_palm_inward_20260105_143500.h5
+│   │   │   │   │   └── S001_hand_on_knee_20260105_144000.h5
+│   │   │   │   └── S002/
+│   │   │   │       ├── S002_palm_up_20260105_150000.h5
+│   │   │   │       └── ...
+│   │   │   └── exercise/
+│   │   │       └── S001/
+│   │   │           └── S001_palm_up_20260105_160000.h5
+│   │   └── lying/
+│   │       └── ...
+│   └── dynamic/
+│       └── ...
+├── continual_gesture_1/
+│   └── ...
+└── continual_gesture_2/
+    └── ...
 """
 
 import h5py
@@ -23,7 +39,7 @@ import json
 import os
 import sys
 import io
-import argparse # [新增] 用于解析命令行参数
+import argparse
 from datetime import datetime
 import numpy as np
 from threading import Lock
@@ -62,7 +78,7 @@ class HDF5StorageServer:
         self.socket.bind(f"tcp://{host}:{port}")
         debug_log(f"HDF5存储服务已启动，监听 {host}:{port}")
         
-        # [修改] 使用传入的 storage_dir，并转换为绝对路径
+        # 存储根目录
         self.storage_dir = os.path.abspath(storage_dir)
         debug_log(f"存储根目录设置为: {self.storage_dir}")
         
@@ -79,13 +95,14 @@ class HDF5StorageServer:
         self.f = None
         self.lock = Lock()
         
-        # 任务信息
+        # 当前采集信息
         self.current_task_id = None
         self.current_user_id = None
+        self.current_stage_name = None
+        self.current_category1 = None
+        self.current_category2 = None
+        self.current_category4 = None
         self.is_collecting = False
-        
-        # Stage缓存（收到start后缓存，收到end后写入）
-        self.pending_stage = None
         
         # 统计信息
         self.stats = {
@@ -93,45 +110,137 @@ class HDF5StorageServer:
             "emg2_frames": 0,
             "imu1_frames": 0,
             "imu2_frames": 0,
-            "prompts": 0,
-            "stages": 0
+            "prompts": 0
         }
     
-    def generate_filename(self, task_id, user_id):
-        """生成HDF5文件名"""
+    def _sanitize_name(self, name):
+        """清理文件/目录名中的非法字符"""
+        if not name:
+            return "unknown"
+        # 替换非法字符
+        illegal_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' ']
+        result = str(name)
+        for char in illegal_chars:
+            result = result.replace(char, '_')
+        return result
+    
+    def generate_directory_path(self, task_id, category1, category2, category4, user_id):
+        """
+        生成多级目录路径（包含受试者编号层级）:
+        storage/
+        └── {task_id}/           # 采集任务
+            └── {category1}/     # 大类
+                └── {category2}/ # 大场景
+                    └── {category4}/ # 人群
+                        └── {user_id}/   # 受试者编号 ← 新增
+        """
+        # 清理每一层的名称
+        task_dir = self._sanitize_name(task_id)
+        cat1_dir = self._sanitize_name(category1)
+        cat2_dir = self._sanitize_name(category2)
+        cat4_dir = self._sanitize_name(category4)
+        user_dir = self._sanitize_name(user_id)
+        
+        # 构建完整路径（包含user_id层级）
+        dir_path = os.path.join(
+            self.storage_dir,
+            task_dir,      # 采集任务
+            cat1_dir,      # 大类
+            cat2_dir,      # 大场景
+            cat4_dir,      # 人群
+            user_dir       # 受试者编号 ← 新增
+        )
+        
+        # 确保目录存在
+        if not os.path.exists(dir_path):
+            os.makedirs(dir_path)
+            debug_log(f"创建多级目录: {dir_path}")
+        
+        return dir_path
+    
+    def generate_filename(self, dir_path, user_id, stage_name):
+        """
+        生成文件名: {user_id}_{stage_name}_{YYYYMMDD}_{HHMMSS}.h5
+        例如: S001_palm_up_20260105_143000.h5
+        """
         now = datetime.now()
         date_str = now.strftime("%Y%m%d")
         time_str = now.strftime("%H%M%S")
-        filename = f"{task_id}_{user_id}_{date_str}_{time_str}.h5"
-        # [修改] 使用 self.storage_dir 拼接路径
-        return os.path.join(self.storage_dir, filename)
+        
+        # 清理用户ID和stage名称
+        safe_user_id = self._sanitize_name(user_id)
+        safe_stage_name = self._sanitize_name(stage_name)
+        
+        # 文件名包含: 受试者编号_stage_日期_时间
+        filename = f"{safe_user_id}_{safe_stage_name}_{date_str}_{time_str}.h5"
+        return os.path.join(dir_path, filename)
     
     def create_file(self, params):
-        """创建新的HDF5文件"""
+        """创建新的HDF5文件（使用多级目录结构，包含受试者层级）"""
         try:
-            task_id = params.get("task_id", "unknown_task")
+            # 提取参数
+            task_id = params.get("task_id", "discrete_gesture")
             user_id = params.get("user_id", "unknown_user")
+            stage_name = params.get("stage_name", "unknown_stage")
+            category1 = params.get("category1", "static")
+            category2 = params.get("category2", "sitting")
+            category4 = params.get("category4", "normal")
+            subject_info = params.get("subject_info", {})
+            template_name = params.get("template_name", "default")
             
+            # 保存当前信息
             self.current_task_id = task_id
             self.current_user_id = user_id
+            self.current_stage_name = stage_name
+            self.current_category1 = category1
+            self.current_category2 = category2
+            self.current_category4 = category4
             
-            # 生成文件名
-            self.file_path = self.generate_filename(task_id, user_id)
+            # 如果有已打开的文件，先关闭
+            if self.f:
+                debug_log("关闭上一个文件...")
+                self.close_file()
             
-            # 如果文件已存在，删除旧文件
-            if os.path.exists(self.file_path):
-                os.remove(self.file_path)
+            # 生成多级目录路径（包含user_id层级）
+            dir_path = self.generate_directory_path(task_id, category1, category2, category4, user_id)
+            
+            # 生成文件名（包含stage_name）
+            self.file_path = self.generate_filename(dir_path, user_id, stage_name)
+            
+            # 如果文件已存在，添加序号
+            base_path = self.file_path
+            counter = 1
+            while os.path.exists(self.file_path):
+                name, ext = os.path.splitext(base_path)
+                self.file_path = f"{name}_{counter}{ext}"
+                counter += 1
+            
+            debug_log(f"准备创建文件: {self.file_path}")
             
             # 创建HDF5文件
             self.f = h5py.File(self.file_path, "a", libver='latest')
             
-            # ===================== 创建根属性 =====================
+            # ===================== 创建根属性（Metadata） =====================
             self.f.attrs["task_id"] = task_id
             self.f.attrs["user_id"] = user_id
+            self.f.attrs["stage_name"] = stage_name
+            self.f.attrs["category1"] = category1
+            self.f.attrs["category2"] = category2
+            self.f.attrs["category4"] = category4
+            self.f.attrs["template_name"] = template_name
             self.f.attrs["created_at"] = datetime.now().isoformat()
             
+            # ===================== 创建受试者信息组 =====================
+            if subject_info:
+                subject_grp = self.f.create_group("subject")
+                for key, value in subject_info.items():
+                    if value is not None:
+                        try:
+                            subject_grp.attrs[str(key)] = str(value) if not isinstance(value, (int, float)) else value
+                        except Exception as e:
+                            debug_log(f"保存subject属性失败 {key}: {e}")
+            
             # ===================== 创建EMG数据集 =====================
-            # EMG1 (设备1)
             emg1_ds = self.f.create_dataset(
                 "emg1", shape=(0,), dtype=EMG_DTYPE,
                 chunks=(1000,), maxshape=(None,), compression="gzip"
@@ -140,7 +249,6 @@ class HDF5StorageServer:
             emg1_ds.attrs["channels"] = 16
             emg1_ds.attrs["description"] = "EMG data from device 1"
             
-            # EMG2 (设备2)
             emg2_ds = self.f.create_dataset(
                 "emg2", shape=(0,), dtype=EMG_DTYPE,
                 chunks=(1000,), maxshape=(None,), compression="gzip"
@@ -150,7 +258,6 @@ class HDF5StorageServer:
             emg2_ds.attrs["description"] = "EMG data from device 2"
             
             # ===================== 创建IMU数据集 =====================
-            # IMU1 (设备1)
             imu1_ds = self.f.create_dataset(
                 "imu1", shape=(0,), dtype=IMU_DTYPE,
                 chunks=(500,), maxshape=(None,), compression="gzip"
@@ -158,7 +265,6 @@ class HDF5StorageServer:
             imu1_ds.attrs["device"] = "device_1"
             imu1_ds.attrs["description"] = "IMU data from device 1 (acc, gyr, mag)"
             
-            # IMU2 (设备2)
             imu2_ds = self.f.create_dataset(
                 "imu2", shape=(0,), dtype=IMU_DTYPE,
                 chunks=(500,), maxshape=(None,), compression="gzip"
@@ -169,43 +275,14 @@ class HDF5StorageServer:
             # ===================== 创建Prompts组 =====================
             prompts = self.f.create_group("prompts")
             
-            # prompts/names - prompt名称（变长字符串）
             prompts.create_dataset(
                 "names", shape=(0,), dtype=STR_VLEN_DTYPE,
                 chunks=(1000,), maxshape=(None,)
             )
             
-            # prompts/times - prompt时间戳
             prompts.create_dataset(
                 "times", shape=(0,), dtype=np.float64,
                 chunks=(1000,), maxshape=(None,)
-            )
-            
-            # prompts/stage_names - 对应的stage名称
-            prompts.create_dataset(
-                "stage_names", shape=(0,), dtype=STR_VLEN_DTYPE,
-                chunks=(1000,), maxshape=(None,)
-            )
-            
-            # ===================== 创建Stages组 =====================
-            stages = self.f.create_group("stages")
-            
-            # stages/names
-            stages.create_dataset(
-                "names", shape=(0,), dtype=STR_VLEN_DTYPE,
-                chunks=(100,), maxshape=(None,)
-            )
-            
-            # stages/start_times
-            stages.create_dataset(
-                "start_times", shape=(0,), dtype=np.float64,
-                chunks=(100,), maxshape=(None,)
-            )
-            
-            # stages/end_times
-            stages.create_dataset(
-                "end_times", shape=(0,), dtype=np.float64,
-                chunks=(100,), maxshape=(None,)
             )
             
             # 重置统计
@@ -214,85 +291,62 @@ class HDF5StorageServer:
                 "emg2_frames": 0,
                 "imu1_frames": 0,
                 "imu2_frames": 0,
-                "prompts": 0,
-                "stages": 0
+                "prompts": 0
             }
-            self.pending_stage = None
             self.is_collecting = True
             
-            debug_log(f"✅ 创建HDF5文件成功: {self.file_path}")
+            # 显示相对路径
+            rel_path = os.path.relpath(self.file_path, self.storage_dir)
+            debug_log(f"✅ 文件创建成功: {rel_path}")
+            debug_log(f"   任务: {task_id}, 用户: {user_id}, Stage: {stage_name}")
+            debug_log(f"   分类: {category1}/{category2}/{category4}")
             
             return {
                 "status": "success",
-                "msg": f"创建文件成功：{self.file_path}",
-                "file_path": self.file_path
+                "msg": f"创建Stage文件成功",
+                "file_path": self.file_path,
+                "stage_name": stage_name
             }
             
         except Exception as e:
             debug_log(f"❌ 创建文件失败: {e}")
-            self.close_file()
+            import traceback
+            traceback.print_exc()
             return {"status": "error", "msg": f"创建文件失败：{str(e)}"}
     
     def append_data(self, params):
-        """追加数据（EMG/IMU/Prompt/Stage）"""
+        """追加数据"""
+        if not self.f:
+            return {"status": "error", "msg": "文件未打开，请先调用create"}
+        
         try:
-            if not self.f or not self.is_collecting:
-                return {"status": "error", "msg": "未开始采集或文件未打开"}
-            
             data = params.get("data", {})
-            result = {
-                "status": "success",
-                "emg1": 0, "emg2": 0,
-                "imu1": 0, "imu2": 0,
-                "prompts": 0, "stages": 0
-            }
             
             with self.lock:
-                # ========== 处理EMG1数据 ==========
+                # 追加EMG1
                 if data.get("emg1") and data.get("emg1_t"):
-                    result["emg1"] = self._append_emg("emg1", data["emg1"], data["emg1_t"])
+                    self._append_emg("emg1", data["emg1"], data["emg1_t"])
                 
-                # ========== 处理EMG2数据 ==========
+                # 追加EMG2
                 if data.get("emg2") and data.get("emg2_t"):
-                    result["emg2"] = self._append_emg("emg2", data["emg2"], data["emg2_t"])
+                    self._append_emg("emg2", data["emg2"], data["emg2_t"])
                 
-                # ========== 处理IMU1数据 ==========
+                # 追加IMU1
                 if data.get("imu1") and data.get("imu1_t"):
-                    result["imu1"] = self._append_imu("imu1", data["imu1"], data["imu1_t"])
+                    self._append_imu("imu1", data["imu1"], data["imu1_t"])
                 
-                # ========== 处理IMU2数据 ==========
+                # 追加IMU2
                 if data.get("imu2") and data.get("imu2_t"):
-                    result["imu2"] = self._append_imu("imu2", data["imu2"], data["imu2_t"])
+                    self._append_imu("imu2", data["imu2"], data["imu2_t"])
                 
-                # ========== 处理Prompt数据 ==========
-                if data.get("prompt_name") and data.get("prompt_time"):
-                    result["prompts"] = self._append_prompt(
+                # 追加Prompt
+                if data.get("prompt_name"):
+                    self._append_prompt(
                         data["prompt_name"],
-                        data["prompt_time"],
-                        data.get("prompt_stage", "")
+                        data.get("prompt_time", 0)
                     )
-                
-                # ========== 处理Stage Start ==========
-                if data.get("stage_start_name") and data.get("stage_start_time"):
-                    self.pending_stage = {
-                        "name": data["stage_start_name"],
-                        "start_time": data["stage_start_time"]
-                    }
-                    debug_log(f"📝 Stage开始缓存: {self.pending_stage['name']}")
-                
-                # ========== 处理Stage End ==========
-                if data.get("stage_end_name") and data.get("stage_end_time"):
-                    if self.pending_stage and self.pending_stage["name"] == data["stage_end_name"]:
-                        result["stages"] = self._append_stage(
-                            self.pending_stage["name"],
-                            self.pending_stage["start_time"],
-                            data["stage_end_time"]
-                        )
-                        self.pending_stage = None
-                    else:
-                        debug_log(f"⚠️ Stage End不匹配: expected={self.pending_stage}, got={data['stage_end_name']}")
             
-            return result
+            return {"status": "success", "msg": "数据已追加"}
             
         except Exception as e:
             debug_log(f"❌ 追加数据失败: {e}")
@@ -303,13 +357,11 @@ class HDF5StorageServer:
         try:
             ds = self.f[dataset_name]
             
-            # emg_data格式: [16通道][N帧] -> 转置为 [N帧][16通道]
             if not emg_data or len(emg_data) != 16:
                 return 0
             
             num_frames = len(emg_data[0])
             if len(timestamps) != num_frames:
-                # 如果时间戳数量不匹配，尝试插值或截断
                 if len(timestamps) < num_frames:
                     timestamps = list(timestamps) + [timestamps[-1]] * (num_frames - len(timestamps))
                 else:
@@ -367,7 +419,7 @@ class HDF5StorageServer:
             debug_log(f"❌ 追加{dataset_name}失败: {e}")
             return 0
     
-    def _append_prompt(self, name, time, stage_name=""):
+    def _append_prompt(self, name, time):
         """追加Prompt数据"""
         try:
             if not name:
@@ -385,49 +437,12 @@ class HDF5StorageServer:
             times_ds.resize(times_ds.shape[0] + 1, axis=0)
             times_ds[-1] = float(time)
             
-            # 追加stage_name
-            stage_ds = prompts["stage_names"]
-            stage_ds.resize(stage_ds.shape[0] + 1, axis=0)
-            stage_ds[-1] = str(stage_name)
-            
             self.stats["prompts"] += 1
             
             return 1
             
         except Exception as e:
             debug_log(f"❌ 追加prompt失败: {e}")
-            return 0
-    
-    def _append_stage(self, name, start_time, end_time):
-        """追加Stage数据"""
-        try:
-            if not name or start_time <= 0:
-                return 0
-            
-            stages = self.f["stages"]
-            
-            # 追加name
-            names_ds = stages["names"]
-            names_ds.resize(names_ds.shape[0] + 1, axis=0)
-            names_ds[-1] = str(name)
-            
-            # 追加start_time
-            start_ds = stages["start_times"]
-            start_ds.resize(start_ds.shape[0] + 1, axis=0)
-            start_ds[-1] = float(start_time)
-            
-            # 追加end_time
-            end_ds = stages["end_times"]
-            end_ds.resize(end_ds.shape[0] + 1, axis=0)
-            end_ds[-1] = float(end_time)
-            
-            self.stats["stages"] += 1
-            debug_log(f"✅ Stage已保存: {name} ({start_time:.3f} -> {end_time:.3f})")
-            
-            return 1
-            
-        except Exception as e:
-            debug_log(f"❌ 追加stage失败: {e}")
             return 0
     
     def flush(self):
@@ -448,20 +463,23 @@ class HDF5StorageServer:
                 self.f.attrs["total_imu1_frames"] = self.stats["imu1_frames"]
                 self.f.attrs["total_imu2_frames"] = self.stats["imu2_frames"]
                 self.f.attrs["total_prompts"] = self.stats["prompts"]
-                self.f.attrs["total_stages"] = self.stats["stages"]
                 
                 self.f.close()
                 self.f = None
             
             self.is_collecting = False
-            debug_log(f"✅ 文件已关闭: {self.file_path}")
-            debug_log(f"📊 统计: {self.stats}")
+            
+            rel_path = os.path.relpath(self.file_path, self.storage_dir) if self.file_path else "N/A"
+            debug_log(f"✅ 文件已关闭: {rel_path}")
+            debug_log(f"📊 统计: EMG1={self.stats['emg1_frames']}, EMG2={self.stats['emg2_frames']}, "
+                     f"IMU1={self.stats['imu1_frames']}, IMU2={self.stats['imu2_frames']}, "
+                     f"Prompts={self.stats['prompts']}")
             
             return {
                 "status": "success",
-                "msg": f"文件已保存并关闭：{self.file_path}",
+                "msg": f"文件已保存并关闭",
                 "file_path": self.file_path,
-                "stats": self.stats
+                "stats": self.stats.copy()
             }
             
         except Exception as e:
@@ -470,20 +488,56 @@ class HDF5StorageServer:
     
     def get_stats(self):
         """获取统计信息"""
-        if not self.f:
-            return {"error": "文件未打开"}
-        
         return {
             "file_path": self.file_path,
             "task_id": self.current_task_id,
             "user_id": self.current_user_id,
+            "stage_name": self.current_stage_name,
+            "category1": self.current_category1,
+            "category2": self.current_category2,
+            "category4": self.current_category4,
             "is_collecting": self.is_collecting,
             **self.stats
         }
     
+    def get_directory_tree(self):
+        """获取存储目录树结构（用于统计页面）"""
+        tree = {}
+        
+        for root, dirs, files in os.walk(self.storage_dir):
+            rel_root = os.path.relpath(root, self.storage_dir)
+            
+            # 计算深度
+            if rel_root == '.':
+                depth = 0
+                current = tree
+            else:
+                parts = rel_root.split(os.sep)
+                depth = len(parts)
+                current = tree
+                for part in parts:
+                    if part not in current:
+                        current[part] = {"_files": [], "_subdirs": {}}
+                    current = current[part]["_subdirs"]
+            
+            # 只统计h5文件
+            h5_files = [f for f in files if f.endswith('.h5')]
+            if h5_files and rel_root != '.':
+                parts = rel_root.split(os.sep)
+                current = tree
+                for part in parts[:-1]:
+                    current = current[part]["_subdirs"]
+                if parts[-1] not in current:
+                    current[parts[-1]] = {"_files": [], "_subdirs": {}}
+                current[parts[-1]]["_files"] = h5_files
+        
+        return tree
+    
     def run(self):
         """启动服务，循环处理客户端请求"""
-        debug_log("🚀 存储服务开始运行...")
+        debug_log("🚀 存储服务开始运行 (v4.1 - 包含受试者层级)...")
+        debug_log(f"   目录结构: task/category1/category2/category4/user_id/")
+        debug_log(f"   文件命名: [user_id]_[stage]_[date]_[time].h5")
         
         try:
             while True:
@@ -505,10 +559,12 @@ class HDF5StorageServer:
                 elif cmd == "flush":
                     self.flush()
                     response = {"status": "success", "msg": "数据已刷盘"}
+                elif cmd == "tree":
+                    response = {"status": "success", "data": self.get_directory_tree()}
                 else:
                     response = {
                         "status": "error",
-                        "msg": f"未知指令：{cmd}，支持的指令：create/append/close/stats/flush"
+                        "msg": f"未知指令：{cmd}，支持的指令：create/append/close/stats/flush/tree"
                     }
                 
                 # 发送响应
@@ -524,8 +580,7 @@ class HDF5StorageServer:
 
 
 if __name__ == "__main__":
-    # [新增] 解析命令行参数
-    parser = argparse.ArgumentParser(description='HDF5 Storage Server')
+    parser = argparse.ArgumentParser(description='HDF5 Storage Server v4.1 (包含受试者层级)')
     parser.add_argument('--storage_dir', type=str, default='./storage',
                         help='HDF5文件存储目录')
     parser.add_argument('--port', type=int, default=5555,
@@ -533,6 +588,5 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    # 将解析到的路径传入 Server
     server = HDF5StorageServer(port=args.port, storage_dir=args.storage_dir)
     server.run()

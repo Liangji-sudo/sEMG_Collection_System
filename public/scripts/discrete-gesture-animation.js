@@ -211,23 +211,37 @@
                 }
             }
             
+            // 重新加载Prompt库（支持动态添加的手势）
+            this.reloadPromptLibrary();
+            
             this.currentStage = stage;
             this.onComplete = onComplete;
             this.onPromptTriggered = onPromptTriggered;
             
             // 获取这个Stage的Prompt序列
-            if (window.CollectionTiming) {
+            // 优先使用传入的promptSequence（新模式：单手势重复N次）
+            if (stage.promptSequence && stage.promptSequence.length > 0) {
+                this.promptSequence = [...stage.promptSequence];
+                console.log('[DiscreteGestureAnimation] 使用传入的promptSequence');
+            } else if (window.CollectionTiming) {
+                // 兼容旧模式：从CollectionTiming获取
                 this.promptSequence = window.CollectionTiming.getPromptSequence(
                     this.currentTaskId, 
                     stage.name
                 );
-            } else if (stage.promptSequence) {
-                this.promptSequence = [...stage.promptSequence];
+                console.log('[DiscreteGestureAnimation] 使用CollectionTiming的promptSequence');
             } else {
                 this.promptSequence = [];
             }
             
             console.log('[DiscreteGestureAnimation] Prompt序列:', this.promptSequence);
+            
+            // 如果promptSequence为空，直接完成
+            if (this.promptSequence.length === 0) {
+                console.warn('[DiscreteGestureAnimation] promptSequence为空，跳过动画');
+                if (onComplete) onComplete();
+                return;
+            }
             
             // 重置状态
             this.prompts = [];
@@ -244,6 +258,17 @@
             
             // 开始动画循环
             this.animate();
+        }
+
+        /**
+         * 重新加载Prompt库
+         */
+        reloadPromptLibrary() {
+            if (window.DISCRETE_GESTURE_CONFIG && window.DISCRETE_GESTURE_CONFIG.PROMPT_LIBRARY) {
+                this.promptLibrary = { ...window.DISCRETE_GESTURE_CONFIG.PROMPT_LIBRARY };
+                console.log('[DiscreteGestureAnimation] Prompt库已重新加载，共', 
+                    Object.keys(this.promptLibrary).length, '个动作');
+            }
         }
 
         /**

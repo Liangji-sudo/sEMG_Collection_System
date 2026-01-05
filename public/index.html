@@ -847,6 +847,87 @@
             gap: 10px;
         }
 
+        /* Stage切换下拉菜单样式 */
+        .task-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            background: linear-gradient(135deg, #3b82f6, #2563eb);
+            color: white;
+            border-radius: 12px 12px 0 0;
+        }
+
+        .task-header-left {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .task-header-left h2 {
+            margin: 0;
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .task-config-badge {
+            font-size: 11px;
+            opacity: 0.85;
+            padding: 2px 8px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 10px;
+            display: inline-block;
+        }
+
+        .stage-switch-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .stage-switch-container label {
+            font-size: 12px;
+            opacity: 0.9;
+        }
+
+        .stage-switch-select {
+            padding: 8px 32px 8px 12px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 8px;
+            background: rgba(255,255,255,0.15);
+            color: white;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            outline: none;
+            appearance: none;
+            -webkit-appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='white' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            min-width: 150px;
+        }
+
+        .stage-switch-select:hover {
+            background: rgba(255,255,255,0.25);
+            border-color: rgba(255,255,255,0.5);
+        }
+
+        .stage-switch-select:focus {
+            border-color: white;
+        }
+
+        .stage-switch-select option {
+            background: #1e40af;
+            color: white;
+        }
+
+        .stage-switch-select:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* 保留旧的task-btn样式以防其他地方使用 */
         .task-btn {
             flex: 1;
             padding: 12px 15px;
@@ -4320,23 +4401,16 @@
             <!-- 任务引导面板 -->
             <div class="task-panel">
                 <div class="task-header">
-                    <h2><i class="fas fa-tasks"></i> 采集任务</h2>
-                    <div class="task-buttons">
-                        <button class="task-btn active" data-task="discrete">
-                            <div class="task-icon"><i class="fas fa-hand-paper"></i></div>
-                            <div class="task-name">离散手势</div>
-                            <div class="task-desc">4种单独手势</div>
-                        </button>
-                        <button class="task-btn" data-task="continuous1">
-                            <div class="task-icon"><i class="fas fa-hand-point-up"></i></div>
-                            <div class="task-name">连续手势1</div>
-                            <div class="task-desc">手指连续运动</div>
-                        </button>
-                        <button class="task-btn" data-task="continuous2">
-                            <div class="task-icon"><i class="fas fa-hand-peace"></i></div>
-                            <div class="task-name">连续手势2</div>
-                            <div class="task-desc">手腕连续运动</div>
-                        </button>
+                    <div class="task-header-left">
+                        <h2><i class="fas fa-tasks"></i> <span id="currentTaskName">离散手势采集</span></h2>
+                        <span class="task-config-badge" id="taskConfigBadge">静态 · 坐姿 · 正常状态</span>
+                    </div>
+                    <!-- Stage切换下拉菜单 -->
+                    <div class="stage-switch-container">
+                        <label>当前Stage:</label>
+                        <select id="stageSwitchSelect" class="stage-switch-select">
+                            <!-- 由JS动态填充 -->
+                        </select>
                     </div>
                 </div>
 
@@ -4347,7 +4421,7 @@
                         <span id="statusText">准备就绪</span>
                     </div>
 
-                    <!-- 手势列表 -->
+                    <!-- 手势列表 - 显示手势库而不是Stage -->
                     <div class="gesture-list" id="gestureList">
                         <div class="gesture-list-title">手势进度</div>
                         <!-- 动态生成 -->

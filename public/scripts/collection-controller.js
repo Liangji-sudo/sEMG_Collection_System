@@ -1,19 +1,24 @@
 /**
- * collection-controller.js - 采集任务控制器（重构版）
+ * collection-controller.js - 采集任务控制器（v3 - 新采集流程）
  * 
- * 职责：
- * 1. 采集任务类型切换
- * 2. Stage列表显示和管理
- * 3. 采集流程控制（开场动画 → 倒计时 → stage动画 → 倒计时 → ...）
- * 4. 通过WebSocket与realtimeEngine.js通信
+ * 新流程说明：
+ * 1. 进入采集界面后，根据选择的配置显示当前任务类型
+ * 2. 上方有Stage切换下拉菜单（对应配置中的category3/子场景）
+ * 3. 左侧显示手势库列表（而不是Stage列表）
+ * 4. 离散手势采集：顺序采集手势库中的每个手势，每个手势重复N次
+ * 5. 连续手势采集：保留原有的animation流程
  * 
- * 重构说明：
- * - 配合新的动画系统，每种任务有独立的动画模块
- * - 通过prompt数量控制stage时长
- * - 通知animationController当前任务类型
+ * 采集逻辑：
+ * - 离散手势：手势1(5次) → 休息30s → 手势2(5次) → 休息30s → ... → 所有手势完成
+ * - 完成当前Stage后，可以切换到下一个Stage继续采集
+ * 
+ * 数据存储目录结构：
+ * storage/
+ * └── {task}/{category1}/{category2}/{category4}/
+ *     └── {user_id}_{date}_{time}.h5
  */
 
-console.log('[Collection] ====== 脚本开始加载 ======');
+console.log('[Collection] ====== 脚本开始加载 (v3) ======');
 
 (function() {
     'use strict';
@@ -21,12 +26,40 @@ console.log('[Collection] ====== 脚本开始加载 ======');
     class CollectionController {
         constructor() {
             console.log('[Collection] 构造函数开始');
+            
+            // 当前采集配置（从collectionSelector获取）
+            this.collectionConfig = null;
+            
+            // 任务类型
             this.currentTaskId = 'discrete_gesture';
+            
+            // Stage相关（来自配置的category3）
+            this.stages = [];
+            this.currentStageIndex = 0;
+            
+            // 手势库（来自配置）
+            this.gestures = [];
+            this.currentGestureIndex = 0;
+            this.gestureRepeatCount = 0;  // 当前手势已重复次数
+            
+            // 执行参数
+            this.executionParams = {
+                repeatPerGesture: 5,
+                intervalBetweenRepeat: 1.0,
+                restBetweenGestures: 30.0,
+                preparationTime: 3.0,
+                gestureDisplayTime: 2.0
+            };
+            
+            // 状态
             this._isRunning = false;
             this._isPaused = false;
-            this.currentStageIndex = 0;
-            this.stageTimer = null;
-            this.currentPhase = null; // 'intro' | 'prepare' | 'stage' | 'complete'
+            this.currentPhase = null; // 'intro' | 'prepare' | 'gesture' | 'rest' | 'complete'
+            
+            // 定时器
+            this.phaseTimer = null;
+            this.countdownTimer = null;
+            
             console.log('[Collection] 构造函数结束');
         }
 
@@ -34,63 +67,37 @@ console.log('[Collection] ====== 脚本开始加载 ======');
             console.log('[Collection] init() 开始');
             
             try {
-                this.checkDependencies();
                 this.bindEvents();
-                this.updateStageList();
-                this.updateControlButtons(false);
+                this.loadCollectionConfig();
+                this.updateUI();
                 console.log('[Collection] init() 完成 ✓');
             } catch (error) {
                 console.error('[Collection] init() 错误:', error);
             }
         }
 
-        checkDependencies() {
-            if (!window.TaskConfig) {
-                console.warn('[Collection] 警告: TaskConfig 未加载，使用内置配置');
-            }
-            if (!window.COLLECTION_CONSTANTS) {
-                console.warn('[Collection] 警告: COLLECTION_CONSTANTS 未加载，使用默认值');
-            }
-            if (!window.animationController) {
-                console.warn('[Collection] 警告: animationController 未加载');
-            }
-            
-            // 检查动画模块
-            if (!window.discreteGestureAnimation) {
-                console.warn('[Collection] 警告: discreteGestureAnimation 未加载');
-            }
-            if (!window.continualGesture1Animation) {
-                console.warn('[Collection] 警告: continualGesture1Animation 未加载');
-            }
-            if (!window.continualGesture2Animation) {
-                console.warn('[Collection] 警告: continualGesture2Animation 未加载');
-            }
-        }
-
         bindEvents() {
             console.log('[Collection] bindEvents() 开始');
             
-            // 任务切换按钮
-            const taskBtns = document.querySelectorAll('.task-btn');
-            console.log('[Collection] 找到 .task-btn 按钮数量:', taskBtns.length);
-            
-            taskBtns.forEach((btn, index) => {
-                console.log(`[Collection] 绑定任务按钮 ${index}: data-task="${btn.dataset.task}"`);
-                btn.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const htmlTaskId = btn.dataset.task;
-                    console.log('[Collection] ★ 任务按钮被点击:', htmlTaskId);
-                    this.selectTask(htmlTaskId);
+            // Stage切换下拉菜单
+            const stageSelect = document.getElementById('stageSwitchSelect');
+            if (stageSelect) {
+                stageSelect.addEventListener('change', (e) => {
+                    if (!this._isRunning) {
+                        this.switchStage(parseInt(e.target.value));
+                    } else {
+                        // 采集中不允许切换，恢复原值
+                        e.target.value = this.currentStageIndex;
+                        this.showToast('采集进行中，无法切换Stage', 'warning');
+                    }
                 });
-            });
+            }
 
             // 开始按钮
             const startBtn = document.getElementById('startTaskBtn');
             if (startBtn) {
                 startBtn.addEventListener('click', (e) => {
                     e.preventDefault();
-                    e.stopPropagation();
                     console.log('[Collection] ★★★ 开始按钮被点击 ★★★');
                     this.startTask();
                 });
@@ -101,8 +108,6 @@ console.log('[Collection] ====== 脚本开始加载 ======');
             if (pauseBtn) {
                 pauseBtn.addEventListener('click', (e) => {
                     e.preventDefault();
-                    e.stopPropagation();
-                    console.log('[Collection] ★ 暂停按钮被点击');
                     this.togglePause();
                 });
             }
@@ -112,372 +117,431 @@ console.log('[Collection] ====== 脚本开始加载 ======');
             if (stopBtn) {
                 stopBtn.addEventListener('click', (e) => {
                     e.preventDefault();
-                    e.stopPropagation();
-                    console.log('[Collection] ★ 停止按钮被点击');
                     this.stopTask();
+                });
+            }
+
+            // 下一个Stage按钮
+            const nextStageBtn = document.getElementById('nextStageBtn');
+            if (nextStageBtn) {
+                nextStageBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    this.goToNextStage();
                 });
             }
 
             console.log('[Collection] bindEvents() 完成 ✓');
         }
 
-        onPageShow() {
-            console.log('[Collection] 页面显示');
-            this.updateStageList();
-            this.resetDisplay();
-        }
+        // ==================== 配置加载 ====================
 
-        // ==================== 任务选择 ====================
-
-        selectTask(htmlTaskId) {
-            if (this._isRunning) {
-                console.log('[Collection] 采集中，无法切换任务');
-                return;
-            }
-
-            // 使用TaskConfig映射
-            const taskIdMap = window.TaskConfig ? window.TaskConfig.ID_MAP : {
-                'discrete': 'discrete_gesture',
-                'continuous1': 'continual_gesture_1',
-                'continuous2': 'continual_gesture_2'
-            };
+        loadCollectionConfig() {
+            // 从全局变量或localStorage加载配置
+            this.collectionConfig = window.currentCollectionConfig || 
+                JSON.parse(localStorage.getItem('emg_current_collection_config') || 'null');
             
-            const taskId = taskIdMap[htmlTaskId] || htmlTaskId;
-            
-            if (!this.getTaskConfig(taskId)) {
-                console.error('[Collection] 未知任务类型:', taskId);
-                return;
-            }
-
-            console.log('[Collection] 切换任务:', taskId);
-            this.currentTaskId = taskId;
-            this.currentStageIndex = 0;
-
-            // 通知animationController当前任务类型
-            if (window.animationController) {
-                window.animationController.setCurrentTask(taskId);
-            }
-
-            document.querySelectorAll('.task-btn').forEach(btn => {
-                btn.classList.toggle('active', btn.dataset.task === htmlTaskId);
-            });
-
-            this.updateStageList();
-            this.resetDisplay();
-            this.sendToRealtimeEngine('task_change', { taskId: taskId });
-        }
-
-        getTaskConfig(taskId) {
-            if (window.TaskConfig && window.TaskConfig.DEFINITIONS[taskId]) {
-                return window.TaskConfig.DEFINITIONS[taskId];
-            }
-            return this.getBuiltinTaskConfig(taskId);
-        }
-
-        getBuiltinTaskConfig(taskId) {
-            const builtinConfigs = {
-                discrete_gesture: {
-                    id: 'discrete_gesture',
-                    name: '离散手势',
-                    stages: [
-                        { name: 'palm_up', label: '手心向上', instruction: '请保持手心向上的姿势' },
-                        { name: 'palm_inward', label: '手心向内', instruction: '请保持手心向内的姿势' },
-                        { name: 'hand_on_knee', label: '手放膝盖', instruction: '请将手放在膝盖上' },
-                        { name: 'hand_on_desk', label: '手放桌上', instruction: '请将手放在桌上' }
-                    ]
-                },
-                continual_gesture_1: {
-                    id: 'continual_gesture_1',
-                    name: '连续手势1（手指）',
-                    stages: [
-                        { name: 'finger_spread', label: '手指张合', instruction: '请进行手指张合动作' },
-                        { name: 'finger_tap', label: '手指点击', instruction: '请进行手指点击动作' },
-                        { name: 'finger_extend', label: '手指伸展', instruction: '请进行手指伸展动作' },
-                        { name: 'finger_curl', label: '手指弯曲', instruction: '请进行手指弯曲动作' }
-                    ]
-                },
-                continual_gesture_2: {
-                    id: 'continual_gesture_2',
-                    name: '连续手势2（手腕）',
-                    stages: [
-                        { name: 'wrist_rotation', label: '手腕旋转', instruction: '请进行手腕旋转动作' },
-                        { name: 'wrist_updown', label: '手腕上下', instruction: '请进行手腕上下摆动' },
-                        { name: 'wrist_leftright', label: '手腕左右', instruction: '请进行手腕左右摆动' },
-                        { name: 'fist_rotation', label: '握拳旋转', instruction: '请握拳并旋转' }
-                    ]
-                }
-            };
-            return builtinConfigs[taskId] || null;
-        }
-
-        getCurrentTaskConfig() {
-            return this.getTaskConfig(this.currentTaskId);
-        }
-
-        getCurrentTaskId() {
-            return this.currentTaskId;
-        }
-
-        // ==================== 采集流程控制 ====================
-
-        startTask() {
-            console.log('[Collection] startTask() 被调用');
-            
-            if (this._isRunning) {
-                console.log('[Collection] 已在运行中，忽略');
-                return;
-            }
-
-            console.log('[Collection] 开始采集任务:', this.currentTaskId);
-
-            this._isRunning = true;
-            this._isPaused = false;
-            this.currentStageIndex = 0;
-            this.currentPhase = 'intro';
-
-            // 确保animationController知道当前任务类型
-            if (window.animationController) {
-                window.animationController.setCurrentTask(this.currentTaskId);
-            }
-
-            this.updateControlButtons(true);
-            this.updateStatus('准备中');
-
-            const user = window.pageSwitchController ? 
-                window.pageSwitchController.getCurrentUser() : null;
-
-            this.sendToRealtimeEngine('collection_start', { 
-                taskId: this.currentTaskId, 
-                user: user 
-            });
-
-            this.playIntroAnimation();
-        }
-
-        playIntroAnimation() {
-            console.log('[Collection] 播放开场动画');
-            this.currentPhase = 'intro';
-            this.updateStatus('开场准备');
-
-            if (window.animationController) {
-                window.animationController.playIntroAnimation(() => {
-                    this.onIntroComplete();
-                });
-            } else {
-                const duration = window.CollectionTiming ? 
-                    window.CollectionTiming.getIntroDuration() : 10000;
-                setTimeout(() => this.onIntroComplete(), duration);
-            }
-        }
-
-        onIntroComplete() {
-            console.log('[Collection] 开场动画完成');
-            
-            if (!this._isRunning) return;
-            
-            this.playPrepareCountdown(() => {
-                this.startStage();
-            });
-        }
-
-        playPrepareCountdown(onComplete) {
-            console.log('[Collection] 播放准备倒计时');
-            this.currentPhase = 'prepare';
-            this.updateStatus('准备中');
-
-            const seconds = window.CollectionTiming ? 
-                window.CollectionTiming.getPrepareCountdown() : 3;
-
-            if (window.animationController) {
-                window.animationController.playCountdown(seconds, onComplete);
-            } else {
-                this.simpleCountdown(seconds, onComplete);
-            }
-        }
-
-        simpleCountdown(seconds, callback) {
-            const countdown = document.getElementById('countdown');
-            let count = seconds;
-
-            const tick = () => {
-                if (countdown) {
-                    countdown.textContent = count;
-                    countdown.classList.add('visible');
-                }
-
-                if (count <= 0) {
-                    if (countdown) countdown.classList.remove('visible');
-                    callback();
+            if (this.collectionConfig) {
+                console.log('[Collection] 加载采集配置:', this.collectionConfig);
+                
+                // 设置任务类型
+                this.currentTaskId = this.collectionConfig.task || 'discrete_gesture';
+                
+                // 加载模板配置
+                const template = this.getTemplate();
+                
+                // 加载Stage列表（category3 - 从配置中获取）
+                if (this.collectionConfig.category3List && this.collectionConfig.category3List.length > 0) {
+                    this.stages = this.collectionConfig.category3List;
                 } else {
-                    count--;
-                    setTimeout(tick, 1000);
-                }
-            };
-
-            tick();
-        }
-
-        startStage() {
-            if (!this._isRunning) return;
-
-            const config = this.getCurrentTaskConfig();
-            const stage = config.stages[this.currentStageIndex];
-
-            if (!stage) {
-                this.onAllStagesComplete();
-                return;
-            }
-
-            console.log(`[Collection] 开始Stage: ${stage.name} (${this.currentStageIndex + 1}/${config.stages.length})`);
-            this.currentPhase = 'stage';
-            this.updateStatus('采集中');
-
-            this.sendToRealtimeEngine('stage_start', {
-                stageName: stage.name,
-                stageIndex: this.currentStageIndex,
-                timestamp: Date.now() / 1000
-            });
-
-            this.updateStageList();
-            this.updateProgress();
-
-            this.playStageAnimation(stage);
-        }
-
-        playStageAnimation(stage) {
-            console.log('[Collection] 播放Stage动画:', stage.name);
-
-            if (window.animationController) {
-                window.animationController.playStageAnimation(stage, () => {
-                    this.onStageComplete();
-                });
-            } else {
-                // 后备：基于prompt数量估算时长
-                let duration = 10000;
-                if (window.CollectionTiming) {
-                    duration = window.CollectionTiming.estimateStageDuration(
-                        this.currentTaskId,
-                        stage.name
-                    );
+                    this.stages = (template.category3 || []).filter(s => s.enabled);
                 }
                 
-                this.updateStageDisplay(stage);
-                this.stageTimer = setTimeout(() => {
-                    this.onStageComplete();
-                }, duration);
-            }
-        }
-
-        onStageComplete() {
-            if (!this._isRunning) return;
-
-            const config = this.getCurrentTaskConfig();
-            const stage = config.stages[this.currentStageIndex];
-
-            if (stage) {
-                console.log(`[Collection] Stage完成: ${stage.name}`);
-                this.sendToRealtimeEngine('stage_end', {
-                    stageName: stage.name,
-                    stageIndex: this.currentStageIndex,
-                    timestamp: Date.now() / 1000
-                });
-            }
-
-            this.currentStageIndex++;
-
-            if (this.currentStageIndex < config.stages.length) {
-                this.playPrepareCountdown(() => {
-                    this.startStage();
-                });
+                // 加载手势库
+                this.gestures = (template.gestures?.discrete || []).filter(g => g.enabled);
+                
+                // 加载执行参数
+                if (template.execution) {
+                    this.executionParams = { ...this.executionParams, ...template.execution };
+                }
+                
+                console.log('[Collection] Stages:', this.stages.length, '个');
+                console.log('[Collection] Gestures:', this.gestures.length, '个');
+                console.log('[Collection] 目录结构:', 
+                    `${this.collectionConfig.task}/${this.collectionConfig.category1}/${this.collectionConfig.category2}/${this.collectionConfig.category4}/`);
             } else {
-                this.onAllStagesComplete();
+                console.warn('[Collection] 未找到采集配置，使用默认值');
+                this.loadDefaultConfig();
             }
         }
 
-        onAllStagesComplete() {
-            console.log('[Collection] 所有Stage完成');
+        getTemplate() {
+            if (window.templateConfigManager?.currentTemplate) {
+                return window.templateConfigManager.currentTemplate;
+            }
+            const saved = localStorage.getItem('emg_collection_template');
+            if (saved) {
+                try {
+                    return JSON.parse(saved);
+                } catch (e) {}
+            }
+            return this.getDefaultTemplate();
+        }
 
-            this._isRunning = false;
-            this._isPaused = false;
-            this.currentPhase = 'complete';
+        getDefaultTemplate() {
+            return {
+                category3: [
+                    { id: 'palm_up', name: '手心朝上', enabled: true },
+                    { id: 'palm_inward', name: '手心朝内', enabled: true },
+                    { id: 'hand_on_knee', name: '手放膝盖', enabled: true },
+                    { id: 'hand_on_desk', name: '手放桌上', enabled: true }
+                ],
+                gestures: {
+                    discrete: [
+                        { id: 'pinch', name: '捏合', icon: '🤏', enabled: true },
+                        { id: 'spread', name: '张开', icon: '🖐️', enabled: true },
+                        { id: 'fist', name: '握拳', icon: '✊', enabled: true },
+                        { id: 'release', name: '松开', icon: '✋', enabled: true }
+                    ]
+                },
+                execution: {
+                    repeatPerGesture: 5,
+                    intervalBetweenRepeat: 1.0,
+                    restBetweenGestures: 30.0,
+                    preparationTime: 3.0,
+                    gestureDisplayTime: 2.0
+                }
+            };
+        }
 
+        loadDefaultConfig() {
+            const template = this.getDefaultTemplate();
+            this.stages = template.category3;
+            this.gestures = template.gestures.discrete;
+            this.executionParams = template.execution;
+        }
+
+        // ==================== 页面显示 ====================
+
+        onPageShow() {
+            console.log('[Collection] 页面显示');
+            this.loadCollectionConfig();
+            this.updateUI();
+        }
+
+        updateUI() {
+            this.updateTaskHeader();
+            this.updateStageSelect();
+            this.updateGestureList();
             this.updateControlButtons(false);
-            this.updateStatus('采集完成');
-            this.updateStageList();
+            this.updateNextStageButton();
+            this.resetDisplay();
+        }
 
-            const progressFill = document.getElementById('progressFill');
-            if (progressFill) progressFill.style.width = '100%';
+        updateTaskHeader() {
+            const taskNameEl = document.getElementById('currentTaskName');
+            const configBadgeEl = document.getElementById('taskConfigBadge');
+            
+            // 任务名称
+            const taskConfig = this.getTaskConfig();
+            if (taskNameEl) {
+                taskNameEl.textContent = taskConfig.name || this.currentTaskId;
+            }
+            
+            // 配置信息徽章
+            if (configBadgeEl && this.collectionConfig) {
+                const cat1Name = this.getCategoryName('category1', this.collectionConfig.category1);
+                const cat2Name = this.getCategoryName('category2', this.collectionConfig.category2);
+                const cat4Name = this.getCategoryName('category4', this.collectionConfig.category4);
+                
+                configBadgeEl.innerHTML = `
+                    <span class="badge badge-primary">${cat1Name}</span>
+                    <span class="badge badge-info">${cat2Name}</span>
+                    <span class="badge badge-secondary">${cat4Name}</span>
+                `;
+                configBadgeEl.style.display = 'flex';
+            }
+        }
 
-            const gestureName = document.getElementById('gestureName');
-            const gestureInstruction = document.getElementById('gestureInstruction');
-            if (gestureName) gestureName.textContent = '采集完成！';
-            if (gestureInstruction) gestureInstruction.textContent = '所有Stage已完成';
+        getCategoryName(category, id) {
+            const template = this.getTemplate();
+            const item = template[category]?.find(c => c.id === id);
+            return item?.name || id || '未知';
+        }
 
-            if (window.animationController) {
-                window.animationController.stop();
+        updateStageSelect() {
+            const select = document.getElementById('stageSwitchSelect');
+            if (!select) return;
+
+            select.innerHTML = '';
+            this.stages.forEach((stage, index) => {
+                const option = document.createElement('option');
+                option.value = index;
+                option.textContent = `${index + 1}. ${stage.name}`;
+                if (index === this.currentStageIndex) {
+                    option.selected = true;
+                }
+                select.appendChild(option);
+            });
+
+            // 显示Stage信息
+            const stageInfoEl = document.getElementById('currentStageInfo');
+            if (stageInfoEl && this.stages[this.currentStageIndex]) {
+                const stage = this.stages[this.currentStageIndex];
+                stageInfoEl.innerHTML = `
+                    <div class="stage-name">${stage.name}</div>
+                    ${stage.instruction ? `<div class="stage-instruction">${stage.instruction}</div>` : ''}
+                `;
+            }
+        }
+
+        updateGestureList() {
+            const gestureList = document.getElementById('stageListPanel');
+            if (!gestureList) return;
+
+            // 更新标题为"手势库"
+            const titleEl = gestureList.querySelector('.panel-title');
+            if (titleEl) {
+                titleEl.innerHTML = '<i class="fas fa-hand-paper"></i> 手势库';
             }
 
-            this.sendToRealtimeEngine('collection_stop', { completed: true });
+            // 离散手势：显示手势列表
+            if (this.currentTaskId === 'discrete_gesture') {
+                let html = '';
+                this.gestures.forEach((gesture, index) => {
+                    let status = 'pending';
+                    let progressText = '';
+                    
+                    if (index < this.currentGestureIndex) {
+                        status = 'completed';
+                        progressText = `<span class="gesture-progress">✓ 完成</span>`;
+                    } else if (index === this.currentGestureIndex && this._isRunning) {
+                        status = 'current';
+                        progressText = `<span class="gesture-progress">${this.gestureRepeatCount}/${this.executionParams.repeatPerGesture}</span>`;
+                    } else {
+                        progressText = `<span class="gesture-progress">${this.executionParams.repeatPerGesture}次</span>`;
+                    }
+                    
+                    const iconClass = status === 'completed' ? 'check-circle' : 
+                                     status === 'current' ? 'circle-notch fa-spin' : 'circle';
+                    
+                    html += `
+                        <div class="gesture-item ${status}" data-index="${index}">
+                            <span class="gesture-icon">${gesture.icon || '✋'}</span>
+                            <span class="gesture-name">${gesture.name}</span>
+                            ${progressText}
+                            <i class="fas fa-${iconClass} status-icon"></i>
+                        </div>
+                    `;
+                });
+                
+                // 添加进度摘要
+                html = `
+                    <div class="gesture-progress-summary">
+                        <span>进度: ${this.currentGestureIndex}/${this.gestures.length} 手势</span>
+                        <span>Stage: ${this.currentStageIndex + 1}/${this.stages.length}</span>
+                    </div>
+                ` + html;
+                
+                gestureList.querySelector('.panel-content')?.innerHTML 
+                    ? gestureList.querySelector('.panel-content').innerHTML = html
+                    : null;
+                
+                // 如果没有.panel-content，直接替换内容
+                const contentArea = gestureList.querySelector('.stage-list, .gesture-list');
+                if (contentArea) {
+                    contentArea.innerHTML = html;
+                }
+            } else {
+                // 连续手势：显示Stage列表
+                let html = '';
+                this.stages.forEach((stage, index) => {
+                    let status = 'pending';
+                    if (index < this.currentStageIndex) {
+                        status = 'completed';
+                    } else if (index === this.currentStageIndex && this._isRunning) {
+                        status = 'current';
+                    }
+                    
+                    const iconClass = status === 'completed' ? 'check-circle' : 'circle';
+                    
+                    html += `
+                        <div class="gesture-item ${status}" data-index="${index}">
+                            <i class="fas fa-${iconClass}"></i>
+                            <span>${stage.name}</span>
+                        </div>
+                    `;
+                });
+                
+                const contentArea = gestureList.querySelector('.stage-list, .gesture-list, .panel-content');
+                if (contentArea) {
+                    contentArea.innerHTML = html;
+                }
+            }
+        }
 
-            if (window.pageSwitchController) {
-                window.pageSwitchController.showToast('采集任务完成！');
+        updateNextStageButton() {
+            const nextStageBtn = document.getElementById('nextStageBtn');
+            if (!nextStageBtn) return;
+
+            // 显示/隐藏下一Stage按钮
+            if (this.currentStageIndex < this.stages.length - 1 && !this._isRunning) {
+                nextStageBtn.style.display = 'inline-flex';
+                nextStageBtn.textContent = `进入下一Stage: ${this.stages[this.currentStageIndex + 1]?.name || ''}`;
+            } else {
+                nextStageBtn.style.display = 'none';
+            }
+        }
+
+        getTaskConfig() {
+            if (window.TaskConfig?.DEFINITIONS?.[this.currentTaskId]) {
+                return window.TaskConfig.DEFINITIONS[this.currentTaskId];
+            }
+            
+            const taskNames = {
+                'discrete_gesture': '离散手势采集',
+                'continual_gesture_1': '连续手势采集1',
+                'continual_gesture_2': '连续手势采集2'
+            };
+            
+            return { name: taskNames[this.currentTaskId] || this.currentTaskId };
+        }
+
+        // ==================== Stage切换 ====================
+
+        switchStage(stageIndex) {
+            if (stageIndex < 0 || stageIndex >= this.stages.length) return;
+            
+            console.log('[Collection] 切换Stage:', stageIndex, this.stages[stageIndex]?.name);
+            
+            this.currentStageIndex = stageIndex;
+            this.currentGestureIndex = 0;
+            this.gestureRepeatCount = 0;
+            
+            // 更新UI
+            this.updateStageSelect();
+            this.updateGestureList();
+            this.updateNextStageButton();
+            this.resetDisplay();
+            
+            // 通知realtimeEngine
+            this.sendToRealtimeEngine('stage_change', {
+                stageIndex: stageIndex,
+                stageName: this.stages[stageIndex]?.id || this.stages[stageIndex]?.name
+            });
+        }
+
+        goToNextStage() {
+            if (this.currentStageIndex < this.stages.length - 1) {
+                this.switchStage(this.currentStageIndex + 1);
+                this.showToast(`已切换到Stage: ${this.stages[this.currentStageIndex]?.name}`, 'success');
+            }
+        }
+
+        // ==================== 采集控制 ====================
+
+        startTask() {
+            if (this._isRunning) return;
+            
+            console.log('[Collection] ===== 开始采集任务 =====');
+            console.log('[Collection] 任务类型:', this.currentTaskId);
+            console.log('[Collection] 当前Stage:', this.stages[this.currentStageIndex]?.name);
+            
+            this._isRunning = true;
+            this._isPaused = false;
+            this.currentGestureIndex = 0;
+            this.gestureRepeatCount = 0;
+            
+            this.updateControlButtons(true);
+            
+            // 禁用Stage切换
+            const stageSelect = document.getElementById('stageSwitchSelect');
+            if (stageSelect) stageSelect.disabled = true;
+            
+            // 隐藏下一Stage按钮
+            this.updateNextStageButton();
+            
+            // 通知realtimeEngine开始采集
+            const currentStage = this.stages[this.currentStageIndex];
+            const userData = JSON.parse(localStorage.getItem('emg_current_user') || '{}');
+            
+            // 【重要】确保userId不为空，按优先级获取
+            const userId = userData.id || 
+                           this.collectionConfig?.subject?.id || 
+                           `S${Date.now().toString().slice(-6)}`;  // 自动生成6位编号
+            
+            console.log('[Collection] 用户ID:', userId);
+            console.log('[Collection] 目录结构:', 
+                `${this.currentTaskId}/${this.collectionConfig?.category1}/${this.collectionConfig?.category2}/${this.collectionConfig?.category4}/`);
+            
+            this.sendToRealtimeEngine('collection_start', {
+                taskId: this.currentTaskId,
+                stageName: currentStage?.id || currentStage?.name || 'stage_1',
+                userId: userId,
+                config: this.collectionConfig
+            });
+            
+            // 开始采集流程
+            if (this.currentTaskId === 'discrete_gesture') {
+                this.startDiscreteGestureCollection();
+            } else {
+                this.startContinualGestureCollection();
             }
         }
 
         stopTask() {
-            console.log('[Collection] stopTask() 被调用');
+            if (!this._isRunning) return;
             
-            if (!this._isRunning) {
-                console.log('[Collection] 未在运行，忽略');
-                return;
+            console.log('[Collection] ===== 停止采集任务 =====');
+            
+            this._isRunning = false;
+            this._isPaused = false;
+            
+            // 清除所有定时器
+            if (this.phaseTimer) {
+                clearTimeout(this.phaseTimer);
+                this.phaseTimer = null;
             }
-
-            console.log('[Collection] 停止采集');
-
-            if (this.stageTimer) {
-                clearTimeout(this.stageTimer);
-                this.stageTimer = null;
+            if (this.countdownTimer) {
+                clearInterval(this.countdownTimer);
+                this.countdownTimer = null;
             }
-
+            
+            // 停止离散手势动画
+            if (window.discreteGestureAnimation) {
+                window.discreteGestureAnimation.stop();
+            }
+            
+            // 停止其他动画控制器
             if (window.animationController) {
                 window.animationController.stop();
             }
-
-            const config = this.getCurrentTaskConfig();
-            if (config && config.stages[this.currentStageIndex]) {
-                this.sendToRealtimeEngine('stage_end', {
-                    stageName: config.stages[this.currentStageIndex].name,
-                    stageIndex: this.currentStageIndex,
-                    timestamp: Date.now() / 1000
-                });
-            }
-
-            this._isRunning = false;
-            this._isPaused = false;
-            this.currentPhase = null;
-
+            
+            // 启用Stage切换
+            const stageSelect = document.getElementById('stageSwitchSelect');
+            if (stageSelect) stageSelect.disabled = false;
+            
             this.updateControlButtons(false);
-            this.resetDisplay();
+            this.updateNextStageButton();
+            this.updateStatus('已停止');
+            
+            // 通知realtimeEngine停止采集
             this.sendToRealtimeEngine('collection_stop', { completed: false });
         }
 
         togglePause() {
-            console.log('[Collection] togglePause() 被调用');
-            
             if (!this._isRunning) return;
-
+            
             this._isPaused = !this._isPaused;
-            console.log('[Collection] 暂停状态:', this._isPaused);
-
+            
             const pauseBtn = document.getElementById('pauseTaskBtn');
             if (pauseBtn) {
                 pauseBtn.innerHTML = this._isPaused ? 
                     '<i class="fas fa-play"></i> 继续' : 
                     '<i class="fas fa-pause"></i> 暂停';
             }
-
+            
             this.updateStatus(this._isPaused ? '已暂停' : '采集中');
-
+            
             if (this._isPaused) {
                 this.sendToRealtimeEngine('collection_pause', {});
             } else {
@@ -489,8 +553,334 @@ console.log('[Collection] ====== 脚本开始加载 ======');
             return this._isRunning;
         }
 
-        isPaused() {
-            return this._isPaused;
+        // ==================== 离散手势采集流程 ====================
+
+        startDiscreteGestureCollection() {
+            console.log('[Collection] 开始离散手势顺序采集');
+            
+            // 先显示准备阶段
+            this.currentPhase = 'prepare';
+            this.showPreparation(() => {
+                // 准备完成后开始第一个手势
+                this.startNextGesture();
+            });
+        }
+
+        showPreparation(callback) {
+            const prepTime = this.executionParams.preparationTime;
+            const currentStage = this.stages[this.currentStageIndex];
+            
+            this.updateGestureDisplay({
+                name: '准备开始',
+                instruction: currentStage?.instruction || `采集即将开始，请保持 ${currentStage?.name || ''} 姿势...`,
+                showCountdown: true,
+                countdownValue: prepTime
+            });
+            
+            let countdown = prepTime;
+            const countdownEl = document.getElementById('countdown');
+            
+            this.countdownTimer = setInterval(() => {
+                countdown--;
+                if (countdownEl) countdownEl.textContent = countdown;
+                
+                if (countdown <= 0) {
+                    clearInterval(this.countdownTimer);
+                    this.countdownTimer = null;
+                    if (countdownEl) countdownEl.style.display = 'none';
+                    callback();
+                }
+            }, 1000);
+        }
+
+        startNextGesture() {
+            if (!this._isRunning || this._isPaused) return;
+            
+            if (this.currentGestureIndex >= this.gestures.length) {
+                // 所有手势完成
+                this.onAllGesturesComplete();
+                return;
+            }
+            
+            const gesture = this.gestures[this.currentGestureIndex];
+            const currentStage = this.stages[this.currentStageIndex];
+            console.log(`[Collection] 开始手势 ${this.currentGestureIndex + 1}/${this.gestures.length}: ${gesture.name}`);
+            
+            this.currentPhase = 'gesture';
+            this.gestureRepeatCount = 0;
+            
+            // 更新列表显示
+            this.updateGestureList();
+            
+            // 发送prompt_start
+            this.sendToRealtimeEngine('prompt_start', {
+                promptName: gesture.id || gesture.name,
+                promptIndex: this.currentGestureIndex
+            });
+            
+            // 构建promptSequence - 当前手势重复N次
+            const repeatCount = this.executionParams.repeatPerGesture;
+            const promptSequence = [];
+            for (let i = 0; i < repeatCount; i++) {
+                promptSequence.push(gesture.id || gesture.name);
+            }
+            
+            // 构建动画需要的stage配置
+            const stageConfig = {
+                name: currentStage?.id || currentStage?.name || 'stage',
+                label: currentStage?.name || 'Stage',
+                instruction: currentStage?.instruction || '请按照提示进行手势动作',
+                promptSequence: promptSequence
+            };
+            
+            // 构建promptLibrary - 当前手势的定义
+            this.setupPromptLibrary(gesture);
+            
+            // 使用discreteGestureAnimation播放动画
+            if (window.discreteGestureAnimation) {
+                window.discreteGestureAnimation.start(
+                    stageConfig,
+                    // 完成回调
+                    () => {
+                        this.onGestureAnimationComplete();
+                    },
+                    // prompt触发回调
+                    (promptName, stageId) => {
+                        this.gestureRepeatCount++;
+                        console.log(`[Collection] 手势 ${gesture.name} - 第 ${this.gestureRepeatCount}/${repeatCount} 次`);
+                        this.updateGestureList();
+                    }
+                );
+            } else {
+                // 如果动画模块未加载，使用简单的定时器
+                console.warn('[Collection] discreteGestureAnimation 未加载，使用简单模式');
+                this.doGestureRepeatSimple();
+            }
+        }
+
+        /**
+         * 设置Prompt库（用于动画显示）
+         */
+        setupPromptLibrary(gesture) {
+            // 将当前手势添加到DISCRETE_GESTURE_CONFIG.PROMPT_LIBRARY
+            if (!window.DISCRETE_GESTURE_CONFIG) {
+                window.DISCRETE_GESTURE_CONFIG = { PROMPT_LIBRARY: {} };
+            }
+            if (!window.DISCRETE_GESTURE_CONFIG.PROMPT_LIBRARY) {
+                window.DISCRETE_GESTURE_CONFIG.PROMPT_LIBRARY = {};
+            }
+            
+            // 添加或更新当前手势的定义
+            const gestureId = gesture.id || gesture.name;
+            window.DISCRETE_GESTURE_CONFIG.PROMPT_LIBRARY[gestureId] = {
+                label: gesture.name,
+                icon: gesture.icon || '✋',
+                color: '#3b82f6'
+            };
+        }
+
+        /**
+         * 手势动画完成回调
+         */
+        onGestureAnimationComplete() {
+            const gesture = this.gestures[this.currentGestureIndex];
+            console.log(`[Collection] 手势 ${gesture.name} 动画完成`);
+            
+            // 发送prompt_end
+            this.sendToRealtimeEngine('prompt_end', {
+                promptName: gesture.id || gesture.name,
+                promptIndex: this.currentGestureIndex
+            });
+            
+            this.currentGestureIndex++;
+            this.updateGestureList();
+            
+            if (this.currentGestureIndex >= this.gestures.length) {
+                // 所有手势完成
+                this.onAllGesturesComplete();
+            } else {
+                // 休息后进入下一个手势
+                this.showRestPeriod(() => {
+                    this.startNextGesture();
+                });
+            }
+        }
+
+        /**
+         * 简单模式的手势重复（当动画模块不可用时）
+         */
+        doGestureRepeatSimple() {
+            if (!this._isRunning || this._isPaused) return;
+            
+            const gesture = this.gestures[this.currentGestureIndex];
+            const repeatMax = this.executionParams.repeatPerGesture;
+            
+            if (this.gestureRepeatCount >= repeatMax) {
+                // 当前手势重复完成
+                this.onGestureAnimationComplete();
+                return;
+            }
+            
+            this.gestureRepeatCount++;
+            console.log(`[Collection] 手势 ${gesture.name} - 第 ${this.gestureRepeatCount}/${repeatMax} 次`);
+            
+            // 发送prompt信号
+            this.sendToRealtimeEngine('prompt', {
+                name: gesture.id || gesture.name,
+                stageName: this.stages[this.currentStageIndex]?.id,
+                timestamp: Date.now()
+            });
+            
+            // 更新显示
+            this.updateGestureDisplay({
+                name: `${gesture.icon || '✋'} ${gesture.name}`,
+                instruction: `请执行手势动作 (${this.gestureRepeatCount}/${repeatMax})`,
+                showCountdown: false
+            });
+            
+            // 更新列表
+            this.updateGestureList();
+            
+            // 等待显示时间后进行下一次重复
+            const displayTime = this.executionParams.gestureDisplayTime * 1000;
+            const intervalTime = this.executionParams.intervalBetweenRepeat * 1000;
+            
+            this.phaseTimer = setTimeout(() => {
+                // 间隔时间
+                this.updateGestureDisplay({
+                    name: '准备下一次',
+                    instruction: '...',
+                    showCountdown: false
+                });
+                
+                this.phaseTimer = setTimeout(() => {
+                    this.doGestureRepeatSimple();
+                }, intervalTime);
+            }, displayTime);
+        }
+
+        showRestPeriod(callback) {
+            const restTime = this.executionParams.restBetweenGestures;
+            const nextGesture = this.gestures[this.currentGestureIndex];
+            
+            this.currentPhase = 'rest';
+            
+            this.updateGestureDisplay({
+                name: '休息时间',
+                instruction: `下一个手势: ${nextGesture?.icon || '✋'} ${nextGesture?.name || ''}`,
+                showCountdown: true,
+                countdownValue: restTime
+            });
+            
+            let countdown = restTime;
+            const countdownEl = document.getElementById('countdown');
+            if (countdownEl) {
+                countdownEl.style.display = 'block';
+                countdownEl.textContent = countdown;
+            }
+            
+            this.countdownTimer = setInterval(() => {
+                if (this._isPaused) return;
+                
+                countdown--;
+                if (countdownEl) countdownEl.textContent = countdown;
+                
+                if (countdown <= 0) {
+                    clearInterval(this.countdownTimer);
+                    this.countdownTimer = null;
+                    if (countdownEl) countdownEl.style.display = 'none';
+                    callback();
+                }
+            }, 1000);
+        }
+
+        onAllGesturesComplete() {
+            console.log('[Collection] ===== 当前Stage所有手势采集完成 =====');
+            
+            this.currentPhase = 'complete';
+            
+            const hasMoreStages = this.currentStageIndex < this.stages.length - 1;
+            const nextStageName = hasMoreStages ? this.stages[this.currentStageIndex + 1]?.name : '';
+            
+            this.updateGestureDisplay({
+                name: '🎉 Stage采集完成！',
+                instruction: hasMoreStages ? 
+                    `可以点击"进入下一Stage"继续采集: ${nextStageName}` : 
+                    '所有Stage已完成！',
+                showCountdown: false
+            });
+            
+            // 发送stage结束
+            const currentStage = this.stages[this.currentStageIndex];
+            this.sendToRealtimeEngine('stage_end', {
+                stageName: currentStage?.id || currentStage?.name
+            });
+            
+            // 通知采集完成
+            this.sendToRealtimeEngine('collection_stop', { completed: true });
+            
+            this._isRunning = false;
+            
+            // 启用Stage切换
+            const stageSelect = document.getElementById('stageSwitchSelect');
+            if (stageSelect) stageSelect.disabled = false;
+            
+            this.updateControlButtons(false);
+            this.updateNextStageButton();
+            this.updateStatus('采集完成');
+            
+            this.showToast('当前Stage采集完成！', 'success');
+        }
+
+        // ==================== 连续手势采集流程 ====================
+
+        startContinualGestureCollection() {
+            console.log('[Collection] 开始连续手势采集（保留原有animation流程）');
+            
+            // 使用原有的动画控制器
+            if (window.animationController) {
+                const currentStage = this.stages[this.currentStageIndex];
+                
+                // 通知animationController当前任务类型
+                window.animationController.setCurrentTask(this.currentTaskId);
+                
+                // 开始动画
+                window.animationController.startStageAnimation(currentStage?.name || 'stage_1', () => {
+                    // 动画完成回调
+                    this.onContinualStageComplete();
+                });
+            }
+            
+            this.updateStatus('采集中');
+        }
+
+        onContinualStageComplete() {
+            console.log('[Collection] 连续手势Stage完成');
+            
+            const currentStage = this.stages[this.currentStageIndex];
+            this.sendToRealtimeEngine('stage_end', {
+                stageName: currentStage?.id || currentStage?.name
+            });
+            
+            // 检查是否还有下一个Stage
+            if (this.currentStageIndex < this.stages.length - 1) {
+                this.updateGestureDisplay({
+                    name: 'Stage完成',
+                    instruction: '可以点击开始进行下一个Stage',
+                    showCountdown: false
+                });
+            } else {
+                this.sendToRealtimeEngine('collection_stop', { completed: true });
+            }
+            
+            this._isRunning = false;
+            
+            const stageSelect = document.getElementById('stageSwitchSelect');
+            if (stageSelect) stageSelect.disabled = false;
+            
+            this.updateControlButtons(false);
+            this.updateNextStageButton();
+            this.updateGestureList();
         }
 
         // ==================== WebSocket通信 ====================
@@ -515,9 +905,7 @@ console.log('[Collection] ====== 脚本开始加载 ======');
         }
 
         getWebSocket() {
-            if (window.waveformController && 
-                window.waveformController.dataReceiver && 
-                window.waveformController.dataReceiver.ws) {
+            if (window.waveformController?.dataReceiver?.ws) {
                 return window.waveformController.dataReceiver.ws;
             }
             return null;
@@ -525,43 +913,25 @@ console.log('[Collection] ====== 脚本开始加载 ======');
 
         // ==================== UI更新 ====================
 
-        updateStageList() {
-            const config = this.getCurrentTaskConfig();
-            const gestureList = document.getElementById('gestureList');
+        updateGestureDisplay({ name, instruction, showCountdown, countdownValue }) {
+            const gestureNameEl = document.getElementById('gestureName');
+            const gestureInstructionEl = document.getElementById('gestureInstruction');
+            const countdownEl = document.getElementById('countdown');
+            const gestureIcon = document.getElementById('gestureIcon');
             
-            if (!gestureList || !config) return;
-
-            // 获取每个stage的prompt数量
-            const getPromptInfo = (stageName) => {
-                if (window.CollectionTiming) {
-                    return window.CollectionTiming.getPromptCount(this.currentTaskId, stageName);
+            if (gestureIcon?.parentElement) {
+                gestureIcon.parentElement.style.display = 'none';
+            }
+            
+            if (gestureNameEl) gestureNameEl.textContent = name || '';
+            if (gestureInstructionEl) gestureInstructionEl.textContent = instruction || '';
+            
+            if (countdownEl) {
+                countdownEl.style.display = showCountdown ? 'block' : 'none';
+                if (showCountdown && countdownValue !== undefined) {
+                    countdownEl.textContent = countdownValue;
                 }
-                return 10; // 默认值
-            };
-
-            let html = `<div class="gesture-list-title">${config.name} - Stage列表</div>`;
-            
-            config.stages.forEach((stage, index) => {
-                let status = 'pending';
-                if (index < this.currentStageIndex) {
-                    status = 'completed';
-                } else if (index === this.currentStageIndex && this._isRunning && this.currentPhase === 'stage') {
-                    status = 'current';
-                }
-                
-                const iconClass = status === 'completed' ? 'check-circle' : 'circle';
-                const promptCount = getPromptInfo(stage.name);
-                
-                html += `
-                    <div class="gesture-item ${status}" data-index="${index}">
-                        <i class="fas fa-${iconClass}"></i>
-                        <span>${stage.label}</span>
-                        <small style="margin-left: auto; color: #9ca3af;">${promptCount}次</small>
-                    </div>
-                `;
-            });
-            
-            gestureList.innerHTML = html;
+            }
         }
 
         updateControlButtons(running) {
@@ -592,76 +962,83 @@ console.log('[Collection] ====== 脚本开始加载 ======');
             }
         }
 
-        updateStageDisplay(stage) {
-            const gestureName = document.getElementById('gestureName');
-            const gestureInstruction = document.getElementById('gestureInstruction');
-            const gestureIcon = document.getElementById('gestureIcon');
-
-            if (gestureIcon && gestureIcon.parentElement) {
-                gestureIcon.parentElement.style.display = 'none';
-            }
-
-            if (gestureName) {
-                gestureName.textContent = stage.label || stage.name;
-            }
-
-            if (gestureInstruction) {
-                gestureInstruction.textContent = stage.instruction || '请按照提示进行手势动作';
-            }
-        }
-
         updateProgress() {
-            const config = this.getCurrentTaskConfig();
-            if (!config) return;
-
-            const totalStages = config.stages.length;
-            const percent = (this.currentStageIndex / totalStages) * 100;
+            const total = this.gestures.length;
+            const current = this.currentGestureIndex;
+            const percent = total > 0 ? (current / total) * 100 : 0;
 
             const progressFill = document.getElementById('progressFill');
             const progressText = document.getElementById('progressText');
 
             if (progressFill) progressFill.style.width = `${percent}%`;
             if (progressText) {
-                progressText.textContent = `${this.currentStageIndex} / ${totalStages} Stage`;
+                progressText.textContent = `${current} / ${total} 手势`;
             }
         }
 
         resetDisplay() {
-            const gestureName = document.getElementById('gestureName');
-            const gestureInstruction = document.getElementById('gestureInstruction');
+            const gestureNameEl = document.getElementById('gestureName');
+            const gestureInstructionEl = document.getElementById('gestureInstruction');
             const gestureIcon = document.getElementById('gestureIcon');
             const progressFill = document.getElementById('progressFill');
             const progressText = document.getElementById('progressText');
+            const countdownEl = document.getElementById('countdown');
 
-            if (gestureName) {
-                gestureName.textContent = '点击开始';
+            if (gestureNameEl) gestureNameEl.textContent = '点击开始';
+            if (gestureInstructionEl) {
+                const stageName = this.stages[this.currentStageIndex]?.name || '';
+                gestureInstructionEl.textContent = `当前Stage: ${stageName}，点击开始按钮开始采集`;
             }
-
-            if (gestureInstruction) {
-                gestureInstruction.textContent = '选择任务类型并点击开始按钮';
-            }
-
-            if (gestureIcon && gestureIcon.parentElement) {
-                gestureIcon.parentElement.style.display = '';
-            }
-
+            if (gestureIcon?.parentElement) gestureIcon.parentElement.style.display = '';
             if (progressFill) progressFill.style.width = '0%';
-            if (progressText) progressText.textContent = '0 / 0 完成';
-
-            if (window.animationController) {
-                window.animationController.reset();
-            }
+            if (progressText) progressText.textContent = `0 / ${this.gestures.length} 手势`;
+            if (countdownEl) countdownEl.style.display = 'none';
 
             this.updateStatus('准备就绪');
-            this.updateStageList();
+        }
+
+        showToast(message, type = 'info') {
+            const toast = document.getElementById('toast');
+            if (toast) {
+                const icon = type === 'success' ? 'check' : type === 'warning' ? 'exclamation-triangle' : 'info';
+                toast.className = `toast ${type}`;
+                toast.innerHTML = `<i class="fas fa-${icon}-circle"></i> ${message}`;
+                toast.classList.add('visible');
+                setTimeout(() => toast.classList.remove('visible'), 3000);
+            }
+        }
+
+        // ==================== 外部接口 ====================
+
+        selectTask(htmlTaskId) {
+            // 保留兼容性，但在新流程中不使用
+            const taskIdMap = {
+                'discrete': 'discrete_gesture',
+                'continuous1': 'continual_gesture_1',
+                'continuous2': 'continual_gesture_2'
+            };
+            
+            this.currentTaskId = taskIdMap[htmlTaskId] || htmlTaskId;
+            console.log('[Collection] 设置任务类型:', this.currentTaskId);
+            
+            // 通知animationController
+            if (window.animationController) {
+                window.animationController.setCurrentTask(this.currentTaskId);
+            }
+            
+            this.updateUI();
+        }
+
+        getCurrentTaskId() {
+            return this.currentTaskId;
         }
     }
 
     // ==================== 初始化 ====================
-    console.log('[Collection] 准备初始化控制器');
+    console.log('[Collection] 准备初始化控制器 (v3)');
     
     function initController() {
-        console.log('[Collection] ====== 开始初始化控制器 ======');
+        console.log('[Collection] ====== 开始初始化控制器 (v3) ======');
         
         try {
             const controller = new CollectionController();
@@ -679,15 +1056,13 @@ console.log('[Collection] ====== 脚本开始加载 ======');
     }
 
     if (document.readyState === 'loading') {
-        console.log('[Collection] DOM还在加载中，等待DOMContentLoaded');
         document.addEventListener('DOMContentLoaded', initController);
     } else {
-        console.log('[Collection] DOM已加载，直接初始化');
         initController();
     }
 
-    console.log('[Collection] 脚本主体执行完毕');
+    console.log('[Collection] 脚本主体执行完毕 (v3)');
 
 })();
 
-console.log('[Collection] ====== 脚本加载结束 ======');
+console.log('[Collection] ====== 脚本加载结束 (v3) ======');
