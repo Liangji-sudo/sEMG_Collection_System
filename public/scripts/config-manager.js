@@ -1,16 +1,15 @@
 /**
- * config-manager.js - 采集任务配置管理器（纯浏览器版）
+ * config-manager.js - 采集配置管理器（v2）
  * 
  * 功能：
- * 1. 通过文件选择对话框加载本地JSON配置文件
- * 2. 验证配置文件格式
- * 3. 预览当前配置
- * 4. 将配置应用到采集系统
+ * 1. 加载/导入采集模板配置（JSON文件）
+ * 2. 配置预览（思维导图式层级展示）
+ * 3. 将模板配置应用到采集系统
+ * 4. 与后台配置页面联动
  * 
- * 使用方式：
- * - npm start 打开网页即可使用
- * - 点击"加载"按钮选择本地JSON配置文件
- * - 不需要Electron，纯浏览器环境支持
+ * 配置来源：
+ * - 后台配置页面创建并保存到localStorage
+ * - 从本地JSON文件导入
  */
 
 (function() {
@@ -20,8 +19,8 @@
 
     class ConfigManager {
         constructor() {
-            this.currentConfig = null;
-            this.configFileName = null;
+            this.currentTemplate = null;
+            this.templateFileName = null;
             this.isLoaded = false;
         }
 
@@ -31,8 +30,8 @@
         init() {
             console.log('[ConfigManager] 初始化开始');
             
-            // 加载内置默认配置
-            this.loadDefaultConfig();
+            // 尝试从localStorage加载已保存的模板
+            this.loadFromLocalStorage();
             
             // 绑定UI事件
             this.bindEvents();
@@ -44,102 +43,111 @@
         }
 
         /**
-         * 加载内置默认配置（从现有的全局变量构建）
+         * 从localStorage加载模板
          */
-        loadDefaultConfig() {
-            this.currentConfig = this.buildConfigFromGlobals();
-            this.configFileName = '内置默认';
-            this.isLoaded = true;
-            console.log('[ConfigManager] 默认配置已加载');
+        loadFromLocalStorage() {
+            const saved = localStorage.getItem('emg_collection_template');
+            if (saved) {
+                try {
+                    this.currentTemplate = JSON.parse(saved);
+                    this.templateFileName = '本地保存';
+                    this.isLoaded = true;
+                    console.log('[ConfigManager] 已从localStorage加载模板:', this.currentTemplate.templateName);
+                } catch (e) {
+                    console.warn('[ConfigManager] 解析localStorage模板失败:', e);
+                    this.loadDefaultTemplate();
+                }
+            } else {
+                this.loadDefaultTemplate();
+            }
         }
 
         /**
-         * 从现有的全局常量构建配置对象
+         * 加载默认模板
          */
-        buildConfigFromGlobals() {
-            const config = {
-                configVersion: '1.0.0',
-                configName: '内置默认配置',
-                description: '系统内置的标准采集配置',
+        loadDefaultTemplate() {
+            // 如果templateConfigManager已初始化，从它获取默认模板
+            if (window.templateConfigManager && window.templateConfigManager.currentTemplate) {
+                this.currentTemplate = window.templateConfigManager.currentTemplate;
+            } else {
+                // 使用内置默认模板
+                this.currentTemplate = this.getBuiltInDefaultTemplate();
+            }
+            this.templateFileName = '内置默认';
+            this.isLoaded = true;
+            console.log('[ConfigManager] 使用默认模板');
+        }
 
-                globalSettings: {
-                    intro: {
-                        duration: window.COLLECTION_CONSTANTS?.INTRO?.DURATION || 10000,
-                        type: window.COLLECTION_CONSTANTS?.INTRO?.TYPE || 'countdown'
-                    },
-                    stagePrepare: {
-                        countdownSeconds: window.COLLECTION_CONSTANTS?.STAGE_PREPARE?.COUNTDOWN_SECONDS || 3
-                    },
-                    debug: {
-                        enabled: window.COLLECTION_CONSTANTS?.DEBUG?.ENABLED || false,
-                        fastMode: window.COLLECTION_CONSTANTS?.DEBUG?.FAST_MODE || false
-                    }
+        /**
+         * 获取内置默认模板
+         */
+        getBuiltInDefaultTemplate() {
+            return {
+                templateName: '标准采集模板',
+                version: '2.0',
+                
+                categoryLabels: {
+                    category1: '大类',
+                    category2: '大场景',
+                    category3: '子场景',
+                    category4: '人群'
                 },
 
-                promptLibrary: window.DISCRETE_GESTURE_CONFIG?.PROMPT_LIBRARY || {},
-                tasks: {},
-                taskIdMap: window.TaskConfig?.ID_MAP || {
-                    'discrete': 'discrete_gesture',
-                    'continuous1': 'continual_gesture_1',
-                    'continuous2': 'continual_gesture_2'
+                tasks: [
+                    { id: 'discrete_gesture', name: '离散手势采集', enabled: true },
+                    { id: 'continual_gesture_1', name: '连续手势采集1', enabled: true },
+                    { id: 'continual_gesture_2', name: '连续手势采集2', enabled: true }
+                ],
+
+                category1: [
+                    { id: 'static', name: '静态采集', enabled: true },
+                    { id: 'dynamic', name: '动态采集', enabled: true }
+                ],
+
+                category2: [
+                    { id: 'sitting', name: '坐姿', enabled: true },
+                    { id: 'lying', name: '卧姿', enabled: true }
+                ],
+
+                category3: [
+                    { id: 'palm_up', name: '手心朝上', instruction: '请保持手心朝上的姿势', enabled: true },
+                    { id: 'palm_inward', name: '手心朝内', instruction: '请保持手心朝内的姿势', enabled: true },
+                    { id: 'hand_on_knee', name: '手放膝盖', instruction: '请将手放在膝盖上', enabled: true },
+                    { id: 'hand_on_desk', name: '手放桌上', instruction: '请将手放在桌面上', enabled: true }
+                ],
+
+                category4: [
+                    { id: 'normal', name: '正常状态', enabled: true },
+                    { id: 'exercise', name: '运动/力竭', enabled: true }
+                ],
+
+                gestures: {
+                    discrete: [
+                        { id: 'pinch', name: '捏合', icon: '🤏', enabled: true },
+                        { id: 'spread', name: '张开', icon: '🖐️', enabled: true },
+                        { id: 'fist', name: '握拳', icon: '✊', enabled: true },
+                        { id: 'release', name: '松开', icon: '✋', enabled: true }
+                    ]
+                },
+
+                execution: {
+                    repeatPerGesture: 5,
+                    intervalBetweenRepeat: 1.0,
+                    restBetweenGestures: 30.0,
+                    preparationTime: 3.0,
+                    gestureDisplayTime: 2.0
                 }
             };
-
-            // 构建任务配置
-            if (window.DISCRETE_GESTURE_CONFIG) {
-                config.tasks.discrete_gesture = this.extractTaskConfig('discrete_gesture', window.DISCRETE_GESTURE_CONFIG);
-            }
-            if (window.CONTINUAL_GESTURE_1_CONFIG) {
-                config.tasks.continual_gesture_1 = this.extractTaskConfig('continual_gesture_1', window.CONTINUAL_GESTURE_1_CONFIG);
-            }
-            if (window.CONTINUAL_GESTURE_2_CONFIG) {
-                config.tasks.continual_gesture_2 = this.extractTaskConfig('continual_gesture_2', window.CONTINUAL_GESTURE_2_CONFIG);
-            }
-
-            return config;
-        }
-
-        /**
-         * 从全局配置对象提取任务配置
-         */
-        extractTaskConfig(taskId, sourceConfig) {
-            const taskConfig = {
-                id: taskId,
-                name: sourceConfig.NAME || taskId,
-                taskType: sourceConfig.TASK_TYPE || 'prompt_sequence',
-                stages: []
-            };
-
-            if (sourceConfig.WHEEL_TASK) {
-                taskConfig.wheelTaskConfig = { ...sourceConfig.WHEEL_TASK };
-            }
-
-            if (sourceConfig.STAGES) {
-                for (const [stageName, stageData] of Object.entries(sourceConfig.STAGES)) {
-                    taskConfig.stages.push({
-                        name: stageData.name || stageName,
-                        label: stageData.label,
-                        instruction: stageData.instruction,
-                        icon: stageData.icon,
-                        color: stageData.color,
-                        promptSequence: stageData.promptSequence || [],
-                        maxTrials: stageData.maxTrials,
-                        timeout: stageData.timeout
-                    });
-                }
-            }
-
-            return taskConfig;
         }
 
         /**
          * 绑定UI事件
          */
         bindEvents() {
-            // 加载配置按钮 - 改为显示配置文件列表弹窗
+            // 加载配置按钮
             const loadBtn = document.getElementById('loadConfigBtn');
             if (loadBtn) {
-                loadBtn.addEventListener('click', () => this.showConfigSelectModal());
+                loadBtn.addEventListener('click', () => this.showLoadConfigModal());
             }
 
             // 预览配置按钮
@@ -148,200 +156,135 @@
                 previewBtn.addEventListener('click', () => this.showPreviewModal());
             }
 
-            // 文件输入变化事件（保留作为备用）
-            const fileInput = document.getElementById('configFileInput');
-            if (fileInput) {
-                fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
+            // 隐藏的文件输入
+            let fileInput = document.getElementById('configFileInput');
+            if (!fileInput) {
+                fileInput = document.createElement('input');
+                fileInput.type = 'file';
+                fileInput.id = 'configFileInput';
+                fileInput.accept = '.json';
+                fileInput.style.display = 'none';
+                document.body.appendChild(fileInput);
             }
-
-            // 弹窗关闭按钮
-            document.querySelectorAll('.config-modal-close').forEach(btn => {
-                btn.addEventListener('click', () => this.closeModal());
-            });
-
-            // 点击遮罩关闭
-            const modal = document.getElementById('configPreviewModal');
-            if (modal) {
-                modal.addEventListener('click', (e) => {
-                    if (e.target === modal) {
-                        this.closeModal();
-                    }
-                });
-            }
-
-            // 配置选择弹窗遮罩关闭
-            const selectModal = document.getElementById('configSelectModal');
-            if (selectModal) {
-                selectModal.addEventListener('click', (e) => {
-                    if (e.target === selectModal) {
-                        this.closeConfigSelectModal();
-                    }
-                });
-            }
+            fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
 
             console.log('[ConfigManager] 事件绑定完成');
         }
 
         /**
-         * 显示配置文件选择弹窗
+         * 显示加载配置弹窗
          */
-        async showConfigSelectModal() {
-            // 创建弹窗（如果不存在）
-            let modal = document.getElementById('configSelectModal');
-            if (!modal) {
-                modal = this.createConfigSelectModal();
-                document.body.appendChild(modal);
+        showLoadConfigModal() {
+            // 创建弹窗
+            let modal = document.getElementById('loadConfigModal');
+            if (modal) {
+                modal.remove();
             }
+            modal = this.createLoadConfigModal();
+            document.body.appendChild(modal);
 
-            // 显示弹窗
             modal.classList.add('visible');
-
-            // 加载配置文件列表
-            await this.loadConfigFileList();
+            
+            // 加载服务器配置文件列表
+            this.loadServerConfigList();
         }
 
         /**
-         * 创建配置文件选择弹窗
+         * 加载服务器配置文件列表
          */
-        createConfigSelectModal() {
-            const modal = document.createElement('div');
-            modal.id = 'configSelectModal';
-            modal.className = 'config-select-modal';
-            modal.innerHTML = `
-                <div class="config-select-content">
-                    <div class="config-select-header">
-                        <h3><i class="fas fa-folder-open"></i> 选择配置文件</h3>
-                        <button class="config-select-close" onclick="window.configManager.closeConfigSelectModal()">
-                            <i class="fas fa-times"></i>
-                        </button>
-                    </div>
-                    <div class="config-select-body">
-                        <div class="config-file-path">
-                            <i class="fas fa-folder"></i>
-                            <span>config/</span>
-                        </div>
-                        <div class="config-file-list" id="configFileList">
-                            <div class="config-file-loading">
-                                <i class="fas fa-spinner fa-spin"></i> 加载中...
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-            return modal;
-        }
-
-        /**
-         * 加载配置文件列表
-         */
-        async loadConfigFileList() {
-            const listContainer = document.getElementById('configFileList');
+        async loadServerConfigList() {
+            const listContainer = document.getElementById('serverConfigList');
             if (!listContainer) return;
 
-            listContainer.innerHTML = '<div class="config-file-loading"><i class="fas fa-spinner fa-spin"></i> 加载中...</div>';
+            listContainer.innerHTML = '<div class="loading-hint"><i class="fa fa-spinner fa-spin"></i> 加载中...</div>';
 
             try {
                 const response = await fetch('/api/config/files');
-                const data = await response.json();
+                const result = await response.json();
 
-                if (data.success && data.files.length > 0) {
-                    listContainer.innerHTML = data.files.map(file => `
-                        <div class="config-file-item" data-filename="${file.name}">
+                if (result.success && result.files.length > 0) {
+                    listContainer.innerHTML = result.files.map(file => `
+                        <div class="server-config-item" onclick="configManager.loadFromServer('${file.name}')">
                             <div class="config-file-icon">
-                                <i class="fas fa-file-code"></i>
+                                <i class="fa fa-file-code"></i>
                             </div>
                             <div class="config-file-info">
-                                <div class="config-file-name">${file.name}</div>
-                                <div class="config-file-meta">
-                                    <span>${this.formatFileSize(file.size)}</span>
-                                    <span>${this.formatDateTime(new Date(file.lastModified))}</span>
-                                </div>
+                                <span class="config-file-name">${file.name}</span>
+                                <span class="config-file-meta">${this.formatFileSize(file.size)} · ${this.formatDate(file.lastModified)}</span>
                             </div>
+                            <button class="config-file-delete" onclick="event.stopPropagation(); configManager.deleteFromServer('${file.name}')" title="删除">
+                                <i class="fa fa-trash"></i>
+                            </button>
                         </div>
                     `).join('');
-
-                    // 绑定点击事件
-                    listContainer.querySelectorAll('.config-file-item').forEach(item => {
-                        item.addEventListener('click', () => {
-                            const filename = item.dataset.filename;
-                            this.loadConfigFromServer(filename);
-                        });
-                    });
-                } else if (data.success && data.files.length === 0) {
-                    listContainer.innerHTML = `
-                        <div class="config-file-empty">
-                            <i class="fas fa-folder-open"></i>
-                            <p>config/ 目录中没有 JSON 配置文件</p>
-                        </div>
-                    `;
+                } else if (result.success) {
+                    listContainer.innerHTML = '<div class="empty-hint">config/ 目录暂无配置文件</div>';
                 } else {
-                    listContainer.innerHTML = `
-                        <div class="config-file-error">
-                            <i class="fas fa-exclamation-triangle"></i>
-                            <p>${data.error}</p>
-                        </div>
-                    `;
+                    listContainer.innerHTML = `<div class="error-hint"><i class="fa fa-exclamation-circle"></i> ${result.error}</div>`;
                 }
             } catch (err) {
-                listContainer.innerHTML = `
-                    <div class="config-file-error">
-                        <i class="fas fa-exclamation-triangle"></i>
-                        <p>无法连接到服务器</p>
-                    </div>
-                `;
+                console.error('[ConfigManager] 加载服务器配置列表失败:', err);
+                listContainer.innerHTML = '<div class="error-hint"><i class="fa fa-exclamation-circle"></i> 无法连接服务器</div>';
             }
         }
 
         /**
-         * 从服务端加载配置文件
+         * 从服务器加载配置文件
          */
-        async loadConfigFromServer(filename) {
-            console.log('[ConfigManager] 从服务端加载配置:', filename);
-
+        async loadFromServer(filename) {
             try {
-                const response = await fetch(`/api/config/load/${encodeURIComponent(filename)}`);
-                const data = await response.json();
+                const response = await fetch(`/api/config/load/${filename}`);
+                const result = await response.json();
 
-                if (data.success) {
-                    // 验证配置
-                    const validation = this.validateConfig(data.config);
-                    if (!validation.valid) {
-                        this.showToast(`配置验证失败: ${validation.errors[0]}`, 'error');
-                        return;
-                    }
-
-                    // 应用配置
-                    this.currentConfig = data.config;
-                    this.configFileName = filename;
+                if (result.success) {
+                    this.currentTemplate = result.config;
+                    this.templateFileName = filename;
                     this.isLoaded = true;
 
-                    // 应用到采集系统
-                    this.applyConfigToSystem(data.config);
+                    // 同步到localStorage
+                    localStorage.setItem('emg_collection_template', JSON.stringify(result.config));
 
-                    // 更新UI
+                    // 同步到templateConfigManager
+                    if (window.templateConfigManager) {
+                        window.templateConfigManager.currentTemplate = result.config;
+                        window.templateConfigManager.isDirty = false;
+                    }
+
                     this.updateConfigStatus();
-
-                    // 关闭选择弹窗
-                    this.closeConfigSelectModal();
-
-                    this.showToast(`配置 "${filename}" 加载成功！`, 'success');
-                    console.log('[ConfigManager] 配置加载成功:', data.config.configName);
+                    this.closeLoadModal();
+                    this.showToast(`已加载: ${result.config.templateName || filename}`, 'success');
                 } else {
-                    this.showToast(`加载失败: ${data.error}`, 'error');
+                    this.showToast('加载失败: ' + result.error, 'error');
                 }
             } catch (err) {
-                this.showToast('加载配置文件失败', 'error');
-                console.error('[ConfigManager] 加载失败:', err);
+                console.error('[ConfigManager] 从服务器加载失败:', err);
+                this.showToast('加载失败: 无法连接服务器', 'error');
             }
         }
 
         /**
-         * 关闭配置选择弹窗
+         * 从服务器删除配置文件
          */
-        closeConfigSelectModal() {
-            const modal = document.getElementById('configSelectModal');
-            if (modal) {
-                modal.classList.remove('visible');
+        async deleteFromServer(filename) {
+            if (!confirm(`确定要删除配置文件 "${filename}" 吗？`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/config/delete/${filename}`, {
+                    method: 'DELETE'
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    this.showToast('配置文件已删除', 'success');
+                    this.loadServerConfigList(); // 刷新列表
+                } else {
+                    this.showToast('删除失败: ' + result.error, 'error');
+                }
+            } catch (err) {
+                console.error('[ConfigManager] 删除失败:', err);
+                this.showToast('删除失败: 无法连接服务器', 'error');
             }
         }
 
@@ -349,243 +292,271 @@
          * 格式化文件大小
          */
         formatFileSize(bytes) {
-            if (bytes === 0) return '0 B';
-            const k = 1024;
-            const sizes = ['B', 'KB', 'MB'];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
         }
 
         /**
-         * 格式化日期时间
+         * 格式化日期
          */
-        formatDateTime(date) {
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const day = String(date.getDate()).padStart(2, '0');
-            const hour = String(date.getHours()).padStart(2, '0');
-            const min = String(date.getMinutes()).padStart(2, '0');
-            return `${month}-${day} ${hour}:${min}`;
+        formatDate(timestamp) {
+            const date = new Date(timestamp);
+            return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        }
+
+        /**
+         * 创建加载配置弹窗
+         */
+        createLoadConfigModal() {
+            const modal = document.createElement('div');
+            modal.id = 'loadConfigModal';
+            modal.className = 'config-modal-overlay';
+            modal.innerHTML = `
+                <div class="config-modal-content load-config-modal">
+                    <div class="config-modal-header">
+                        <h3><i class="fa fa-folder-open"></i> 加载采集配置</h3>
+                        <button class="config-modal-close" onclick="configManager.closeLoadModal()">
+                            <i class="fa fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="config-modal-body">
+                        <div class="load-config-options">
+                            <div class="load-option" onclick="configManager.loadFromStorage()">
+                                <div class="load-option-icon">
+                                    <i class="fa fa-database"></i>
+                                </div>
+                                <div class="load-option-info">
+                                    <h4>使用本地缓存配置</h4>
+                                    <p>从浏览器缓存加载上次保存的配置</p>
+                                </div>
+                                <i class="fa fa-chevron-right"></i>
+                            </div>
+                            <div class="load-option" onclick="configManager.triggerFileSelect()">
+                                <div class="load-option-icon">
+                                    <i class="fa fa-file-import"></i>
+                                </div>
+                                <div class="load-option-info">
+                                    <h4>从文件导入</h4>
+                                    <p>选择本地JSON配置文件</p>
+                                </div>
+                                <i class="fa fa-chevron-right"></i>
+                            </div>
+                            <div class="load-option" onclick="configManager.loadDefaultAndClose()">
+                                <div class="load-option-icon">
+                                    <i class="fa fa-undo"></i>
+                                </div>
+                                <div class="load-option-info">
+                                    <h4>使用默认配置</h4>
+                                    <p>恢复系统内置的标准配置</p>
+                                </div>
+                                <i class="fa fa-chevron-right"></i>
+                            </div>
+                        </div>
+                        
+                        <!-- 服务器配置文件列表 -->
+                        <div class="server-config-section">
+                            <div class="server-config-header">
+                                <h4><i class="fa fa-server"></i> 服务器配置文件</h4>
+                                <button class="refresh-config-btn" onclick="configManager.loadServerConfigList()">
+                                    <i class="fa fa-refresh"></i>
+                                </button>
+                            </div>
+                            <div class="server-config-list" id="serverConfigList">
+                                <div class="loading-hint">
+                                    <i class="fa fa-spinner fa-spin"></i> 加载中...
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="current-config-info">
+                            <h4>当前配置</h4>
+                            <div class="config-info-row">
+                                <span class="config-info-label">模板名称：</span>
+                                <span class="config-info-value" id="currentTemplateName">${this.currentTemplate?.templateName || '未加载'}</span>
+                            </div>
+                            <div class="config-info-row">
+                                <span class="config-info-label">来源：</span>
+                                <span class="config-info-value">${this.templateFileName || '-'}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // 点击遮罩关闭
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    this.closeLoadModal();
+                }
+            });
+
+            return modal;
+        }
+
+        /**
+         * 关闭加载弹窗
+         */
+        closeLoadModal() {
+            const modal = document.getElementById('loadConfigModal');
+            if (modal) {
+                modal.classList.remove('visible');
+            }
+        }
+
+        /**
+         * 触发文件选择
+         */
+        triggerFileSelect() {
+            const fileInput = document.getElementById('configFileInput');
+            if (fileInput) {
+                fileInput.click();
+            }
         }
 
         /**
          * 处理文件选择
          */
-        handleFileSelect(event) {
-            const file = event.target.files[0];
+        handleFileSelect(e) {
+            const file = e.target.files[0];
             if (!file) return;
 
-            // 检查文件类型
-            if (!file.name.endsWith('.json')) {
-                this.showToast('请选择JSON格式的配置文件', 'error');
-                return;
-            }
-
-            console.log('[ConfigManager] 选择的文件:', file.name);
-
             const reader = new FileReader();
-            
-            reader.onload = (e) => {
+            reader.onload = (event) => {
                 try {
-                    const content = e.target.result;
-                    const config = JSON.parse(content);
+                    const template = JSON.parse(event.target.result);
                     
-                    // 验证配置
-                    const validation = this.validateConfig(config);
-                    if (!validation.valid) {
-                        this.showToast(`配置验证失败: ${validation.errors[0]}`, 'error');
+                    // 验证模板格式
+                    if (!this.validateTemplate(template)) {
+                        this.showToast('配置文件格式无效', 'error');
                         return;
                     }
 
-                    // 应用配置
-                    this.currentConfig = config;
-                    this.configFileName = file.name;
+                    this.currentTemplate = template;
+                    this.templateFileName = file.name;
                     this.isLoaded = true;
 
-                    // 应用到采集系统
-                    this.applyConfigToSystem(config);
+                    // 同步到localStorage
+                    localStorage.setItem('emg_collection_template', JSON.stringify(template));
 
-                    // 更新UI
+                    // 同步到templateConfigManager
+                    if (window.templateConfigManager) {
+                        window.templateConfigManager.currentTemplate = template;
+                        window.templateConfigManager.isDirty = false;
+                    }
+
                     this.updateConfigStatus();
+                    this.closeLoadModal();
+                    this.showToast('配置已加载: ' + template.templateName, 'success');
 
-                    this.showToast(`配置加载成功: ${config.configName || file.name}`, 'success');
-                    console.log('[ConfigManager] 配置已加载:', config);
-
-                } catch (error) {
-                    console.error('[ConfigManager] 解析配置错误:', error);
-                    this.showToast('配置文件格式错误，请检查JSON语法', 'error');
+                } catch (err) {
+                    console.error('[ConfigManager] 解析配置文件失败:', err);
+                    this.showToast('解析配置文件失败', 'error');
                 }
             };
-
-            reader.onerror = () => {
-                this.showToast('读取文件失败', 'error');
-            };
-
             reader.readAsText(file);
-
-            // 清空文件输入，允许重复选择同一文件
-            event.target.value = '';
+            
+            // 清空文件输入以便再次选择同一文件
+            e.target.value = '';
         }
 
         /**
-         * 验证配置文件格式
+         * 验证模板格式
          */
-        validateConfig(config) {
-            const errors = [];
-
-            if (!config.tasks || typeof config.tasks !== 'object') {
-                errors.push('缺少tasks配置');
-            }
-
-            if (!config.globalSettings) {
-                errors.push('缺少globalSettings配置');
-            }
-
-            if (config.tasks) {
-                for (const [taskId, taskConfig] of Object.entries(config.tasks)) {
-                    if (!taskConfig.stages || !Array.isArray(taskConfig.stages)) {
-                        errors.push(`任务 ${taskId} 缺少stages数组`);
-                    }
-                    if (!taskConfig.taskType) {
-                        errors.push(`任务 ${taskId} 缺少taskType`);
-                    }
-                }
-            }
-
-            return {
-                valid: errors.length === 0,
-                errors: errors
-            };
+        validateTemplate(template) {
+            // 基本字段检查
+            if (!template.templateName) return false;
+            if (!template.tasks || !Array.isArray(template.tasks)) return false;
+            if (!template.category3 || !Array.isArray(template.category3)) return false;
+            return true;
         }
 
         /**
-         * 将配置应用到采集系统
+         * 从localStorage加载
          */
-        applyConfigToSystem(config) {
-            console.log('[ConfigManager] 应用配置到系统...');
-
-            // 更新 COLLECTION_CONSTANTS
-            if (config.globalSettings && window.COLLECTION_CONSTANTS) {
-                const gs = config.globalSettings;
-                if (gs.intro) {
-                    window.COLLECTION_CONSTANTS.INTRO.DURATION = gs.intro.duration || 10000;
-                    window.COLLECTION_CONSTANTS.INTRO.TYPE = gs.intro.type || 'countdown';
-                }
-                if (gs.stagePrepare) {
-                    window.COLLECTION_CONSTANTS.STAGE_PREPARE.COUNTDOWN_SECONDS = gs.stagePrepare.countdownSeconds || 3;
-                }
-                if (gs.debug) {
-                    window.COLLECTION_CONSTANTS.DEBUG.ENABLED = gs.debug.enabled || false;
-                    window.COLLECTION_CONSTANTS.DEBUG.FAST_MODE = gs.debug.fastMode || false;
-                }
-            }
-
-            // 更新 promptLibrary
-            if (config.promptLibrary && window.DISCRETE_GESTURE_CONFIG) {
-                window.DISCRETE_GESTURE_CONFIG.PROMPT_LIBRARY = config.promptLibrary;
-            }
-
-            // 更新各任务配置
-            if (config.tasks.discrete_gesture) {
-                this.applyTaskConfig(config.tasks.discrete_gesture, window.DISCRETE_GESTURE_CONFIG);
-            }
-            if (config.tasks.continual_gesture_1) {
-                this.applyTaskConfig(config.tasks.continual_gesture_1, window.CONTINUAL_GESTURE_1_CONFIG);
-            }
-            if (config.tasks.continual_gesture_2) {
-                this.applyTaskConfig(config.tasks.continual_gesture_2, window.CONTINUAL_GESTURE_2_CONFIG);
-            }
-
-            // 更新 TaskConfig
-            if (window.TaskConfig && config.tasks) {
-                for (const [taskId, taskConfig] of Object.entries(config.tasks)) {
-                    window.TaskConfig.DEFINITIONS[taskId] = {
-                        id: taskId,
-                        name: taskConfig.name,
-                        description: taskConfig.description || '',
-                        icon: taskConfig.icon,
-                        taskType: taskConfig.taskType,
-                        stages: taskConfig.stages.map(stage => ({
-                            name: stage.name,
-                            label: stage.label,
-                            instruction: stage.instruction,
-                            icon: stage.icon,
-                            color: stage.color,
-                            maxTrials: stage.maxTrials,
-                            timeout: stage.timeout
-                        }))
-                    };
-                }
-            }
-
-            // 通知采集控制器更新UI
-            if (window.collectionController) {
-                window.collectionController.updateStageList();
-            }
-
-            console.log('[ConfigManager] 配置已应用到系统 ✓');
+        loadFromStorage() {
+            this.loadFromLocalStorage();
+            this.updateConfigStatus();
+            this.closeLoadModal();
+            this.showToast('已加载保存的配置', 'success');
         }
 
         /**
-         * 应用单个任务的配置
+         * 加载默认并关闭弹窗
          */
-        applyTaskConfig(taskConfig, targetConfig) {
-            if (!targetConfig) return;
-
-            // 更新滚轮任务参数
-            if (taskConfig.wheelTaskConfig && targetConfig.WHEEL_TASK) {
-                Object.assign(targetConfig.WHEEL_TASK, {
-                    MAX_TRIALS: taskConfig.wheelTaskConfig.maxTrials,
-                    STAGE_TIMEOUT: taskConfig.wheelTaskConfig.stageTimeout,
-                    DWELL_MS: taskConfig.wheelTaskConfig.dwellMs,
-                    TARGET_FRAC: taskConfig.wheelTaskConfig.targetFrac,
-                    MIN_TARGET_DISTANCE: taskConfig.wheelTaskConfig.minTargetDistance
-                });
-            }
-
-            // 更新stages（转换数组格式回对象格式）
-            if (taskConfig.stages && targetConfig.STAGES) {
-                const newStages = {};
-                taskConfig.stages.forEach(stage => {
-                    newStages[stage.name] = {
-                        name: stage.name,
-                        label: stage.label,
-                        instruction: stage.instruction,
-                        icon: stage.icon,
-                        color: stage.color,
-                        promptSequence: stage.promptSequence || [],
-                        maxTrials: stage.maxTrials,
-                        timeout: stage.timeout
-                    };
-                });
-                targetConfig.STAGES = newStages;
-            }
-
-            // 更新动画配置
-            if (taskConfig.animation && targetConfig.ANIMATION) {
-                Object.assign(targetConfig.ANIMATION, taskConfig.animation);
-            }
+        loadDefaultAndClose() {
+            this.currentTemplate = this.getBuiltInDefaultTemplate();
+            this.templateFileName = '内置默认';
+            this.isLoaded = true;
+            
+            // 同步到localStorage
+            localStorage.setItem('emg_collection_template', JSON.stringify(this.currentTemplate));
+            
+            this.updateConfigStatus();
+            this.closeLoadModal();
+            this.showToast('已恢复默认配置', 'success');
         }
 
         /**
          * 显示预览弹窗
          */
         showPreviewModal() {
-            const modal = document.getElementById('configPreviewModal');
-            const content = document.getElementById('configPreviewContent');
-            
-            if (!modal || !content) {
-                console.error('[ConfigManager] 预览弹窗元素未找到');
-                return;
+            // 先确保有模板数据
+            if (!this.currentTemplate) {
+                this.loadFromLocalStorage();
             }
 
-            content.innerHTML = this.generatePreviewHTML();
+            let modal = document.getElementById('configPreviewModal');
+            if (modal) {
+                // 如果弹窗已存在，先移除再重建（确保内容更新）
+                modal.remove();
+            }
+            
+            modal = this.createPreviewModal();
+            document.body.appendChild(modal);
             modal.classList.add('visible');
         }
 
         /**
-         * 关闭弹窗
+         * 创建预览弹窗
          */
-        closeModal() {
+        createPreviewModal() {
+            const modal = document.createElement('div');
+            modal.id = 'configPreviewModal';
+            modal.className = 'config-modal-overlay';
+            
+            const previewContent = this.generateTreePreviewHTML();
+            
+            modal.innerHTML = `
+                <div class="config-modal-content preview-modal">
+                    <div class="config-modal-header">
+                        <h3><i class="fa fa-sitemap"></i> 配置预览 - ${this.currentTemplate?.templateName || '未加载'}</h3>
+                        <button class="config-modal-close" onclick="configManager.closePreviewModal()">
+                            <i class="fa fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="config-modal-body">
+                        <div class="preview-tree-container">
+                            ${previewContent}
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // 点击遮罩关闭
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    this.closePreviewModal();
+                }
+            });
+
+            return modal;
+        }
+
+        /**
+         * 关闭预览弹窗
+         */
+        closePreviewModal() {
             const modal = document.getElementById('configPreviewModal');
             if (modal) {
                 modal.classList.remove('visible');
@@ -593,123 +564,156 @@
         }
 
         /**
-         * 生成配置预览HTML
+         * 生成树形预览HTML（思维导图式）
          */
-        generatePreviewHTML() {
-            const config = this.currentConfig;
-            if (!config) {
-                return '<div class="preview-empty">暂无配置信息</div>';
+        generateTreePreviewHTML() {
+            const t = this.currentTemplate;
+            if (!t) {
+                return '<div class="preview-empty">暂无配置，请先加载配置文件</div>';
             }
 
+            const enabledTasks = t.tasks.filter(task => task.enabled);
+            const enabledCat1 = t.category1.filter(c => c.enabled);
+            const enabledCat2 = t.category2.filter(c => c.enabled);
+            const enabledCat3 = t.category3.filter(c => c.enabled);
+            const enabledCat4 = t.category4.filter(c => c.enabled);
+            const enabledGestures = t.gestures?.discrete?.filter(g => g.enabled) || [];
+
             let html = `
-                <div class="preview-section">
-                    <h3 class="preview-section-title">
-                        <i class="fas fa-info-circle"></i> 基本信息
-                    </h3>
-                    <div class="preview-grid">
-                        <div class="preview-item">
-                            <span class="preview-label">配置名称</span>
-                            <span class="preview-value">${config.configName || '未命名'}</span>
+                <div class="preview-header-info">
+                    <div class="preview-stat">
+                        <span class="stat-num">${enabledTasks.length}</span>
+                        <span class="stat-label">采集任务</span>
+                    </div>
+                    <div class="preview-stat">
+                        <span class="stat-num">${enabledCat3.length}</span>
+                        <span class="stat-label">${t.categoryLabels?.category3 || '子场景'}</span>
+                    </div>
+                    <div class="preview-stat">
+                        <span class="stat-num">${enabledGestures.length}</span>
+                        <span class="stat-label">离散手势</span>
+                    </div>
+                    <div class="preview-stat">
+                        <span class="stat-num">${this.estimateTotalTime(t)}</span>
+                        <span class="stat-label">预计时长</span>
+                    </div>
+                </div>
+
+                <div class="preview-tree">
+                    <!-- 根节点：模板名称 -->
+                    <div class="tree-node root-node">
+                        <div class="node-content">
+                            <i class="fa fa-cog"></i>
+                            <span>${t.templateName}</span>
                         </div>
-                        <div class="preview-item">
-                            <span class="preview-label">版本</span>
-                            <span class="preview-value">${config.configVersion || '1.0.0'}</span>
-                        </div>
-                        <div class="preview-item">
-                            <span class="preview-label">来源文件</span>
-                            <span class="preview-value">${this.configFileName || '内置默认'}</span>
-                        </div>
-                        <div class="preview-item">
-                            <span class="preview-label">描述</span>
-                            <span class="preview-value">${config.description || '无'}</span>
+                        
+                        <!-- Level 0: 采集任务 -->
+                        <div class="tree-children">
+                            ${enabledTasks.map(task => `
+                                <div class="tree-node task-node ${task.id}">
+                                    <div class="node-content">
+                                        <i class="fa fa-hand-paper"></i>
+                                        <span>${task.name}</span>
+                                        ${task.id === 'discrete_gesture' ? `<span class="node-badge">${enabledGestures.length}个手势</span>` : ''}
+                                    </div>
+                                    
+                                    <!-- Level 1: 大类 -->
+                                    <div class="tree-children">
+                                        ${enabledCat1.map(cat1 => `
+                                            <div class="tree-node cat1-node">
+                                                <div class="node-content">
+                                                    <i class="fa fa-layer-group"></i>
+                                                    <span>${cat1.name}</span>
+                                                </div>
+                                                
+                                                <!-- Level 2: 大场景 -->
+                                                <div class="tree-children">
+                                                    ${enabledCat2.map(cat2 => `
+                                                        <div class="tree-node cat2-node">
+                                                            <div class="node-content">
+                                                                <i class="fa fa-map-marker-alt"></i>
+                                                                <span>${cat2.name}</span>
+                                                            </div>
+                                                            
+                                                            <!-- Level 3: 子场景 (Stage) - 折叠显示 -->
+                                                            <div class="tree-children collapsed-children">
+                                                                <div class="node-content stages-summary" onclick="this.parentElement.classList.toggle('expanded')">
+                                                                    <i class="fa fa-hand-point-right"></i>
+                                                                    <span>${enabledCat3.length}个${t.categoryLabels?.category3 || '子场景'}</span>
+                                                                    <i class="fa fa-chevron-down expand-icon"></i>
+                                                                </div>
+                                                                <div class="stages-list">
+                                                                    ${enabledCat3.map(cat3 => `
+                                                                        <div class="tree-node cat3-node">
+                                                                            <div class="node-content">
+                                                                                <i class="fa fa-circle"></i>
+                                                                                <span>${cat3.name}</span>
+                                                                            </div>
+                                                                        </div>
+                                                                    `).join('')}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    `).join('')}
+                                                </div>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                </div>
+                            `).join('')}
                         </div>
                     </div>
                 </div>
 
-                <div class="preview-section">
-                    <h3 class="preview-section-title">
-                        <i class="fas fa-cog"></i> 全局设置
-                    </h3>
-                    <div class="preview-grid">
-                        <div class="preview-item">
-                            <span class="preview-label">开场动画时长</span>
-                            <span class="preview-value">${(config.globalSettings?.intro?.duration || 10000) / 1000}秒</span>
-                        </div>
-                        <div class="preview-item">
-                            <span class="preview-label">Stage准备时间</span>
-                            <span class="preview-value">${config.globalSettings?.stagePrepare?.countdownSeconds || 3}秒</span>
-                        </div>
-                        <div class="preview-item">
-                            <span class="preview-label">调试模式</span>
-                            <span class="preview-value">${config.globalSettings?.debug?.enabled ? '✓ 开启' : '✗ 关闭'}</span>
-                        </div>
-                        <div class="preview-item">
-                            <span class="preview-label">快速模式</span>
-                            <span class="preview-value">${config.globalSettings?.debug?.fastMode ? '✓ 开启' : '✗ 关闭'}</span>
-                        </div>
+                <!-- 人群配置 -->
+                <div class="preview-section-inline">
+                    <h4><i class="fa fa-users"></i> ${t.categoryLabels?.category4 || '人群'}配置</h4>
+                    <div class="preview-tags">
+                        ${enabledCat4.map(cat => `<span class="preview-tag">${cat.name}</span>`).join('')}
+                    </div>
+                </div>
+
+                <!-- 离散手势库 -->
+                ${enabledGestures.length > 0 ? `
+                <div class="preview-section-inline">
+                    <h4><i class="fa fa-hand-paper"></i> 离散手势库 (${enabledGestures.length}个)</h4>
+                    <div class="preview-gestures">
+                        ${enabledGestures.map(g => `
+                            <span class="preview-gesture">${g.icon} ${g.name}</span>
+                        `).join('')}
+                    </div>
+                </div>
+                ` : ''}
+
+                <!-- 执行参数 -->
+                <div class="preview-section-inline">
+                    <h4><i class="fa fa-clock"></i> 执行参数</h4>
+                    <div class="preview-params">
+                        <span>每手势重复 <strong>${t.execution?.repeatPerGesture || 5}</strong> 次</span>
+                        <span>间隔 <strong>${t.execution?.intervalBetweenRepeat || 1}</strong> 秒</span>
+                        <span>手势间休息 <strong>${t.execution?.restBetweenGestures || 30}</strong> 秒</span>
                     </div>
                 </div>
             `;
 
-            // 任务配置
-            if (config.tasks) {
-                for (const [taskId, task] of Object.entries(config.tasks)) {
-                    const stageCount = task.stages?.length || 0;
-                    const taskType = task.taskType === 'wheel_cursor' ? '滚轮光标' : 'Prompt序列';
-                    
-                    html += `
-                        <div class="preview-section">
-                            <h3 class="preview-section-title">
-                                <i class="fas fa-hand-paper"></i> ${task.name || taskId}
-                            </h3>
-                            <div class="preview-task-info">
-                                <span class="preview-badge">${taskType}</span>
-                                <span class="preview-badge">${stageCount} 个Stage</span>
-                            </div>
-                            <div class="preview-stages">
-                    `;
-                    
-                    if (task.stages) {
-                        task.stages.forEach((stage, index) => {
-                            const promptCount = stage.promptSequence?.length || stage.maxTrials || 0;
-                            html += `
-                                <div class="preview-stage-item">
-                                    <span class="preview-stage-num">${index + 1}</span>
-                                    <span class="preview-stage-icon">${stage.icon || '●'}</span>
-                                    <span class="preview-stage-name">${stage.label || stage.name}</span>
-                                    <span class="preview-stage-count">${promptCount}次</span>
-                                </div>
-                            `;
-                        });
-                    }
-
-                    html += `</div></div>`;
-                }
-            }
-
-            // Prompt库
-            if (config.promptLibrary && Object.keys(config.promptLibrary).length > 0) {
-                const promptCount = Object.keys(config.promptLibrary).length;
-                html += `
-                    <div class="preview-section">
-                        <h3 class="preview-section-title">
-                            <i class="fas fa-list"></i> Prompt库 (${promptCount}个)
-                        </h3>
-                        <div class="preview-prompt-list">
-                `;
-                
-                for (const [promptId, prompt] of Object.entries(config.promptLibrary)) {
-                    html += `
-                        <span class="preview-prompt-tag" style="border-left-color: ${prompt.color}">
-                            ${prompt.icon} ${prompt.label}
-                        </span>
-                    `;
-                }
-                
-                html += `</div></div>`;
-            }
-
             return html;
+        }
+
+        /**
+         * 估算总采集时间
+         */
+        estimateTotalTime(template) {
+            const exec = template.execution || {};
+            const enabledGestures = template.gestures?.discrete?.filter(g => g.enabled).length || 0;
+            const enabledStages = template.category3?.filter(s => s.enabled).length || 0;
+
+            const singleGestureTime = (exec.repeatPerGesture || 5) * ((exec.gestureDisplayTime || 2) + (exec.intervalBetweenRepeat || 1)) + (exec.restBetweenGestures || 30);
+            const singleStageTime = enabledGestures * singleGestureTime + (exec.preparationTime || 3);
+            const totalSeconds = enabledStages * singleStageTime;
+
+            if (totalSeconds < 60) return `${Math.round(totalSeconds)}秒`;
+            if (totalSeconds < 3600) return `${Math.round(totalSeconds / 60)}分钟`;
+            return `${(totalSeconds / 3600).toFixed(1)}小时`;
         }
 
         /**
@@ -725,7 +729,7 @@
             }
             
             if (nameEl) {
-                const displayName = this.currentConfig?.configName || this.configFileName || '默认配置';
+                const displayName = this.currentTemplate?.templateName || '默认配置';
                 nameEl.textContent = displayName.length > 12 ? displayName.substring(0, 12) + '...' : displayName;
                 nameEl.title = displayName;
             }
@@ -739,12 +743,13 @@
             if (!toast) {
                 toast = document.createElement('div');
                 toast.id = 'configToast';
+                toast.className = 'toast';
                 document.body.appendChild(toast);
             }
 
             const icon = type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle';
             toast.className = `toast ${type}`;
-            toast.innerHTML = `<i class="fas ${icon}"></i> ${message}`;
+            toast.innerHTML = `<i class="fa ${icon}"></i> ${message}`;
             toast.classList.add('visible');
 
             setTimeout(() => {
@@ -753,10 +758,29 @@
         }
 
         /**
-         * 获取当前配置
+         * 获取当前模板
          */
-        getCurrentConfig() {
-            return this.currentConfig;
+        getCurrentTemplate() {
+            return this.currentTemplate;
+        }
+
+        /**
+         * 获取启用的配置
+         */
+        getEnabledConfig() {
+            const t = this.currentTemplate;
+            if (!t) return null;
+
+            return {
+                tasks: t.tasks.filter(task => task.enabled),
+                category1: t.category1.filter(c => c.enabled),
+                category2: t.category2.filter(c => c.enabled),
+                category3: t.category3.filter(c => c.enabled),
+                category4: t.category4.filter(c => c.enabled),
+                gestures: t.gestures?.discrete?.filter(g => g.enabled) || [],
+                execution: t.execution,
+                categoryLabels: t.categoryLabels
+            };
         }
     }
 

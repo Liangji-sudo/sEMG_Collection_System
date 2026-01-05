@@ -3021,6 +3021,521 @@
         #importTemplateInput {
             display: none;
         }
+
+        /* ==================== 配置加载/预览弹窗样式 ==================== */
+        .config-modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.5);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 10000;
+        }
+
+        .config-modal-overlay.visible {
+            display: flex;
+        }
+
+        .config-modal-content {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 90vw;
+            max-height: 85vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .load-config-modal {
+            width: 520px;
+        }
+
+        /* 服务器配置文件区域 */
+        .server-config-section {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #e5e7eb;
+        }
+
+        .server-config-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .server-config-header h4 {
+            margin: 0;
+            font-size: 14px;
+            font-weight: 600;
+            color: #374151;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .server-config-header h4 i {
+            color: #3b82f6;
+        }
+
+        .refresh-config-btn {
+            background: none;
+            border: none;
+            color: #6b7280;
+            cursor: pointer;
+            padding: 6px;
+            border-radius: 6px;
+        }
+
+        .refresh-config-btn:hover {
+            background: #f3f4f6;
+            color: #3b82f6;
+        }
+
+        .server-config-list {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+        }
+
+        .server-config-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border-bottom: 1px solid #f3f4f6;
+        }
+
+        .server-config-item:last-child {
+            border-bottom: none;
+        }
+
+        .server-config-item:hover {
+            background: #f9fafb;
+        }
+
+        .config-file-icon {
+            width: 36px;
+            height: 36px;
+            background: #eff6ff;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #3b82f6;
+        }
+
+        .config-file-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .config-file-name {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            color: #1f2937;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .config-file-meta {
+            font-size: 11px;
+            color: #9ca3af;
+        }
+
+        .config-file-delete {
+            background: none;
+            border: none;
+            color: #d1d5db;
+            cursor: pointer;
+            padding: 6px;
+            border-radius: 6px;
+            opacity: 0;
+            transition: all 0.2s;
+        }
+
+        .server-config-item:hover .config-file-delete {
+            opacity: 1;
+        }
+
+        .config-file-delete:hover {
+            background: #fef2f2;
+            color: #ef4444;
+        }
+
+        .loading-hint, .empty-hint, .error-hint {
+            padding: 24px;
+            text-align: center;
+            color: #9ca3af;
+            font-size: 13px;
+        }
+
+        .error-hint {
+            color: #ef4444;
+        }
+
+        .error-hint i, .loading-hint i {
+            margin-right: 6px;
+        }
+
+        .preview-modal {
+            width: 900px;
+        }
+
+        .config-modal-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .config-modal-header h3 {
+            margin: 0;
+            font-size: 18px;
+            font-weight: 600;
+            color: #1f2937;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .config-modal-header h3 i {
+            color: #3b82f6;
+        }
+
+        .config-modal-close {
+            background: none;
+            border: none;
+            font-size: 20px;
+            color: #9ca3af;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 6px;
+        }
+
+        .config-modal-close:hover {
+            background: #f3f4f6;
+            color: #374151;
+        }
+
+        .config-modal-body {
+            padding: 24px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        /* 加载选项 */
+        .load-config-options {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        .load-option {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 16px;
+            background: #f9fafb;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 2px solid transparent;
+        }
+
+        .load-option:hover {
+            background: #f3f4f6;
+            border-color: #3b82f6;
+        }
+
+        .load-option-icon {
+            width: 48px;
+            height: 48px;
+            background: white;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            color: #3b82f6;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+
+        .load-option-info {
+            flex: 1;
+        }
+
+        .load-option-info h4 {
+            margin: 0 0 4px 0;
+            font-size: 14px;
+            font-weight: 600;
+            color: #1f2937;
+        }
+
+        .load-option-info p {
+            margin: 0;
+            font-size: 12px;
+            color: #6b7280;
+        }
+
+        .load-option > i {
+            color: #d1d5db;
+        }
+
+        .current-config-info {
+            background: #f0f9ff;
+            border-radius: 12px;
+            padding: 16px;
+            border: 1px solid #bae6fd;
+        }
+
+        .current-config-info h4 {
+            margin: 0 0 12px 0;
+            font-size: 13px;
+            font-weight: 600;
+            color: #0369a1;
+        }
+
+        .config-info-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+            margin-bottom: 6px;
+        }
+
+        .config-info-label {
+            color: #6b7280;
+        }
+
+        .config-info-value {
+            color: #1f2937;
+            font-weight: 500;
+        }
+
+        /* 预览弹窗样式 */
+        .preview-header-info {
+            display: flex;
+            gap: 24px;
+            padding: 16px 20px;
+            background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+            border-radius: 12px;
+            margin-bottom: 24px;
+        }
+
+        .preview-stat {
+            text-align: center;
+            color: white;
+        }
+
+        .preview-stat .stat-num {
+            display: block;
+            font-size: 28px;
+            font-weight: 700;
+        }
+
+        .preview-stat .stat-label {
+            font-size: 12px;
+            opacity: 0.9;
+        }
+
+        /* 树形预览 */
+        .preview-tree {
+            padding: 16px;
+            background: #f9fafb;
+            border-radius: 12px;
+            margin-bottom: 20px;
+        }
+
+        .tree-node {
+            position: relative;
+        }
+
+        .tree-children {
+            margin-left: 24px;
+            padding-left: 20px;
+            border-left: 2px solid #e5e7eb;
+        }
+
+        .node-content {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            background: white;
+            border-radius: 8px;
+            margin: 6px 0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+            font-size: 13px;
+            color: #374151;
+        }
+
+        .node-content i {
+            color: #9ca3af;
+            font-size: 12px;
+        }
+
+        .root-node > .node-content {
+            background: #3b82f6;
+            color: white;
+            font-weight: 600;
+        }
+
+        .root-node > .node-content i {
+            color: white;
+        }
+
+        .task-node > .node-content {
+            background: #ecfdf5;
+            border-left: 3px solid #10b981;
+        }
+
+        .task-node > .node-content i {
+            color: #10b981;
+        }
+
+        .cat1-node > .node-content {
+            background: #fef3c7;
+            border-left: 3px solid #f59e0b;
+        }
+
+        .cat1-node > .node-content i {
+            color: #f59e0b;
+        }
+
+        .cat2-node > .node-content {
+            background: #fce7f3;
+            border-left: 3px solid #ec4899;
+        }
+
+        .cat2-node > .node-content i {
+            color: #ec4899;
+        }
+
+        .cat3-node > .node-content {
+            background: #e0e7ff;
+            border-left: 3px solid #6366f1;
+        }
+
+        .cat3-node > .node-content i {
+            color: #6366f1;
+        }
+
+        .node-badge {
+            background: rgba(0,0,0,0.1);
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            margin-left: auto;
+        }
+
+        .stages-summary {
+            cursor: pointer;
+            background: #f3f4f6 !important;
+            border: 1px dashed #d1d5db;
+        }
+
+        .stages-summary:hover {
+            background: #e5e7eb !important;
+        }
+
+        .expand-icon {
+            margin-left: auto;
+            transition: transform 0.2s;
+        }
+
+        .collapsed-children .stages-list {
+            display: none;
+        }
+
+        .collapsed-children.expanded .stages-list {
+            display: block;
+        }
+
+        .collapsed-children.expanded .expand-icon {
+            transform: rotate(180deg);
+        }
+
+        /* 预览内联区块 */
+        .preview-section-inline {
+            background: white;
+            border-radius: 12px;
+            padding: 16px 20px;
+            margin-bottom: 16px;
+            border: 1px solid #e5e7eb;
+        }
+
+        .preview-section-inline h4 {
+            margin: 0 0 12px 0;
+            font-size: 14px;
+            font-weight: 600;
+            color: #374151;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .preview-section-inline h4 i {
+            color: #3b82f6;
+        }
+
+        .preview-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .preview-tag {
+            padding: 6px 12px;
+            background: #f3f4f6;
+            border-radius: 16px;
+            font-size: 12px;
+            color: #374151;
+        }
+
+        .preview-gestures {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .preview-gesture {
+            padding: 6px 12px;
+            background: #ecfdf5;
+            border: 1px solid #a7f3d0;
+            border-radius: 16px;
+            font-size: 12px;
+            color: #065f46;
+        }
+
+        .preview-params {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            font-size: 13px;
+            color: #6b7280;
+        }
+
+        .preview-params strong {
+            color: #3b82f6;
+        }
+
+        .preview-empty {
+            text-align: center;
+            padding: 60px 20px;
+            color: #9ca3af;
+        }
     </style>
 </head>
 <body class="font-inter bg-light-2 text-dark min-h-screen overflow-x-hidden">

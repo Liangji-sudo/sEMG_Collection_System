@@ -128,6 +128,66 @@ app.get('/api/config/load/:filename', (req, res) => {
     }
 });
 
+// ===================== 保存配置文件 API =====================
+app.post('/api/config/save', (req, res) => {
+    const { filename, config } = req.body;
+    
+    if (!filename || !config) {
+        return res.json({ success: false, error: '缺少文件名或配置内容' });
+    }
+    
+    // 安全检查：防止路径遍历攻击
+    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+        return res.json({ success: false, error: '无效的文件名' });
+    }
+    
+    // 确保文件名以.json结尾
+    const safeFilename = filename.endsWith('.json') ? filename : filename + '.json';
+    const configPath = path.join(PATHS.config, safeFilename);
+    
+    // 确保config目录存在
+    if (!fs.existsSync(PATHS.config)) {
+        try {
+            fs.mkdirSync(PATHS.config, { recursive: true });
+        } catch (err) {
+            return res.json({ success: false, error: '创建配置目录失败: ' + err.message });
+        }
+    }
+    
+    try {
+        const content = JSON.stringify(config, null, 2);
+        fs.writeFileSync(configPath, content, 'utf-8');
+        console.log(`[server.js] 配置文件已保存: ${safeFilename}`);
+        res.json({ success: true, filename: safeFilename, message: '配置保存成功' });
+    } catch (err) {
+        res.json({ success: false, error: '保存配置文件失败: ' + err.message });
+    }
+});
+
+// ===================== 删除配置文件 API =====================
+app.delete('/api/config/delete/:filename', (req, res) => {
+    const { filename } = req.params;
+    
+    // 安全检查：防止路径遍历攻击
+    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+        return res.json({ success: false, error: '无效的文件名' });
+    }
+    
+    const configPath = path.join(PATHS.config, filename);
+    
+    if (!fs.existsSync(configPath)) {
+        return res.json({ success: false, error: '配置文件不存在' });
+    }
+    
+    try {
+        fs.unlinkSync(configPath);
+        console.log(`[server.js] 配置文件已删除: ${filename}`);
+        res.json({ success: true, message: '配置删除成功' });
+    } catch (err) {
+        res.json({ success: false, error: '删除配置文件失败: ' + err.message });
+    }
+});
+
 // ===================== 接收前端按钮点击的POST请求 =====================
 app.post('/button-click', (req, res) => {
     // 获取前端传递的按钮名称

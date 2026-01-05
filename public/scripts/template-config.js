@@ -161,6 +161,9 @@
                 try {
                     this.currentTemplate = JSON.parse(saved);
                     console.log('[TemplateConfig] 已加载保存的模板:', this.currentTemplate.templateName);
+                    
+                    // 确保所有必要字段都存在（兼容旧模板）
+                    this.ensureTemplateFields();
                 } catch (e) {
                     console.warn('[TemplateConfig] 解析模板失败，使用默认模板');
                     this.currentTemplate = JSON.parse(JSON.stringify(DEFAULT_TEMPLATE));
@@ -172,14 +175,85 @@
         }
 
         /**
+         * 确保模板包含所有必要字段（用于兼容旧版本模板）
+         */
+        ensureTemplateFields() {
+            // 检查并补充 subjectFields
+            if (!this.currentTemplate.subjectFields || !Array.isArray(this.currentTemplate.subjectFields)) {
+                console.log('[TemplateConfig] 补充缺失的 subjectFields');
+                this.currentTemplate.subjectFields = DEFAULT_TEMPLATE.subjectFields.map(f => ({...f}));
+            }
+            
+            // 检查并补充 categoryLabels
+            if (!this.currentTemplate.categoryLabels) {
+                console.log('[TemplateConfig] 补充缺失的 categoryLabels');
+                this.currentTemplate.categoryLabels = {...DEFAULT_TEMPLATE.categoryLabels};
+            }
+            
+            // 检查并补充 execution
+            if (!this.currentTemplate.execution) {
+                console.log('[TemplateConfig] 补充缺失的 execution');
+                this.currentTemplate.execution = {...DEFAULT_TEMPLATE.execution};
+            }
+            
+            // 检查并补充 gestures
+            if (!this.currentTemplate.gestures) {
+                console.log('[TemplateConfig] 补充缺失的 gestures');
+                this.currentTemplate.gestures = JSON.parse(JSON.stringify(DEFAULT_TEMPLATE.gestures));
+            }
+        }
+
+        /**
          * 保存模板到localStorage
          */
         saveTemplate() {
             this.currentTemplate.lastModified = new Date().toISOString();
             localStorage.setItem('emg_collection_template', JSON.stringify(this.currentTemplate));
             this.isDirty = false;
-            this.showToast('模板已保存', 'success');
-            console.log('[TemplateConfig] 模板已保存');
+            this.showToast('模板已保存到本地', 'success');
+            console.log('[TemplateConfig] 模板已保存到localStorage');
+        }
+
+        /**
+         * 保存模板到服务器 config/ 目录
+         */
+        async saveTemplateToServer() {
+            this.currentTemplate.lastModified = new Date().toISOString();
+            
+            // 生成文件名：模板名称_日期.json
+            const safeName = this.currentTemplate.templateName.replace(/[^a-zA-Z0-9\u4e00-\u9fa5_-]/g, '_');
+            const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
+            const filename = `${safeName}_${dateStr}.json`;
+            
+            try {
+                const response = await fetch('/api/config/save', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        filename: filename,
+                        config: this.currentTemplate
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    // 同时保存到localStorage
+                    localStorage.setItem('emg_collection_template', JSON.stringify(this.currentTemplate));
+                    this.isDirty = false;
+                    this.showToast(`已保存到 config/${result.filename}`, 'success');
+                    console.log('[TemplateConfig] 模板已保存到服务器:', result.filename);
+                } else {
+                    this.showToast('保存失败: ' + result.error, 'error');
+                }
+            } catch (err) {
+                console.error('[TemplateConfig] 保存到服务器失败:', err);
+                // 回退到本地保存
+                this.saveTemplate();
+                this.showToast('服务器保存失败，已保存到本地', 'warning');
+            }
         }
 
         /**
@@ -248,10 +322,10 @@
                 });
             });
 
-            // 保存按钮
+            // 保存按钮 - 保存到服务器
             const saveBtn = document.getElementById('saveTemplateBtn');
             if (saveBtn) {
-                saveBtn.addEventListener('click', () => this.saveTemplate());
+                saveBtn.addEventListener('click', () => this.saveTemplateToServer());
             }
 
             // 导出按钮
@@ -907,9 +981,19 @@
          */
         renderSubjectTab() {
             const container = document.getElementById('subjectTabContent');
-            if (!container) return;
+            if (!container) {
+                console.warn('[TemplateConfig] subjectTabContent container not found');
+                return;
+            }
+
+            // 确保 subjectFields 存在，如果不存在则使用默认值
+            if (!this.currentTemplate.subjectFields || !Array.isArray(this.currentTemplate.subjectFields)) {
+                console.warn('[TemplateConfig] subjectFields not found, using default');
+                this.currentTemplate.subjectFields = DEFAULT_TEMPLATE.subjectFields.map(f => ({...f}));
+            }
 
             const fields = this.currentTemplate.subjectFields;
+            console.log('[TemplateConfig] Rendering subject fields:', fields.length, 'fields');
 
             container.innerHTML = `
                 <div class="config-section">
