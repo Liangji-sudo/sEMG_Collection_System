@@ -1,17 +1,21 @@
 /**
  * continual-gesture-2-animation.js - 连续手势2采集动画模块
  * 
+ * 【修复版】
+ * 1. loadConfig优先从localStorage读取最新配置
+ * 2. start函数在loadConfig之后设置参数，确保外部传入的参数生效
+ * 3. 添加reset方法用于重置试次计数
+ * 
  * 概念说明：
  * - Stage: 一个采集阶段（如"手腕控制任务"）
  * - 与离散手势不同，这里使用滚轮控制光标任务（与连续手势1类似）
  * - 每个Stage包含多个目标点（Trial），用户通过滚轮移动光标到目标点
  * 
  * 任务规则：
- * - 目标点出现在10个不同位置
+ * - 目标点出现在N个不同位置（由配置决定）
  * - 用户通过滚轮移动光标到目标点
  * - 光标停留在目标区域500ms视为命中
- * - 完成所有目标或120s超时后进入下一个Stage
- * - Stage内不向realtimeEngine发送prompt消息
+ * - 完成所有目标或超时后进入下一个Stage
  * 
  * 与连续手势1的区别：
  * - 视觉主题颜色不同（橙色系）
@@ -45,9 +49,9 @@
             this.targetPos = null;
             this.trial = 0;
             this.hits = 0;
-            this.maxTrials = 10;
-            this.stageTimeout = 120000;
-            this.dwellMs = 500;
+            this.maxTrials = 10;            // 每个Stage的目标数量（默认值）
+            this.stageTimeout = 120000;     // Stage超时时间（120秒）
+            this.dwellMs = 500;             // 停留时间阈值
             this.onTargetSince = null;
             this.dwellTimer = null;
             this.fillTimer = null;
@@ -97,28 +101,39 @@
         }
 
         /**
-         * 从配置加载
+         * 【修复】从配置加载 - 优先从localStorage读取
          */
         loadConfig() {
-            // 优先从模板配置读取
+            console.log('[ContinualGesture2Animation] loadConfig() 开始');
+            
             let templateConfig = null;
-            if (window.templateConfigManager?.currentTemplate?.execution?.continual_gesture_2) {
-                templateConfig = window.templateConfigManager.currentTemplate.execution.continual_gesture_2;
-            } else {
-                const saved = localStorage.getItem('emg_collection_template');
-                if (saved) {
-                    try {
-                        const template = JSON.parse(saved);
-                        templateConfig = template.execution?.continual_gesture_2;
-                    } catch (e) {}
+            
+            // 【修复】第一优先级：直接从localStorage读取最新配置
+            const saved = localStorage.getItem('emg_collection_template');
+            if (saved) {
+                try {
+                    const template = JSON.parse(saved);
+                    if (template.execution?.continual_gesture_2) {
+                        templateConfig = template.execution.continual_gesture_2;
+                        console.log('[ContinualGesture2Animation] 从localStorage读取配置:', templateConfig);
+                    }
+                } catch (e) {
+                    console.warn('[ContinualGesture2Animation] 解析localStorage失败:', e);
                 }
             }
             
-            // 也可以从collectionController获取
+            // 第二优先级：从templateConfigManager读取
+            if (!templateConfig && window.templateConfigManager?.currentTemplate?.execution?.continual_gesture_2) {
+                templateConfig = window.templateConfigManager.currentTemplate.execution.continual_gesture_2;
+                console.log('[ContinualGesture2Animation] 从templateConfigManager读取配置');
+            }
+            
+            // 第三优先级：从collectionController获取
             if (!templateConfig && window.collectionController?.currentExecutionParams) {
                 const params = window.collectionController.currentExecutionParams;
                 if (params.trialsPerStage !== undefined) {
                     templateConfig = params;
+                    console.log('[ContinualGesture2Animation] 从collectionController读取配置');
                 }
             }
             
@@ -127,12 +142,14 @@
                 this.stageTimeout = (templateConfig.stageTimeout || 120) * 1000;  // 转为毫秒
                 this.dwellMs = (templateConfig.dwellTime || 0.5) * 1000;  // 转为毫秒
                 this.targetFrac = templateConfig.targetSize || 0.12;
-                console.log('[ContinualGesture2Animation] 从模板配置加载参数:', {
+                console.log('[ContinualGesture2Animation] 配置加载完成:', {
                     maxTrials: this.maxTrials,
                     stageTimeout: this.stageTimeout,
                     dwellMs: this.dwellMs,
                     targetFrac: this.targetFrac
                 });
+            } else {
+                console.log('[ContinualGesture2Animation] 未找到配置，使用默认值');
             }
             
             // 兼容旧版本的CONTINUAL_GESTURE_2_CONFIG
@@ -237,13 +254,29 @@
         }
 
         /**
-         * 开始Stage动画
+         * 【新增】重置试次计数（用于切换Stage时）
+         */
+        reset() {
+            console.log('[ContinualGesture2Animation] 重置状态');
+            this.trial = 0;
+            this.hits = 0;
+            this.cursorPos = 0.5;
+            this.targetPos = null;
+            this.onTargetSince = null;
+            this.fillProgress = 0;
+            this.continualTrialCount = 0;
+        }
+
+        /**
+         * 【修复】开始Stage动画
          * @param {Object} stage - stage配置
          * @param {Function} onComplete - 完成回调
          * @param {Function} onTrialComplete - 试次完成回调（可选）
+         * @param {Object} executionParams - 执行参数（可选，优先级最高）
          */
-        start(stage, onComplete, onTrialComplete) {
-            console.log('[ContinualGesture2Animation] 开始Stage动画:', stage.name);
+        start(stage, onComplete, onTrialComplete, executionParams) {
+            console.log('[ContinualGesture2Animation] ====== 开始Stage动画 ======');
+            console.log('[ContinualGesture2Animation] stage:', stage.name);
             
             if (!this.canvas) {
                 if (!this.init('.animation-area')) {
@@ -253,14 +286,36 @@
                 }
             }
             
-            // 重新加载配置以确保使用最新参数
+            // 先加载配置
             this.loadConfig();
+            
+            // 【关键修复】如果传入了executionParams，使用它来覆盖配置
+            if (executionParams) {
+                console.log('[ContinualGesture2Animation] 使用传入的executionParams:', executionParams);
+                if (executionParams.trialsPerStage !== undefined) {
+                    this.maxTrials = executionParams.trialsPerStage;
+                }
+                if (executionParams.stageTimeout !== undefined) {
+                    this.stageTimeout = executionParams.stageTimeout * 1000;
+                }
+                if (executionParams.dwellTime !== undefined) {
+                    this.dwellMs = executionParams.dwellTime * 1000;
+                }
+                if (executionParams.targetSize !== undefined) {
+                    this.targetFrac = executionParams.targetSize;
+                }
+            }
+            
+            console.log('[ContinualGesture2Animation] ★★★ 最终参数 ★★★');
+            console.log('[ContinualGesture2Animation] maxTrials:', this.maxTrials);
+            console.log('[ContinualGesture2Animation] stageTimeout:', this.stageTimeout);
+            console.log('[ContinualGesture2Animation] dwellMs:', this.dwellMs);
             
             this.currentStage = stage;
             this.onComplete = onComplete;
-            this.onTrialComplete = onTrialComplete;  // 试次完成回调
+            this.onTrialComplete = onTrialComplete;
             
-            // 重置状态
+            // 【关键修复】重置状态
             this.cursorPos = 0.5;
             this.targetPos = null;
             this.trial = 0;
@@ -308,7 +363,7 @@
         setRandomTarget() {
             this.targetPos = this.pickRandomTargetPos(this.targetPos);
             this.stopDwell();
-            console.log(`[ContinualGesture2Animation] 新目标: Trial ${this.trial + 1}, 位置 ${this.targetPos.toFixed(2)}`);
+            console.log(`[ContinualGesture2Animation] 新目标: Trial ${this.trial + 1}/${this.maxTrials}, 位置 ${this.targetPos.toFixed(2)}`);
         }
 
         /**
@@ -610,7 +665,7 @@
             ctx.roundRect(barX, barY, barWidth, barHeight, 4);
             ctx.fill();
             
-            ctx.fillStyle = this.config.colors.warning; // 橙色进度条
+            ctx.fillStyle = this.config.colors.success;
             ctx.beginPath();
             ctx.roundRect(barX, barY, barWidth * progress, barHeight, 4);
             ctx.fill();
