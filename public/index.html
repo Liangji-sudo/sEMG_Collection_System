@@ -3014,6 +3014,34 @@
             border: 1px solid rgba(59, 130, 246, 0.2);
         }
 
+        .estimation-item.estimation-task {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 8px;
+            background: #fff;
+            border: 1px solid #e5e7eb;
+        }
+
+        .estimation-task-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .estimation-detail {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            font-size: 12px;
+            color: #6b7280;
+        }
+
+        .estimation-detail span {
+            background: #f3f4f6;
+            padding: 2px 8px;
+            border-radius: 4px;
+        }
+
         .estimation-label {
             font-size: 13px;
             color: #6b7280;
@@ -3027,6 +3055,23 @@
 
         .estimation-total .estimation-value {
             color: #3b82f6;
+        }
+
+        /* 配置区域按任务分组 */
+        .config-section[data-task] {
+            border-left: 3px solid #3b82f6;
+        }
+
+        .config-section[data-task="discrete_gesture"] {
+            border-left-color: #10b981;
+        }
+
+        .config-section[data-task="continual_gesture_1"] {
+            border-left-color: #f59e0b;
+        }
+
+        .config-section[data-task="continual_gesture_2"] {
+            border-left-color: #8b5cf6;
         }
 
         /* 受试者字段配置 */

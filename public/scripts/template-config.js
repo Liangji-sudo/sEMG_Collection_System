@@ -92,13 +92,32 @@
             continual_2: []
         },
 
-        // 执行参数
+        // 执行参数 - 按任务类型分开配置
         execution: {
-            repeatPerGesture: 5,           // 每个手势重复次数
-            intervalBetweenRepeat: 1.0,    // 重复间隔（秒）
-            restBetweenGestures: 30.0,     // 手势间休息时间（秒）
-            preparationTime: 3.0,          // Stage开始前准备时间（秒）
-            gestureDisplayTime: 2.0        // 手势提示显示时间（秒）
+            // 离散手势采集参数
+            discrete_gesture: {
+                repeatPerGesture: 5,           // 每个手势重复次数
+                intervalBetweenRepeat: 1.0,    // 重复间隔（秒）
+                restBetweenGestures: 30.0,     // 手势间休息时间（秒）
+                preparationTime: 3.0,          // Stage开始前准备时间（秒）
+                gestureDisplayTime: 2.0        // 手势提示显示时间（秒）
+            },
+            // 连续手势1采集参数
+            continual_gesture_1: {
+                trialsPerStage: 10,            // 每个Stage的试次数（目标点数量）
+                stageTimeout: 120,             // Stage超时时间（秒）
+                dwellTime: 0.5,                // 停留判定时间（秒）
+                preparationTime: 3.0,          // Stage开始前准备时间（秒）
+                targetSize: 0.12               // 目标区域大小（相对轨道高度的比例）
+            },
+            // 连续手势2采集参数
+            continual_gesture_2: {
+                trialsPerStage: 10,            // 每个Stage的试次数
+                stageTimeout: 120,             // Stage超时时间（秒）
+                dwellTime: 0.5,                // 停留判定时间（秒）
+                preparationTime: 3.0,          // Stage开始前准备时间（秒）
+                targetSize: 0.12               // 目标区域大小
+            }
         },
 
         // 受试者信息字段
@@ -190,10 +209,47 @@
                 this.currentTemplate.categoryLabels = {...DEFAULT_TEMPLATE.categoryLabels};
             }
             
-            // 检查并补充 execution
+            // 检查并补充 execution（兼容旧版本格式）
             if (!this.currentTemplate.execution) {
                 console.log('[TemplateConfig] 补充缺失的 execution');
-                this.currentTemplate.execution = {...DEFAULT_TEMPLATE.execution};
+                this.currentTemplate.execution = JSON.parse(JSON.stringify(DEFAULT_TEMPLATE.execution));
+            } else {
+                // 检查是否为旧版本格式（非按任务分类）
+                if (this.currentTemplate.execution.repeatPerGesture !== undefined) {
+                    console.log('[TemplateConfig] 检测到旧版本execution格式，正在迁移...');
+                    const oldExec = this.currentTemplate.execution;
+                    this.currentTemplate.execution = {
+                        discrete_gesture: {
+                            repeatPerGesture: oldExec.repeatPerGesture || 5,
+                            intervalBetweenRepeat: oldExec.intervalBetweenRepeat || 1.0,
+                            restBetweenGestures: oldExec.restBetweenGestures || 30.0,
+                            preparationTime: oldExec.preparationTime || 3.0,
+                            gestureDisplayTime: oldExec.gestureDisplayTime || 2.0
+                        },
+                        continual_gesture_1: {
+                            trialsPerStage: 10,
+                            stageTimeout: 120,
+                            dwellTime: 0.5,
+                            preparationTime: oldExec.preparationTime || 3.0,
+                            targetSize: 0.12
+                        },
+                        continual_gesture_2: {
+                            trialsPerStage: 10,
+                            stageTimeout: 120,
+                            dwellTime: 0.5,
+                            preparationTime: oldExec.preparationTime || 3.0,
+                            targetSize: 0.12
+                        }
+                    };
+                    console.log('[TemplateConfig] execution格式迁移完成');
+                }
+                // 确保所有任务类型都有配置
+                const defaultExec = DEFAULT_TEMPLATE.execution;
+                ['discrete_gesture', 'continual_gesture_1', 'continual_gesture_2'].forEach(taskId => {
+                    if (!this.currentTemplate.execution[taskId]) {
+                        this.currentTemplate.execution[taskId] = JSON.parse(JSON.stringify(defaultExec[taskId]));
+                    }
+                });
             }
             
             // 检查并补充 gestures
@@ -873,120 +929,237 @@
         }
 
         /**
-         * 渲染执行参数标签页
+         * 渲染执行参数标签页 - 按任务类型分开配置
          */
         renderExecutionTab() {
             const container = document.getElementById('executionTabContent');
             if (!container) return;
 
             const exec = this.currentTemplate.execution;
+            const tasks = this.currentTemplate.tasks || [];
+            const enabledTasks = tasks.filter(t => t.enabled);
 
-            container.innerHTML = `
-                <div class="config-section">
-                    <div class="config-section-header">
-                        <h3><i class="fa fa-clock"></i> 时间参数</h3>
-                    </div>
-                    <div class="config-params-grid">
+            // 获取任务名称映射
+            const getTaskName = (taskId) => {
+                const task = tasks.find(t => t.id === taskId);
+                return task ? task.name : taskId;
+            };
+
+            let html = '';
+
+            // 为每个启用的任务类型渲染参数配置
+            enabledTasks.forEach(task => {
+                const taskExec = exec[task.id] || {};
+                
+                html += `
+                    <div class="config-section" data-task="${task.id}">
+                        <div class="config-section-header">
+                            <h3><i class="fa fa-clock"></i> ${task.name} - 时间参数</h3>
+                        </div>
+                        <div class="config-params-grid">
+                `;
+
+                // 根据任务类型渲染不同的参数
+                if (task.id === 'discrete_gesture') {
+                    html += `
                         <div class="config-param-item">
                             <label>每个手势重复次数</label>
-                            <input type="number" id="repeatPerGesture" value="${exec.repeatPerGesture}" min="1" max="20">
+                            <input type="number" data-task="${task.id}" data-param="repeatPerGesture" 
+                                   value="${taskExec.repeatPerGesture || 5}" min="1" max="20">
                             <span class="param-unit">次</span>
                         </div>
                         <div class="config-param-item">
                             <label>重复间隔时间</label>
-                            <input type="number" id="intervalBetweenRepeat" value="${exec.intervalBetweenRepeat}" min="0.5" max="10" step="0.5">
+                            <input type="number" data-task="${task.id}" data-param="intervalBetweenRepeat" 
+                                   value="${taskExec.intervalBetweenRepeat || 1.0}" min="0.5" max="10" step="0.5">
                             <span class="param-unit">秒</span>
                         </div>
                         <div class="config-param-item">
                             <label>手势间休息时间</label>
-                            <input type="number" id="restBetweenGestures" value="${exec.restBetweenGestures}" min="5" max="120" step="5">
+                            <input type="number" data-task="${task.id}" data-param="restBetweenGestures" 
+                                   value="${taskExec.restBetweenGestures || 30.0}" min="5" max="120" step="5">
                             <span class="param-unit">秒</span>
                         </div>
                         <div class="config-param-item">
                             <label>Stage开始前准备时间</label>
-                            <input type="number" id="preparationTime" value="${exec.preparationTime}" min="1" max="10" step="1">
+                            <input type="number" data-task="${task.id}" data-param="preparationTime" 
+                                   value="${taskExec.preparationTime || 3.0}" min="1" max="10" step="1">
                             <span class="param-unit">秒</span>
                         </div>
                         <div class="config-param-item">
                             <label>手势提示显示时间</label>
-                            <input type="number" id="gestureDisplayTime" value="${exec.gestureDisplayTime}" min="1" max="10" step="0.5">
+                            <input type="number" data-task="${task.id}" data-param="gestureDisplayTime" 
+                                   value="${taskExec.gestureDisplayTime || 2.0}" min="1" max="10" step="0.5">
                             <span class="param-unit">秒</span>
                         </div>
-                    </div>
-                </div>
+                    `;
+                } else if (task.id === 'continual_gesture_1' || task.id === 'continual_gesture_2') {
+                    html += `
+                        <div class="config-param-item">
+                            <label>每个Stage的试次数</label>
+                            <input type="number" data-task="${task.id}" data-param="trialsPerStage" 
+                                   value="${taskExec.trialsPerStage || 10}" min="1" max="50">
+                            <span class="param-unit">次</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label>Stage超时时间</label>
+                            <input type="number" data-task="${task.id}" data-param="stageTimeout" 
+                                   value="${taskExec.stageTimeout || 120}" min="30" max="600" step="10">
+                            <span class="param-unit">秒</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label>停留判定时间</label>
+                            <input type="number" data-task="${task.id}" data-param="dwellTime" 
+                                   value="${taskExec.dwellTime || 0.5}" min="0.1" max="2" step="0.1">
+                            <span class="param-unit">秒</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label>Stage开始前准备时间</label>
+                            <input type="number" data-task="${task.id}" data-param="preparationTime" 
+                                   value="${taskExec.preparationTime || 3.0}" min="1" max="10" step="1">
+                            <span class="param-unit">秒</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label>目标区域大小</label>
+                            <input type="number" data-task="${task.id}" data-param="targetSize" 
+                                   value="${taskExec.targetSize || 0.12}" min="0.05" max="0.3" step="0.01">
+                            <span class="param-unit">比例</span>
+                        </div>
+                    `;
+                }
 
+                html += `
+                        </div>
+                    </div>
+                `;
+            });
+
+            // 时间估算区域
+            html += `
                 <div class="config-section">
                     <div class="config-section-header">
                         <h3><i class="fa fa-calculator"></i> 时间估算</h3>
                     </div>
-                    <div class="time-estimation">
+                    <div class="time-estimation" id="timeEstimationContent">
                         ${this.renderTimeEstimation()}
                     </div>
                 </div>
             `;
 
+            container.innerHTML = html;
+
             // 绑定参数输入事件
             container.querySelectorAll('.config-param-item input').forEach(input => {
                 input.addEventListener('change', (e) => {
-                    const field = e.target.id;
-                    this.currentTemplate.execution[field] = parseFloat(e.target.value);
-                    this.isDirty = true;
-                    // 更新时间估算
-                    const estimation = container.querySelector('.time-estimation');
-                    if (estimation) {
-                        estimation.innerHTML = this.renderTimeEstimation();
+                    const taskId = e.target.dataset.task;
+                    const param = e.target.dataset.param;
+                    const value = parseFloat(e.target.value);
+                    
+                    if (taskId && param) {
+                        if (!this.currentTemplate.execution[taskId]) {
+                            this.currentTemplate.execution[taskId] = {};
+                        }
+                        this.currentTemplate.execution[taskId][param] = value;
+                        this.isDirty = true;
+                        
+                        // 更新时间估算
+                        const estimation = document.getElementById('timeEstimationContent');
+                        if (estimation) {
+                            estimation.innerHTML = this.renderTimeEstimation();
+                        }
                     }
                 });
             });
         }
 
         /**
-         * 渲染时间估算
+         * 渲染时间估算 - 按任务类型分别计算
          */
         renderTimeEstimation() {
             const exec = this.currentTemplate.execution;
-            const enabledGestures = this.currentTemplate.gestures.discrete.filter(g => g.enabled).length;
+            const tasks = this.currentTemplate.tasks || [];
+            const enabledTasks = tasks.filter(t => t.enabled);
             const enabledStages = this.currentTemplate.category3.filter(s => s.enabled).length;
-
-            // 单个手势时间 = 重复次数 * (提示时间 + 间隔) + 休息时间
-            const singleGestureTime = exec.repeatPerGesture * (exec.gestureDisplayTime + exec.intervalBetweenRepeat) + exec.restBetweenGestures;
             
-            // 单个Stage时间 = 所有手势时间 + 准备时间
-            const singleStageTime = enabledGestures * singleGestureTime + exec.preparationTime;
-            
-            // 总时间
-            const totalTime = enabledStages * singleStageTime;
-
             const formatTime = (seconds) => {
                 if (seconds < 60) return `${Math.round(seconds)}秒`;
                 if (seconds < 3600) return `${Math.round(seconds / 60)}分钟`;
                 return `${(seconds / 3600).toFixed(1)}小时`;
             };
 
-            return `
-                <div class="estimation-grid">
-                    <div class="estimation-item">
-                        <span class="estimation-label">启用的手势数</span>
-                        <span class="estimation-value">${enabledGestures} 个</span>
+            let html = '<div class="estimation-grid">';
+            let totalAllTasks = 0;
+
+            enabledTasks.forEach(task => {
+                const taskExec = exec[task.id] || {};
+                let singleStageTime = 0;
+                let taskDetails = '';
+
+                if (task.id === 'discrete_gesture') {
+                    const enabledGestures = this.currentTemplate.gestures.discrete.filter(g => g.enabled).length;
+                    const repeatPerGesture = taskExec.repeatPerGesture || 5;
+                    const gestureDisplayTime = taskExec.gestureDisplayTime || 2.0;
+                    const intervalBetweenRepeat = taskExec.intervalBetweenRepeat || 1.0;
+                    const restBetweenGestures = taskExec.restBetweenGestures || 30.0;
+                    const preparationTime = taskExec.preparationTime || 3.0;
+
+                    // 单个手势时间 = 重复次数 * (提示时间 + 间隔) + 休息时间
+                    const singleGestureTime = repeatPerGesture * (gestureDisplayTime + intervalBetweenRepeat) + restBetweenGestures;
+                    // 单个Stage时间 = 所有手势时间 + 准备时间
+                    singleStageTime = enabledGestures * singleGestureTime + preparationTime;
+
+                    taskDetails = `
+                        <div class="estimation-detail">
+                            <span>手势数: ${enabledGestures}个</span>
+                            <span>每手势重复: ${repeatPerGesture}次</span>
+                            <span>单个Stage: ${formatTime(singleStageTime)}</span>
+                        </div>
+                    `;
+                } else if (task.id === 'continual_gesture_1' || task.id === 'continual_gesture_2') {
+                    const trialsPerStage = taskExec.trialsPerStage || 10;
+                    const stageTimeout = taskExec.stageTimeout || 120;
+                    const preparationTime = taskExec.preparationTime || 3.0;
+
+                    // 连续手势的Stage时间估算（假设平均完成时间是超时时间的一半）
+                    singleStageTime = Math.min(stageTimeout, trialsPerStage * 6) + preparationTime; // 假设每个trial约6秒
+
+                    taskDetails = `
+                        <div class="estimation-detail">
+                            <span>每Stage试次: ${trialsPerStage}次</span>
+                            <span>超时: ${stageTimeout}秒</span>
+                            <span>单个Stage: ${formatTime(singleStageTime)}</span>
+                        </div>
+                    `;
+                }
+
+                const taskTotalTime = singleStageTime * enabledStages;
+                totalAllTasks += taskTotalTime;
+
+                html += `
+                    <div class="estimation-item estimation-task">
+                        <div class="estimation-task-header">
+                            <span class="estimation-label">${task.name}</span>
+                            <span class="estimation-value">${formatTime(taskTotalTime)}</span>
+                        </div>
+                        ${taskDetails}
                     </div>
-                    <div class="estimation-item">
-                        <span class="estimation-label">启用的Stage数</span>
-                        <span class="estimation-value">${enabledStages} 个</span>
-                    </div>
-                    <div class="estimation-item">
-                        <span class="estimation-label">单个手势采集时间</span>
-                        <span class="estimation-value">${formatTime(singleGestureTime)}</span>
-                    </div>
-                    <div class="estimation-item">
-                        <span class="estimation-label">单个Stage时间</span>
-                        <span class="estimation-value">${formatTime(singleStageTime)}</span>
-                    </div>
-                    <div class="estimation-item estimation-total">
-                        <span class="estimation-label">单个受试者总时间</span>
-                        <span class="estimation-value">${formatTime(totalTime)}</span>
-                    </div>
+                `;
+            });
+
+            // 总计
+            html += `
+                <div class="estimation-item">
+                    <span class="estimation-label">启用的Stage数</span>
+                    <span class="estimation-value">${enabledStages} 个</span>
+                </div>
+                <div class="estimation-item estimation-total">
+                    <span class="estimation-label">单个受试者总时间（所有任务）</span>
+                    <span class="estimation-value">${formatTime(totalAllTasks)}</span>
                 </div>
             `;
+
+            html += '</div>';
+            return html;
         }
 
         /**

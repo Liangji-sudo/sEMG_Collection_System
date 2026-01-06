@@ -96,19 +96,55 @@
          * 从配置加载
          */
         loadConfig() {
+            // 优先从模板配置读取
+            let templateConfig = null;
+            if (window.templateConfigManager?.currentTemplate?.execution?.continual_gesture_1) {
+                templateConfig = window.templateConfigManager.currentTemplate.execution.continual_gesture_1;
+            } else {
+                const saved = localStorage.getItem('emg_collection_template');
+                if (saved) {
+                    try {
+                        const template = JSON.parse(saved);
+                        templateConfig = template.execution?.continual_gesture_1;
+                    } catch (e) {}
+                }
+            }
+            
+            // 也可以从collectionController获取
+            if (!templateConfig && window.collectionController?.currentExecutionParams) {
+                const params = window.collectionController.currentExecutionParams;
+                if (params.trialsPerStage !== undefined) {
+                    templateConfig = params;
+                }
+            }
+            
+            if (templateConfig) {
+                this.maxTrials = templateConfig.trialsPerStage || 10;
+                this.stageTimeout = (templateConfig.stageTimeout || 120) * 1000;  // 转为毫秒
+                this.dwellMs = (templateConfig.dwellTime || 0.5) * 1000;  // 转为毫秒
+                this.targetFrac = templateConfig.targetSize || 0.12;
+                console.log('[ContinualGesture1Animation] 从模板配置加载参数:', {
+                    maxTrials: this.maxTrials,
+                    stageTimeout: this.stageTimeout,
+                    dwellMs: this.dwellMs,
+                    targetFrac: this.targetFrac
+                });
+            }
+            
+            // 兼容旧版本的CONTINUAL_GESTURE_1_CONFIG
             if (window.CONTINUAL_GESTURE_1_CONFIG) {
                 const taskConfig = window.CONTINUAL_GESTURE_1_CONFIG;
                 
                 // 可以从配置读取自定义参数
                 if (taskConfig.WHEEL_TASK) {
                     const wt = taskConfig.WHEEL_TASK;
-                    this.maxTrials = wt.MAX_TRIALS || 10;
-                    this.stageTimeout = wt.STAGE_TIMEOUT || 120000;
-                    this.dwellMs = wt.DWELL_MS || 500;
-                    this.targetFrac = wt.TARGET_FRAC || 0.12;
+                    this.maxTrials = wt.MAX_TRIALS || this.maxTrials;
+                    this.stageTimeout = wt.STAGE_TIMEOUT || this.stageTimeout;
+                    this.dwellMs = wt.DWELL_MS || this.dwellMs;
+                    this.targetFrac = wt.TARGET_FRAC || this.targetFrac;
                 }
                 
-                console.log('[ContinualGesture1Animation] 配置已加载');
+                console.log('[ContinualGesture1Animation] 合并旧版配置');
             }
         }
 
@@ -200,9 +236,9 @@
          * 开始Stage动画
          * @param {Object} stage - stage配置
          * @param {Function} onComplete - 完成回调
-         * @param {Function} onPromptTriggered - prompt触发回调（连续手势不使用）
+         * @param {Function} onTrialComplete - 试次完成回调（可选）
          */
-        start(stage, onComplete, onPromptTriggered) {
+        start(stage, onComplete, onTrialComplete) {
             console.log('[ContinualGesture1Animation] 开始Stage动画:', stage.name);
             
             if (!this.canvas) {
@@ -213,8 +249,12 @@
                 }
             }
             
+            // 重新加载配置以确保使用最新参数
+            this.loadConfig();
+            
             this.currentStage = stage;
             this.onComplete = onComplete;
+            this.onTrialComplete = onTrialComplete;  // 试次完成回调
             
             // 重置状态
             this.cursorPos = 0.5;
@@ -362,6 +402,11 @@
                 console.log(`[ContinualGesture1Animation] 命中! Trial ${this.trial}/${this.maxTrials}, Hits ${this.hits}`);
                 
                 this.stopDwell();
+                
+                // 调用试次完成回调
+                if (this.onTrialComplete) {
+                    this.onTrialComplete(this.trial - 1);  // 传入0-based索引
+                }
                 
                 // 检查是否完成所有目标
                 if (this.trial >= this.maxTrials) {
