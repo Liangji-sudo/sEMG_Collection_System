@@ -275,13 +275,8 @@ class RealtimeEngine extends EventEmitter {
     onPromptStart(promptName, promptIndex) {
         console.log(`[realtimeEngine] ========== Prompt开始 ==========`);
         console.log(`[realtimeEngine] Prompt: ${promptName} (索引: ${promptIndex})`);
-        
-        this.pending_prompt = {
-            name: promptName,
-            time: getSysTimeNode(),
-            stageName: this.currentStageName,
-            index: promptIndex
-        };
+        // 注意：这里不设置pending_prompt，只做日志记录
+        // 实际的prompt数据由onPrompt()处理，避免重复计数
     }
 
     onPromptEnd(promptName, promptIndex) {
@@ -307,8 +302,9 @@ class RealtimeEngine extends EventEmitter {
             const config = this.collectionConfig || {};
             const userId = this.currentUser?.id || 'unknown';
             
+            // 使用config.task（中文名）作为目录名，而不是taskId（英文）
             const createParams = {
-                task_id: this.currentTaskId || 'discrete_gesture',
+                task_id: config.task || this.currentTaskId || 'discrete_gesture',  // 优先使用config.task（中文）
                 user_id: userId,
                 stage_name: stageName,
                 category1: config.category1 || 'default',

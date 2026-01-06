@@ -627,7 +627,14 @@
                 input.addEventListener('change', (e) => {
                     const { category, index, field } = e.target.dataset;
                     if (category && index !== undefined && field) {
-                        this.currentTemplate[category][index][field] = e.target.value.trim();
+                        const newValue = e.target.value.trim();
+                        this.currentTemplate[category][index][field] = newValue;
+                        
+                        // 如果修改的是name字段，同步更新id（支持中文目录）
+                        if (field === 'name' && newValue) {
+                            this.currentTemplate[category][index].id = newValue;
+                        }
+                        
                         this.isDirty = true;
                     }
                 });
@@ -695,11 +702,12 @@
         showAddGestureDialog(gestureType) {
             const name = prompt('请输入手势名称：');
             if (name && name.trim()) {
+                const trimmedName = name.trim();
                 const icon = prompt('请输入手势图标（emoji）：', '✋');
                 
                 this.currentTemplate.gestures[gestureType].push({
-                    id: `gesture_${Date.now()}`,
-                    name: name.trim(),
+                    id: trimmedName,  // 使用名称作为id
+                    name: trimmedName,
                     icon: icon || '✋',
                     enabled: true
                 });
@@ -713,14 +721,24 @@
          * 添加分类项
          */
         addCategoryItem(category) {
+            // 弹出对话框让用户输入名称
+            const name = prompt('请输入名称：');
+            if (!name || !name.trim()) {
+                return; // 用户取消或未输入
+            }
+            
+            const trimmedName = name.trim();
+            
+            // 使用名称作为id（支持中文），同时添加时间戳确保唯一性
             const newItem = {
-                id: `${category}_${Date.now()}`,
-                name: '新项目',
+                id: trimmedName,  // 直接使用名称作为id，支持中文目录
+                name: trimmedName,
                 enabled: true
             };
 
             if (category === 'category3') {
-                newItem.instruction = '';
+                const instruction = prompt('请输入指导语（可选）：', '');
+                newItem.instruction = instruction || '';
             }
             if (category === 'category4') {
                 newItem.description = '';
@@ -729,6 +747,7 @@
             this.currentTemplate[category].push(newItem);
             this.isDirty = true;
             this.renderCategoriesTab();
+            this.showToast(`已添加: ${trimmedName}`, 'success');
         }
 
         /**

@@ -518,14 +518,38 @@
                 localStorage.setItem('emg_current_user', JSON.stringify(userData));
             }
 
+            // 辅助函数：根据id获取name（用于中文目录）
+            const getNameById = (category, id) => {
+                const items = this.template[category] || [];
+                const item = items.find(i => i.id === id);
+                return item ? item.name : id;  // 如果找到则返回name，否则返回id本身
+            };
+            
+            // 获取任务名称
+            const getTaskName = (taskId) => {
+                const tasks = this.template.tasks || [];
+                console.log('[CollectionSelector] 查找任务名称, taskId:', taskId);
+                console.log('[CollectionSelector] 可用的tasks:', tasks);
+                const task = tasks.find(t => t.id === taskId);
+                console.log('[CollectionSelector] 找到的task:', task);
+                return task ? task.name : taskId;
+            };
+
             // 保存采集配置（包含所有分类信息，用于目录结构）
+            // 注意：所有分类都保存 name（中文）用于目录命名
             const config = {
-                task: this.selections.task,
-                category1: this.selections.category1,
-                category2: this.selections.category2,
+                // 保存id用于程序逻辑
+                task_id: this.selections.task,
+                category1_id: this.selections.category1,
+                category2_id: this.selections.category2,
+                category4_id: this.selections.category4,
+                // 保存name用于目录命名（支持中文）
+                task: getTaskName(this.selections.task),
+                category1: getNameById('category1', this.selections.category1),
+                category2: getNameById('category2', this.selections.category2),
+                category4: getNameById('category4', this.selections.category4),
                 // category3 不需要选择，从模板中获取全部启用的子场景
                 category3List: (this.template.category3 || []).filter(c => c.enabled),
-                category4: this.selections.category4,
                 subject: this.selections.subject,
                 templateName: this.template.templateName,
                 timestamp: new Date().toISOString()

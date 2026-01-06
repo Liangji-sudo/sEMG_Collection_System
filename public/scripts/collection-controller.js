@@ -295,11 +295,15 @@ console.log('[Collection] ====== 脚本开始加载 (v3) ======');
         }
 
         updateGestureList() {
-            const gestureList = document.getElementById('stageListPanel');
-            if (!gestureList) return;
+            // 使用正确的ID: gestureList
+            const gestureList = document.getElementById('gestureList');
+            if (!gestureList) {
+                console.warn('[Collection] 未找到 #gestureList 元素');
+                return;
+            }
 
             // 更新标题为"手势库"
-            const titleEl = gestureList.querySelector('.panel-title');
+            const titleEl = gestureList.querySelector('.gesture-list-title');
             if (titleEl) {
                 titleEl.innerHTML = '<i class="fas fa-hand-paper"></i> 手势库';
             }
@@ -307,49 +311,63 @@ console.log('[Collection] ====== 脚本开始加载 (v3) ======');
             // 离散手势：显示手势列表
             if (this.currentTaskId === 'discrete_gesture') {
                 let html = '';
+                
+                // 添加进度摘要
+                html += `
+                    <div class="gesture-progress-summary" style="font-size: 12px; padding: 5px 8px; margin-bottom: 5px;">
+                        <span>进度: ${this.currentGestureIndex}/${this.gestures.length} 手势</span>
+                        <span>Stage: ${this.currentStageIndex + 1}/${this.stages.length}</span>
+                    </div>
+                `;
+                
                 this.gestures.forEach((gesture, index) => {
                     let status = 'pending';
                     let progressText = '';
                     
+                    // 判断当前是否正在执行手势（不在休息期间）
+                    const isActivelyCollecting = this._isRunning && this.currentPhase === 'gesture';
+                    
                     if (index < this.currentGestureIndex) {
+                        // 已完成的手势
                         status = 'completed';
-                        progressText = `<span class="gesture-progress">✓ 完成</span>`;
-                    } else if (index === this.currentGestureIndex && this._isRunning) {
+                        progressText = `<span class="gesture-progress" style="font-size: 11px;">✓ 完成</span>`;
+                    } else if (index === this.currentGestureIndex && isActivelyCollecting) {
+                        // 当前正在采集的手势（仅在gesture阶段显示进度）
                         status = 'current';
-                        progressText = `<span class="gesture-progress">${this.gestureRepeatCount}/${this.executionParams.repeatPerGesture}</span>`;
+                        progressText = `<span class="gesture-progress" style="font-size: 11px;">${this.gestureRepeatCount}/${this.executionParams.repeatPerGesture}</span>`;
                     } else {
-                        progressText = `<span class="gesture-progress">${this.executionParams.repeatPerGesture}次</span>`;
+                        // 待采集的手势（包括休息期间的下一个手势）
+                        status = 'pending';
+                        progressText = `<span class="gesture-progress" style="font-size: 11px; color: #999;">${this.executionParams.repeatPerGesture}次</span>`;
                     }
                     
                     const iconClass = status === 'completed' ? 'check-circle' : 
                                      status === 'current' ? 'circle-notch fa-spin' : 'circle';
                     
                     html += `
-                        <div class="gesture-item ${status}" data-index="${index}">
-                            <span class="gesture-icon">${gesture.icon || '✋'}</span>
-                            <span class="gesture-name">${gesture.name}</span>
+                        <div class="gesture-item ${status}" data-index="${index}" style="padding: 6px 8px; font-size: 13px; display: flex; align-items: center; gap: 6px;">
+                            <span class="gesture-icon" style="font-size: 14px;">${gesture.icon || '✋'}</span>
+                            <span class="gesture-name" style="flex: 1; font-size: 13px;">${gesture.name}</span>
                             ${progressText}
-                            <i class="fas fa-${iconClass} status-icon"></i>
+                            <i class="fas fa-${iconClass} status-icon" style="font-size: 12px;"></i>
                         </div>
                     `;
                 });
                 
-                // 添加进度摘要
-                html = `
-                    <div class="gesture-progress-summary">
-                        <span>进度: ${this.currentGestureIndex}/${this.gestures.length} 手势</span>
-                        <span>Stage: ${this.currentStageIndex + 1}/${this.stages.length}</span>
-                    </div>
-                ` + html;
-                
-                gestureList.querySelector('.panel-content')?.innerHTML 
-                    ? gestureList.querySelector('.panel-content').innerHTML = html
-                    : null;
-                
-                // 如果没有.panel-content，直接替换内容
-                const contentArea = gestureList.querySelector('.stage-list, .gesture-list');
-                if (contentArea) {
-                    contentArea.innerHTML = html;
+                // 在标题后面插入内容
+                const titleElement = gestureList.querySelector('.gesture-list-title');
+                if (titleElement) {
+                    // 移除旧内容（除了标题）
+                    const children = Array.from(gestureList.children);
+                    children.forEach(child => {
+                        if (!child.classList.contains('gesture-list-title')) {
+                            child.remove();
+                        }
+                    });
+                    // 插入新内容
+                    titleElement.insertAdjacentHTML('afterend', html);
+                } else {
+                    gestureList.innerHTML = html;
                 }
             } else {
                 // 连续手势：显示Stage列表
@@ -365,16 +383,24 @@ console.log('[Collection] ====== 脚本开始加载 (v3) ======');
                     const iconClass = status === 'completed' ? 'check-circle' : 'circle';
                     
                     html += `
-                        <div class="gesture-item ${status}" data-index="${index}">
-                            <i class="fas fa-${iconClass}"></i>
-                            <span>${stage.name}</span>
+                        <div class="gesture-item ${status}" data-index="${index}" style="padding: 6px 8px; font-size: 13px;">
+                            <i class="fas fa-${iconClass}" style="font-size: 12px;"></i>
+                            <span style="font-size: 13px;">${stage.name}</span>
                         </div>
                     `;
                 });
                 
-                const contentArea = gestureList.querySelector('.stage-list, .gesture-list, .panel-content');
-                if (contentArea) {
-                    contentArea.innerHTML = html;
+                const titleElement = gestureList.querySelector('.gesture-list-title');
+                if (titleElement) {
+                    const children = Array.from(gestureList.children);
+                    children.forEach(child => {
+                        if (!child.classList.contains('gesture-list-title')) {
+                            child.remove();
+                        }
+                    });
+                    titleElement.insertAdjacentHTML('afterend', html);
+                } else {
+                    gestureList.innerHTML = html;
                 }
             }
         }
@@ -426,7 +452,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3) ======');
             // 通知realtimeEngine
             this.sendToRealtimeEngine('stage_change', {
                 stageIndex: stageIndex,
-                stageName: this.stages[stageIndex]?.id || this.stages[stageIndex]?.name
+                stageName: this.stages[stageIndex]?.name || this.stages[stageIndex]?.id  // 优先使用name
             });
         }
 
@@ -475,7 +501,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3) ======');
             
             this.sendToRealtimeEngine('collection_start', {
                 taskId: this.currentTaskId,
-                stageName: currentStage?.id || currentStage?.name || 'stage_1',
+                stageName: currentStage?.name || currentStage?.id || 'stage_1',  // 优先使用name（中文）
                 userId: userId,
                 config: this.collectionConfig
             });
@@ -627,7 +653,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3) ======');
             
             // 构建动画需要的stage配置
             const stageConfig = {
-                name: currentStage?.id || currentStage?.name || 'stage',
+                name: currentStage?.name || currentStage?.id || 'stage',  // 优先使用name
                 label: currentStage?.name || 'Stage',
                 instruction: currentStage?.instruction || '请按照提示进行手势动作',
                 promptSequence: promptSequence
@@ -727,7 +753,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3) ======');
             // 发送prompt信号
             this.sendToRealtimeEngine('prompt', {
                 name: gesture.id || gesture.name,
-                stageName: this.stages[this.currentStageIndex]?.id,
+                stageName: this.stages[this.currentStageIndex]?.name || this.stages[this.currentStageIndex]?.id,  // 优先使用name
                 timestamp: Date.now()
             });
             
@@ -764,6 +790,12 @@ console.log('[Collection] ====== 脚本开始加载 (v3) ======');
             const nextGesture = this.gestures[this.currentGestureIndex];
             
             this.currentPhase = 'rest';
+            
+            // 重置重复计数，避免休息期间显示错误的进度
+            this.gestureRepeatCount = 0;
+            
+            // 更新手势列表显示
+            this.updateGestureList();
             
             this.updateGestureDisplay({
                 name: '休息时间',
@@ -813,7 +845,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3) ======');
             // 发送stage结束
             const currentStage = this.stages[this.currentStageIndex];
             this.sendToRealtimeEngine('stage_end', {
-                stageName: currentStage?.id || currentStage?.name
+                stageName: currentStage?.name || currentStage?.id  // 优先使用name
             });
             
             // 通知采集完成
@@ -859,7 +891,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3) ======');
             
             const currentStage = this.stages[this.currentStageIndex];
             this.sendToRealtimeEngine('stage_end', {
-                stageName: currentStage?.id || currentStage?.name
+                stageName: currentStage?.name || currentStage?.id  // 优先使用name
             });
             
             // 检查是否还有下一个Stage

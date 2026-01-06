@@ -216,29 +216,45 @@
         parseFileName(fileName) {
             const baseName = fileName.replace(/\.(h5|hdf5)$/i, '');
             
-            // 标准格式：任务名_受试者ID_日期_时间
-            const regex = /^(.+)_(S\d+|s\d+)_(\d{8})_(\d{6})$/;
-            const match = baseName.match(regex);
-
-            if (match) {
+            // 新格式：受试者ID_Stage名_日期_时间
+            // 例如: S001_palm_up_20260105_143000
+            const newRegex = /^(S\d+|s\d+)_(.+)_(\d{8})_(\d{6})$/;
+            const newMatch = baseName.match(newRegex);
+            
+            if (newMatch) {
                 return {
-                    taskName: match[1],
-                    subjectId: match[2].toUpperCase(),
-                    date: match[3],
-                    time: match[4],
-                    dateFormatted: this.formatDateString(match[3]),
-                    timeFormatted: this.formatTimeString(match[4])
+                    subjectId: newMatch[1].toUpperCase(),
+                    taskName: newMatch[2],  // Stage名作为任务名显示
+                    date: newMatch[3],
+                    time: newMatch[4],
+                    dateFormatted: this.formatDateString(newMatch[3]),
+                    timeFormatted: this.formatTimeString(newMatch[4])
+                };
+            }
+            
+            // 旧格式：任务名_受试者ID_日期_时间
+            const oldRegex = /^(.+)_(S\d+|s\d+)_(\d{8})_(\d{6})$/;
+            const oldMatch = baseName.match(oldRegex);
+
+            if (oldMatch) {
+                return {
+                    taskName: oldMatch[1],
+                    subjectId: oldMatch[2].toUpperCase(),
+                    date: oldMatch[3],
+                    time: oldMatch[4],
+                    dateFormatted: this.formatDateString(oldMatch[3]),
+                    timeFormatted: this.formatTimeString(oldMatch[4])
                 };
             }
 
             // 宽松匹配
-            const looseRegex = /^(.+?)_(S\d+|s\d+)_?(.*)$/i;
+            const looseRegex = /^(S\d+|s\d+)_(.+?)_?(\d*)$/i;
             const looseMatch = baseName.match(looseRegex);
             
             if (looseMatch) {
                 return {
-                    taskName: looseMatch[1],
-                    subjectId: looseMatch[2].toUpperCase(),
+                    subjectId: looseMatch[1].toUpperCase(),
+                    taskName: looseMatch[2],
                     date: '',
                     time: '',
                     dateFormatted: '',
