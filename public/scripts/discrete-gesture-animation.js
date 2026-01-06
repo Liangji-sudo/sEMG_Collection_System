@@ -195,6 +195,81 @@
         }
 
         /**
+         * 【新增】开始单个手势的重复采集动画
+         * 这是给 collection-controller.js 调用的接口
+         * @param {Object} gesture - 手势配置 {id, name, icon, ...}
+         * @param {Object} executionParams - 执行参数 {repeatPerGesture, ...}
+         * @param {Function} onComplete - 完成回调
+         */
+        startGesture(gesture, executionParams, onComplete) {
+            console.log('[DiscreteGestureAnimation] ★★★ startGesture 被调用 ★★★');
+            console.log('[DiscreteGestureAnimation] 手势:', gesture.name);
+            console.log('[DiscreteGestureAnimation] 执行参数:', executionParams);
+            
+            // 从executionParams获取重复次数
+            const repeatCount = executionParams?.repeatPerGesture || 5;
+            
+            // 动态添加手势到Prompt库
+            const gestureId = gesture.id || gesture.name;
+            this.promptLibrary[gestureId] = {
+                label: gesture.name,
+                icon: gesture.icon || '✋',
+                color: gesture.color || '#3b82f6'
+            };
+            
+            // 创建重复的promptSequence
+            const promptSequence = [];
+            for (let i = 0; i < repeatCount; i++) {
+                promptSequence.push(gestureId);
+            }
+            
+            // 获取当前Stage信息
+            let stageName = 'gesture_stage';
+            let stageLabel = '手势采集';
+            let stageIcon = '🤲';
+            let stageInstruction = `请执行 ${gesture.name} 手势`;
+            
+            if (window.collectionController) {
+                const ctrl = window.collectionController;
+                const currentStage = ctrl.stages?.[ctrl.currentStageIndex];
+                if (currentStage) {
+                    stageName = currentStage.name || currentStage.id || stageName;
+                    stageLabel = currentStage.name || stageLabel;
+                    stageInstruction = currentStage.instruction || stageInstruction;
+                }
+            }
+            
+            // 构造stage配置
+            const stageConfig = {
+                name: stageName,
+                label: stageLabel,
+                icon: stageIcon,
+                instruction: stageInstruction,
+                promptSequence: promptSequence
+            };
+            
+            console.log('[DiscreteGestureAnimation] 生成的promptSequence:', promptSequence);
+            console.log('[DiscreteGestureAnimation] Stage配置:', stageConfig);
+            
+            // 调用原有的start方法
+            this.start(stageConfig, onComplete, (promptName, index, stageName) => {
+                // 触发prompt时通知后端
+                if (window.collectionController) {
+                    window.collectionController.gestureRepeatCount = index + 1;
+                    window.collectionController.updateGestureList?.();
+                    
+                    // 发送prompt信号到后端
+                    window.collectionController.sendToRealtimeEngine?.('prompt', {
+                        name: promptName,
+                        stageName: stageName,
+                        repeatIndex: index,
+                        timestamp: Date.now()
+                    });
+                }
+            });
+        }
+
+        /**
          * 开始Stage动画
          * @param {Object} stage - stage配置
          * @param {Function} onComplete - 完成回调
