@@ -676,8 +676,8 @@ async def process_queue():
                         if ws:
                             try:
                                 await ws.send(payload)
-                            except:
-                                pass
+                            except Exception as send_err:
+                                log(f"控制消息发送失败: {send_err}")
                 
                 elif msg_type == 'data':
                     # 数据 -> 发送到数据端
@@ -697,10 +697,12 @@ async def process_queue():
                             pass
                             
             except Exception as e:
-                log(f"发送错误: {e}")
+                log(f"发送错误 (type={msg_type}): {e}")
+                traceback.print_exc()
                 
     except Exception as e:
         log(f"队列处理错误: {e}")
+        traceback.print_exc()
 
 
 async def send_to_control(ws, action: str, data: dict):
@@ -731,34 +733,51 @@ async def scan_devices(ws):
             scanning_mode="active"
         )
         
+        log(f"BleakScanner 返回 {len(devices)} 个设备")
+        
         targets = []
         
         for d, adv in devices.values():
-            if d.address and not any(_d['mac'] == d.address for _d in targets):
-
-                display = f"{d.name} ({d.address})"
-                state.devices_found[display] = d
-                
-                # 尝试获取 RSSI
-                #rssi = getattr(d, 'rssi', None) or -100
-                
-                info = {
-                    'name': d.name or adv.local_name or "未知设备",
-                    'mac': d.address.upper(),
-                    'display': display,
-                    "rssi": adv.rssi if adv.rssi is not None else None,
-                    "manufacturer": str(adv.manufacturer_data)[:50]
-                }
-                state.scan_results.append(info)
-                
-                # if d.name == TARGET_DEVICE_NAME:
-                #     targets.append(info)
+            try:
+                if d.address and not any(_d['mac'] == d.address for _d in state.scan_results):
+                    display = f"{d.name} ({d.address})"
+                    state.devices_found[display] = d
+                    
+                    # 安全获取 manufacturer_data（转为可序列化的字符串）
+                    mfr_str = ""
+                    try:
+                        if adv.manufacturer_data:
+                            # manufacturer_data 是 {company_id: bytes} 字典
+                            mfr_parts = []
+                            for company_id, data in adv.manufacturer_data.items():
+                                mfr_parts.append(f"{company_id}:{data.hex()}")
+                            mfr_str = ",".join(mfr_parts)[:50]
+                    except:
+                        mfr_str = ""
+                    
+                    info = {
+                        'name': d.name or adv.local_name or "未知设备",
+                        'mac': d.address.upper(),
+                        'display': display,
+                        "rssi": adv.rssi if adv.rssi is not None else -100,
+                        "manufacturer": mfr_str
+                    }
+                    state.scan_results.append(info)
+                    
+                    # if d.name == TARGET_DEVICE_NAME:
+                    #     targets.append(info)
+            except Exception as dev_err:
+                log(f"处理设备时出错: {dev_err}")
+                continue
         
-        # 按 RSSI 排序
-        state.scan_results.sort(key=lambda x: x['rssi'], reverse=True)
+        # 按 RSSI 排序（处理 None 值，None 排最后）
+        state.scan_results.sort(key=lambda x: x['rssi'] if x['rssi'] is not None else -999, reverse=True)
         
-        #log(f"找到 {len(state.scan_results)} 个设备，目标 {len(targets)} 个")
         log(f"找到 {len(state.scan_results)} 个设备")
+        
+        # 调试：打印扫描结果
+        for dev_info in state.scan_results[:5]:  # 只打印前5个
+            log(f"  - {dev_info['name']} ({dev_info['mac']}) RSSI: {dev_info['rssi']}")
         
         await send_to_control(ws, 'scan', {
             'success': True,
