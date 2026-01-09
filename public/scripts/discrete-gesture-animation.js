@@ -209,8 +209,8 @@
             // 从executionParams获取重复次数
             const repeatCount = executionParams?.repeatPerGesture || 5;
             
-            // 动态添加手势到Prompt库
-            const gestureId = gesture.id || gesture.name;
+            // 【修复】直接使用gesture.name作为gestureId，确保显示用户定义的名称
+            const gestureId = gesture.name;
             this.promptLibrary[gestureId] = {
                 label: gesture.name,
                 icon: gesture.icon || '✋',

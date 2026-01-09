@@ -197,6 +197,26 @@
          * 确保模板包含所有必要字段（用于兼容旧版本模板）
          */
         ensureTemplateFields() {
+            // 【新增】修复手势id：如果id是gesture_时间戳格式，则改为使用name作为id
+            if (this.currentTemplate.gestures?.discrete) {
+                let needsSave = false;
+                this.currentTemplate.gestures.discrete.forEach(gesture => {
+                    // 检测gesture_时间戳格式（gesture_后跟13位数字）
+                    if (gesture.id && /^gesture_\d{13}$/.test(gesture.id)) {
+                        console.log(`[TemplateConfig] 修复手势id: ${gesture.id} -> ${gesture.name}`);
+                        gesture.id = gesture.name;
+                        needsSave = true;
+                    }
+                });
+                if (needsSave) {
+                    console.log('[TemplateConfig] 已自动修复手势id，将保存更新');
+                    // 标记需要保存
+                    this.isDirty = true;
+                    // 立即保存修复后的数据
+                    setTimeout(() => this.saveTemplate(), 100);
+                }
+            }
+            
             // 检查并补充 subjectFields
             if (!this.currentTemplate.subjectFields || !Array.isArray(this.currentTemplate.subjectFields)) {
                 console.log('[TemplateConfig] 补充缺失的 subjectFields');
@@ -895,7 +915,10 @@
             container.querySelectorAll('.gesture-name-input').forEach(input => {
                 input.addEventListener('change', (e) => {
                     const index = parseInt(e.target.dataset.index);
-                    this.currentTemplate.gestures.discrete[index].name = e.target.value.trim();
+                    const newName = e.target.value.trim();
+                    // 同时更新name和id，确保一致性
+                    this.currentTemplate.gestures.discrete[index].name = newName;
+                    this.currentTemplate.gestures.discrete[index].id = newName;
                     this.isDirty = true;
                 });
             });
@@ -916,14 +939,21 @@
             const addBtn = document.getElementById('addGestureBtn');
             if (addBtn) {
                 addBtn.addEventListener('click', () => {
-                    this.currentTemplate.gestures.discrete.push({
-                        id: `gesture_${Date.now()}`,
-                        name: '新手势',
-                        icon: '✋',
-                        enabled: true
-                    });
-                    this.isDirty = true;
-                    this.renderGesturesTab();
+                    const name = prompt('请输入手势名称：');
+                    if (name && name.trim()) {
+                        const trimmedName = name.trim();
+                        const icon = prompt('请输入手势图标（emoji）：', '✋');
+                        
+                        this.currentTemplate.gestures.discrete.push({
+                            id: trimmedName,  // 使用名称作为id
+                            name: trimmedName,
+                            icon: icon || '✋',
+                            enabled: true
+                        });
+                        this.isDirty = true;
+                        this.renderGesturesTab();
+                        this.showToast('手势已添加', 'success');
+                    }
                 });
             }
         }
