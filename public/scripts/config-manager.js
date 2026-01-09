@@ -266,7 +266,8 @@
          * 从服务器删除配置文件
          */
         async deleteFromServer(filename) {
-            if (!confirm(`确定要删除配置文件 "${filename}" 吗？`)) {
+            const confirmed = await this.showConfirm(`确定要删除配置文件 "${filename}" 吗？`);
+            if (!confirmed) {
                 return;
             }
 
@@ -306,78 +307,43 @@
         }
 
         /**
-         * 创建加载配置弹窗
+         * 创建加载配置弹窗（简化版 - 只显示config/目录下的配置文件）
          */
         createLoadConfigModal() {
             const modal = document.createElement('div');
             modal.id = 'loadConfigModal';
             modal.className = 'config-modal-overlay';
             modal.innerHTML = `
-                <div class="config-modal-content load-config-modal">
+                <div class="config-modal-content load-config-modal" style="max-width: 480px;">
                     <div class="config-modal-header">
-                        <h3><i class="fa fa-folder-open"></i> 加载采集配置</h3>
+                        <h3><i class="fa fa-folder-open"></i> 选择配置文件</h3>
                         <button class="config-modal-close" onclick="configManager.closeLoadModal()">
                             <i class="fa fa-times"></i>
                         </button>
                     </div>
-                    <div class="config-modal-body">
-                        <div class="load-config-options">
-                            <div class="load-option" onclick="configManager.loadFromStorage()">
-                                <div class="load-option-icon">
-                                    <i class="fa fa-database"></i>
-                                </div>
-                                <div class="load-option-info">
-                                    <h4>使用本地缓存配置</h4>
-                                    <p>从浏览器缓存加载上次保存的配置</p>
-                                </div>
-                                <i class="fa fa-chevron-right"></i>
-                            </div>
-                            <div class="load-option" onclick="configManager.triggerFileSelect()">
-                                <div class="load-option-icon">
-                                    <i class="fa fa-file-import"></i>
-                                </div>
-                                <div class="load-option-info">
-                                    <h4>从文件导入</h4>
-                                    <p>选择本地JSON配置文件</p>
-                                </div>
-                                <i class="fa fa-chevron-right"></i>
-                            </div>
-                            <div class="load-option" onclick="configManager.loadDefaultAndClose()">
-                                <div class="load-option-icon">
-                                    <i class="fa fa-undo"></i>
-                                </div>
-                                <div class="load-option-info">
-                                    <h4>使用默认配置</h4>
-                                    <p>恢复系统内置的标准配置</p>
-                                </div>
-                                <i class="fa fa-chevron-right"></i>
-                            </div>
-                        </div>
-                        
+                    <div class="config-modal-body" style="padding: 0;">
                         <!-- 服务器配置文件列表 -->
-                        <div class="server-config-section">
-                            <div class="server-config-header">
-                                <h4><i class="fa fa-server"></i> 服务器配置文件</h4>
-                                <button class="refresh-config-btn" onclick="configManager.loadServerConfigList()">
+                        <div class="server-config-section" style="border: none; margin: 0; padding: 16px;">
+                            <div class="server-config-header" style="margin-bottom: 12px;">
+                                <h4 style="margin: 0; font-size: 14px; color: #666;">
+                                    <i class="fa fa-folder"></i> config/ 目录
+                                </h4>
+                                <button class="refresh-config-btn" onclick="configManager.loadServerConfigList()" title="刷新">
                                     <i class="fa fa-refresh"></i>
                                 </button>
                             </div>
-                            <div class="server-config-list" id="serverConfigList">
+                            <div class="server-config-list" id="serverConfigList" style="max-height: 400px; overflow-y: auto;">
                                 <div class="loading-hint">
                                     <i class="fa fa-spinner fa-spin"></i> 加载中...
                                 </div>
                             </div>
                         </div>
                         
-                        <div class="current-config-info">
-                            <h4>当前配置</h4>
-                            <div class="config-info-row">
-                                <span class="config-info-label">模板名称：</span>
-                                <span class="config-info-value" id="currentTemplateName">${this.currentTemplate?.templateName || '未加载'}</span>
-                            </div>
-                            <div class="config-info-row">
-                                <span class="config-info-label">来源：</span>
-                                <span class="config-info-value">${this.templateFileName || '-'}</span>
+                        <!-- 当前配置信息 -->
+                        <div class="current-config-info" style="border-top: 1px solid #e5e7eb; margin: 0; padding: 12px 16px; background: #f8fafc;">
+                            <div class="config-info-row" style="display: flex; justify-content: space-between; font-size: 13px;">
+                                <span class="config-info-label" style="color: #666;">当前配置：</span>
+                                <span class="config-info-value" style="color: #1e40af; font-weight: 500;" id="currentTemplateName">${this.currentTemplate?.templateName || '未加载'}</span>
                             </div>
                         </div>
                     </div>
@@ -781,6 +747,98 @@
                 execution: t.execution,
                 categoryLabels: t.categoryLabels
             };
+        }
+
+        /**
+         * 自定义confirm对话框（兼容Electron环境）
+         */
+        showConfirm(message) {
+            return new Promise((resolve) => {
+                const overlay = document.createElement('div');
+                overlay.className = 'custom-confirm-overlay';
+                overlay.style.cssText = `
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 100%;
+                    background: rgba(0, 0, 0, 0.5);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    z-index: 10001;
+                `;
+
+                const dialog = document.createElement('div');
+                dialog.style.cssText = `
+                    background: white;
+                    border-radius: 12px;
+                    padding: 24px;
+                    min-width: 300px;
+                    max-width: 400px;
+                    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+                `;
+
+                dialog.innerHTML = `
+                    <div style="display: flex; align-items: flex-start; gap: 12px; margin-bottom: 20px;">
+                        <div style="
+                            width: 40px;
+                            height: 40px;
+                            border-radius: 50%;
+                            background: #fef3c7;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            flex-shrink: 0;
+                        ">
+                            <i class="fa fa-exclamation-triangle" style="color: #f59e0b; font-size: 18px;"></i>
+                        </div>
+                        <div style="font-size: 15px; color: #333; line-height: 1.5; padding-top: 8px;">${message}</div>
+                    </div>
+                    <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                        <button class="confirm-cancel" style="
+                            padding: 8px 20px;
+                            border: 1px solid #d1d5db;
+                            background: white;
+                            border-radius: 6px;
+                            cursor: pointer;
+                            font-size: 14px;
+                            color: #666;
+                        ">取消</button>
+                        <button class="confirm-ok" style="
+                            padding: 8px 20px;
+                            border: none;
+                            background: #ef4444;
+                            color: white;
+                            border-radius: 6px;
+                            cursor: pointer;
+                            font-size: 14px;
+                        ">确定</button>
+                    </div>
+                `;
+
+                overlay.appendChild(dialog);
+                document.body.appendChild(overlay);
+
+                const cleanup = () => document.body.removeChild(overlay);
+
+                dialog.querySelector('.confirm-ok').addEventListener('click', () => {
+                    cleanup();
+                    resolve(true);
+                });
+
+                dialog.querySelector('.confirm-cancel').addEventListener('click', () => {
+                    cleanup();
+                    resolve(false);
+                });
+
+                overlay.addEventListener('click', (e) => {
+                    if (e.target === overlay) {
+                        cleanup();
+                        resolve(false);
+                    }
+                });
+            });
         }
     }
 

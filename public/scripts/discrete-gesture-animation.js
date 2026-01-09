@@ -203,7 +203,9 @@
          */
         startGesture(gesture, executionParams, onComplete) {
             console.log('[DiscreteGestureAnimation] ★★★ startGesture 被调用 ★★★');
-            console.log('[DiscreteGestureAnimation] 手势:', gesture.name);
+            console.log('[DiscreteGestureAnimation] 手势对象:', JSON.stringify(gesture));
+            console.log('[DiscreteGestureAnimation] 手势名称:', gesture.name);
+            console.log('[DiscreteGestureAnimation] 手势图标:', gesture.icon);
             console.log('[DiscreteGestureAnimation] 执行参数:', executionParams);
             
             // 从executionParams获取重复次数
@@ -211,11 +213,20 @@
             
             // 【修复】直接使用gesture.name作为gestureId，确保显示用户定义的名称
             const gestureId = gesture.name;
+            
+            // 【修复】确保icon不为空，检查多种可能的空值情况
+            let icon = gesture.icon;
+            if (!icon || icon === '' || icon === 'undefined' || icon === 'null') {
+                icon = '✋';  // 默认图标
+            }
+            
             this.promptLibrary[gestureId] = {
                 label: gesture.name,
-                icon: gesture.icon || '✋',
+                icon: icon,
                 color: gesture.color || '#3b82f6'
             };
+            
+            console.log('[DiscreteGestureAnimation] 添加到promptLibrary:', this.promptLibrary[gestureId]);
             
             // 创建重复的promptSequence
             const promptSequence = [];
@@ -336,11 +347,14 @@
         }
 
         /**
-         * 重新加载Prompt库
+         * 重新加载Prompt库（合并模式，不覆盖已有的动态添加的手势）
          */
         reloadPromptLibrary() {
             if (window.DISCRETE_GESTURE_CONFIG && window.DISCRETE_GESTURE_CONFIG.PROMPT_LIBRARY) {
-                this.promptLibrary = { ...window.DISCRETE_GESTURE_CONFIG.PROMPT_LIBRARY };
+                // 【修复】使用合并模式：先加载默认库，再保留已有的动态添加的手势
+                const defaultLibrary = window.DISCRETE_GESTURE_CONFIG.PROMPT_LIBRARY;
+                // 将默认库合并到现有库（已有的不会被覆盖）
+                this.promptLibrary = { ...defaultLibrary, ...this.promptLibrary };
                 console.log('[DiscreteGestureAnimation] Prompt库已重新加载，共', 
                     Object.keys(this.promptLibrary).length, '个动作');
             }
@@ -561,18 +575,52 @@
             ctx.fill();
             ctx.stroke();
             
-            // 图标
-            ctx.fillStyle = color;
-            ctx.font = '900 32px ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(prompt.icon, x, by + badgeH / 2);
+            // 图标 - 使用DOM元素绘制emoji以确保兼容性
+            this.drawEmojiIcon(prompt.icon, x, by + badgeH / 2, color);
             
             // 动作名称
             ctx.font = '600 11px ui-sans-serif, system-ui';
             ctx.fillStyle = color;
             ctx.textBaseline = 'top';
             ctx.fillText(prompt.label, x, y + this.config.labelOffset);
+            
+            ctx.restore();
+        }
+
+        /**
+         * 绘制emoji图标（兼容Electron）
+         */
+        drawEmojiIcon(icon, x, y, color) {
+            const ctx = this.ctx;
+            
+            // 检测是否为emoji
+            const isEmoji = /[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\u{1F600}-\u{1F64F}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{1F900}-\u{1F9FF}]|[\u{1FA00}-\u{1FA6F}]|[\u{2300}-\u{23FF}]|[\u{2B50}]|[\u{270A}-\u{270D}]|[\u{1F44D}-\u{1F44F}]|[\u{1F91A}-\u{1F91F}]|[\u{1F90C}-\u{1F90F}]|[\u{261D}]|[\u{1F446}-\u{1F449}]|[\u{1F590}]|[\u{1F595}-\u{1F596}]|[\u270C]/u.test(icon);
+            
+            ctx.save();
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            if (isEmoji) {
+                // 对于emoji，创建临时canvas来绘制
+                const tempCanvas = document.createElement('canvas');
+                const tempCtx = tempCanvas.getContext('2d');
+                const size = 40;
+                tempCanvas.width = size;
+                tempCanvas.height = size;
+                
+                tempCtx.font = `${size - 8}px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
+                tempCtx.textAlign = 'center';
+                tempCtx.textBaseline = 'middle';
+                tempCtx.fillText(icon, size / 2, size / 2);
+                
+                // 将临时canvas绘制到主canvas
+                ctx.drawImage(tempCanvas, x - size / 2, y - size / 2, size, size);
+            } else {
+                // 非emoji使用普通方式绘制
+                ctx.fillStyle = color;
+                ctx.font = '900 32px ui-sans-serif, system-ui, -apple-system';
+                ctx.fillText(icon, x, y);
+            }
             
             ctx.restore();
         }

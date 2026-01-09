@@ -377,8 +377,9 @@
         /**
          * 重置为默认模板
          */
-        resetToDefault() {
-            if (confirm('确定要重置为默认模板吗？当前的修改将丢失。')) {
+        async resetToDefault() {
+            const confirmed = await this.showConfirm('确定要重置为默认模板吗？当前的修改将丢失。');
+            if (confirmed) {
                 this.currentTemplate = JSON.parse(JSON.stringify(DEFAULT_TEMPLATE));
                 this.isDirty = true;
                 this.render();
@@ -775,11 +776,11 @@
         /**
          * 显示添加手势对话框
          */
-        showAddGestureDialog(gestureType) {
-            const name = prompt('请输入手势名称：');
+        async showAddGestureDialog(gestureType) {
+            const name = await this.showPrompt('请输入手势名称：');
             if (name && name.trim()) {
                 const trimmedName = name.trim();
-                const icon = prompt('请输入手势图标（emoji）：', '✋');
+                const icon = await this.showPrompt('请输入手势图标（emoji）：', '✋');
                 
                 this.currentTemplate.gestures[gestureType].push({
                     id: trimmedName,  // 使用名称作为id
@@ -796,9 +797,9 @@
         /**
          * 添加分类项
          */
-        addCategoryItem(category) {
+        async addCategoryItem(category) {
             // 弹出对话框让用户输入名称
-            const name = prompt('请输入名称：');
+            const name = await this.showPrompt('请输入名称：');
             if (!name || !name.trim()) {
                 return; // 用户取消或未输入
             }
@@ -813,7 +814,7 @@
             };
 
             if (category === 'category3') {
-                const instruction = prompt('请输入指导语（可选）：', '');
+                const instruction = await this.showPrompt('请输入指导语（可选）：', '');
                 newItem.instruction = instruction || '';
             }
             if (category === 'category4') {
@@ -829,8 +830,9 @@
         /**
          * 删除分类项
          */
-        deleteCategoryItem(category, index) {
-            if (confirm('确定要删除这个项目吗？')) {
+        async deleteCategoryItem(category, index) {
+            const confirmed = await this.showConfirm('确定要删除这个项目吗？');
+            if (confirmed) {
                 this.currentTemplate[category].splice(index, 1);
                 this.isDirty = true;
                 this.renderCategoriesTab();
@@ -925,9 +927,10 @@
 
             // 删除按钮
             container.querySelectorAll('.gesture-delete-btn').forEach(btn => {
-                btn.addEventListener('click', (e) => {
+                btn.addEventListener('click', async (e) => {
                     const index = parseInt(e.currentTarget.dataset.index);
-                    if (confirm('确定要删除这个手势吗？')) {
+                    const confirmed = await this.showConfirm('确定要删除这个手势吗？');
+                    if (confirmed) {
                         this.currentTemplate.gestures.discrete.splice(index, 1);
                         this.isDirty = true;
                         this.renderGesturesTab();
@@ -938,11 +941,11 @@
             // 添加手势
             const addBtn = document.getElementById('addGestureBtn');
             if (addBtn) {
-                addBtn.addEventListener('click', () => {
-                    const name = prompt('请输入手势名称：');
+                addBtn.addEventListener('click', async () => {
+                    const name = await this.showPrompt('请输入手势名称：');
                     if (name && name.trim()) {
                         const trimmedName = name.trim();
-                        const icon = prompt('请输入手势图标（emoji）：', '✋');
+                        const icon = await this.showPrompt('请输入手势图标（emoji）：', '✋');
                         
                         this.currentTemplate.gestures.discrete.push({
                             id: trimmedName,  // 使用名称作为id
@@ -1279,9 +1282,10 @@
 
             // 删除字段
             container.querySelectorAll('.field-delete-btn').forEach(btn => {
-                btn.addEventListener('click', (e) => {
+                btn.addEventListener('click', async (e) => {
                     const index = parseInt(e.currentTarget.dataset.index);
-                    if (confirm('确定要删除这个字段吗？')) {
+                    const confirmed = await this.showConfirm('确定要删除这个字段吗？');
+                    if (confirmed) {
                         this.currentTemplate.subjectFields.splice(index, 1);
                         this.isDirty = true;
                         this.renderSubjectTab();
@@ -1347,6 +1351,247 @@
             setTimeout(() => {
                 toast.classList.remove('visible');
             }, 2500);
+        }
+
+        /**
+         * 自定义prompt对话框（兼容Electron环境）
+         * @param {string} message - 提示信息
+         * @param {string} defaultValue - 默认值
+         * @returns {Promise<string|null>} - 用户输入的值，取消返回null
+         */
+        showPrompt(message, defaultValue = '') {
+            return new Promise((resolve) => {
+                // 创建遮罩层
+                const overlay = document.createElement('div');
+                overlay.className = 'custom-prompt-overlay';
+                overlay.style.cssText = `
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 100%;
+                    background: rgba(0, 0, 0, 0.5);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    z-index: 10000;
+                `;
+
+                // 创建对话框
+                const dialog = document.createElement('div');
+                dialog.className = 'custom-prompt-dialog';
+                dialog.style.cssText = `
+                    background: white;
+                    border-radius: 12px;
+                    padding: 24px;
+                    min-width: 320px;
+                    max-width: 400px;
+                    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+                `;
+
+                dialog.innerHTML = `
+                    <div style="margin-bottom: 16px; font-size: 15px; color: #333; font-weight: 500;">${message}</div>
+                    <input type="text" class="prompt-input" value="${defaultValue}" style="
+                        width: 100%;
+                        padding: 10px 12px;
+                        border: 2px solid #e5e7eb;
+                        border-radius: 8px;
+                        font-size: 14px;
+                        outline: none;
+                        box-sizing: border-box;
+                        transition: border-color 0.2s;
+                    " />
+                    <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
+                        <button class="prompt-cancel" style="
+                            padding: 8px 20px;
+                            border: 1px solid #d1d5db;
+                            background: white;
+                            border-radius: 6px;
+                            cursor: pointer;
+                            font-size: 14px;
+                            color: #666;
+                        ">取消</button>
+                        <button class="prompt-confirm" style="
+                            padding: 8px 20px;
+                            border: none;
+                            background: #3b82f6;
+                            color: white;
+                            border-radius: 6px;
+                            cursor: pointer;
+                            font-size: 14px;
+                        ">确定</button>
+                    </div>
+                `;
+
+                overlay.appendChild(dialog);
+                document.body.appendChild(overlay);
+
+                const input = dialog.querySelector('.prompt-input');
+                const confirmBtn = dialog.querySelector('.prompt-confirm');
+                const cancelBtn = dialog.querySelector('.prompt-cancel');
+
+                // 自动聚焦并选中
+                input.focus();
+                input.select();
+
+                // 输入框焦点样式
+                input.addEventListener('focus', () => {
+                    input.style.borderColor = '#3b82f6';
+                });
+                input.addEventListener('blur', () => {
+                    input.style.borderColor = '#e5e7eb';
+                });
+
+                const cleanup = () => {
+                    document.body.removeChild(overlay);
+                };
+
+                confirmBtn.addEventListener('click', () => {
+                    cleanup();
+                    resolve(input.value);
+                });
+
+                cancelBtn.addEventListener('click', () => {
+                    cleanup();
+                    resolve(null);
+                });
+
+                // 回车确认
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        cleanup();
+                        resolve(input.value);
+                    } else if (e.key === 'Escape') {
+                        cleanup();
+                        resolve(null);
+                    }
+                });
+
+                // 点击遮罩取消
+                overlay.addEventListener('click', (e) => {
+                    if (e.target === overlay) {
+                        cleanup();
+                        resolve(null);
+                    }
+                });
+            });
+        }
+
+        /**
+         * 自定义confirm对话框（兼容Electron环境）
+         * @param {string} message - 确认信息
+         * @returns {Promise<boolean>} - 用户选择确认返回true，取消返回false
+         */
+        showConfirm(message) {
+            return new Promise((resolve) => {
+                // 创建遮罩层
+                const overlay = document.createElement('div');
+                overlay.className = 'custom-confirm-overlay';
+                overlay.style.cssText = `
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 100%;
+                    background: rgba(0, 0, 0, 0.5);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    z-index: 10000;
+                `;
+
+                // 创建对话框
+                const dialog = document.createElement('div');
+                dialog.className = 'custom-confirm-dialog';
+                dialog.style.cssText = `
+                    background: white;
+                    border-radius: 12px;
+                    padding: 24px;
+                    min-width: 300px;
+                    max-width: 400px;
+                    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+                `;
+
+                dialog.innerHTML = `
+                    <div style="display: flex; align-items: flex-start; gap: 12px; margin-bottom: 20px;">
+                        <div style="
+                            width: 40px;
+                            height: 40px;
+                            border-radius: 50%;
+                            background: #fef3c7;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            flex-shrink: 0;
+                        ">
+                            <i class="fa fa-exclamation-triangle" style="color: #f59e0b; font-size: 18px;"></i>
+                        </div>
+                        <div style="font-size: 15px; color: #333; line-height: 1.5; padding-top: 8px;">${message}</div>
+                    </div>
+                    <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                        <button class="confirm-cancel" style="
+                            padding: 8px 20px;
+                            border: 1px solid #d1d5db;
+                            background: white;
+                            border-radius: 6px;
+                            cursor: pointer;
+                            font-size: 14px;
+                            color: #666;
+                        ">取消</button>
+                        <button class="confirm-ok" style="
+                            padding: 8px 20px;
+                            border: none;
+                            background: #ef4444;
+                            color: white;
+                            border-radius: 6px;
+                            cursor: pointer;
+                            font-size: 14px;
+                        ">确定</button>
+                    </div>
+                `;
+
+                overlay.appendChild(dialog);
+                document.body.appendChild(overlay);
+
+                const confirmBtn = dialog.querySelector('.confirm-ok');
+                const cancelBtn = dialog.querySelector('.confirm-cancel');
+
+                const cleanup = () => {
+                    document.body.removeChild(overlay);
+                };
+
+                confirmBtn.addEventListener('click', () => {
+                    cleanup();
+                    resolve(true);
+                });
+
+                cancelBtn.addEventListener('click', () => {
+                    cleanup();
+                    resolve(false);
+                });
+
+                // ESC取消
+                const keyHandler = (e) => {
+                    if (e.key === 'Escape') {
+                        cleanup();
+                        resolve(false);
+                        document.removeEventListener('keydown', keyHandler);
+                    } else if (e.key === 'Enter') {
+                        cleanup();
+                        resolve(true);
+                        document.removeEventListener('keydown', keyHandler);
+                    }
+                };
+                document.addEventListener('keydown', keyHandler);
+
+                // 点击遮罩取消
+                overlay.addEventListener('click', (e) => {
+                    if (e.target === overlay) {
+                        cleanup();
+                        resolve(false);
+                    }
+                });
+            });
         }
     }
 
