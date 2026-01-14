@@ -1,52 +1,31 @@
 const { app, BrowserWindow } = require('electron');
 const path = require('path');
-const { spawn } = require('child_process');
 
 let mainWindow;
-let serverProcess; // 保存服务进程引用
 
-// 启动 server.js 服务
+// 直接在主进程中启动服务器（不再 spawn 外部 node）
 function startServer() {
   return new Promise((resolve, reject) => {
-    // 启动 server.js，并传入环境变量 ELECTRON_MODE=1（用于禁用浏览器自动打开）
-    serverProcess = spawn('node', [path.join(__dirname, 'server.js')], {
-      stdio: 'pipe', // 捕获输出日志
-      env: { ...process.env, ELECTRON_MODE: '1' } // 传递环境变量
-    });
-
-    // 监听服务输出日志，判断是否启动完成
-    serverProcess.stdout.on('data', (data) => {
-      const output = data.toString();
-      console.log('服务输出：', output);
-      // 匹配 server.js 中启动成功的标志性日志（根据你的 server.js 输出修改）
-      if (output.includes('数据采集系统已启动，访问地址：http://localhost:')) {
-        // 提取端口（默认 3000，也可从日志中解析）
-        const portMatch = output.match(/http:\/\/localhost:(\d+)/);
-        const port = portMatch ? portMatch[1] : 3000;
-        resolve(`http://localhost:${port}`);
-      }
-    });
-
-    // 监听服务错误
-    serverProcess.stderr.on('data', (data) => {
-      console.error('服务错误：', data.toString());
-    });
-
-    // 服务进程退出时的处理
-    serverProcess.on('exit', (code) => {
-      if (!resolveCalled) {
-        reject(new Error(`服务意外退出，代码：${code}`));
-      }
-    });
-
-    // 超时保护（15秒未启动成功则报错）
-    let resolveCalled = false;
-    setTimeout(() => {
-      if (!resolveCalled) {
-        resolveCalled = true;
-        reject(new Error('服务启动超时（15秒）'));
-      }
-    }, 15000);
+    try {
+      // 设置环境变量，禁用浏览器自动打开
+      process.env.ELECTRON_MODE = '1';
+      
+      // 直接 require server.js，在 Electron 内置的 Node 环境中运行
+      // 注意：需要修改 server.js 导出 startServer 或监听端口
+      const PORT = process.env.PORT || 3000;
+      
+      // 动态加载 server.js
+      require(path.join(__dirname, 'server.js'));
+      
+      // 给服务一点启动时间，然后返回地址
+      // 可以根据实际情况调整延时，或改用更可靠的检测方式
+      setTimeout(() => {
+        resolve(`http://localhost:${PORT}`);
+      }, 3000); // 等待3秒让服务启动完成
+      
+    } catch (error) {
+      reject(error);
+    }
   });
 }
 
@@ -59,38 +38,32 @@ async function createWindow() {
 
     // 创建窗口
     mainWindow = new BrowserWindow({
-      width: 1200, // 调整为适合你页面的宽度
-      height: 800, // 调整高度
+      width: 1200,
+      height: 800,
       webPreferences: {
-        contextIsolation: true, // 安全设置（无需 nodeIntegration）
-        sandbox: false // 避免影响服务请求
+        contextIsolation: true,
+        sandbox: false
       }
     });
 
-    // 加载服务地址（如 http://localhost:3000）
+    // 加载服务地址
     mainWindow.loadURL(serverUrl);
 
-    // 窗口关闭时，终止服务进程
+    // 窗口关闭时的处理
     mainWindow.on('closed', () => {
-      if (serverProcess) {
-        serverProcess.kill('SIGINT'); // 发送中断信号，触发 server.js 的优雅关闭
-      }
       mainWindow = null;
     });
   } catch (error) {
     console.error('启动失败：', error.message);
-    app.quit(); // 启动失败则退出应用
+    app.quit();
   }
 }
 
 // 应用就绪后启动
 app.on('ready', createWindow);
 
-// 所有窗口关闭时，确保服务进程退出
+// 所有窗口关闭时退出
 app.on('window-all-closed', () => {
-  if (serverProcess) {
-    serverProcess.kill('SIGINT');
-  }
   if (process.platform !== 'darwin') app.quit();
 });
 
