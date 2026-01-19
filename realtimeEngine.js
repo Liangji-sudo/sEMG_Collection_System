@@ -248,7 +248,21 @@ class RealtimeEngine extends EventEmitter {
     onPromptEnd(promptName, promptIndex) {}
 
     onPrompt(name, stageName, timestamp) {
-        this.pending_prompt = { name, time: timestamp || Date.now(), stageName: stageName || this.currentStageName };
+        const promptTime = timestamp || Date.now();
+        this.pending_prompt = { name, time: promptTime, stageName: stageName || this.currentStageName };
+
+        // 【修复】立即保存 prompt 到 storage，不等待 EMG 数据
+        if (this.stageFileOpen && !this.isClosingStageFile) {
+            this.sendStorageCommand('append', {
+                data: {
+                    prompt_name: name,
+                    prompt_time: promptTime,
+                    prompt_stage: stageName || this.currentStageName
+                }
+            }).catch(err => {
+                console.error('[realtimeEngine] 保存 prompt 失败:', err);
+            });
+        }
     }
     
     // 【新增】Mocap命令处理

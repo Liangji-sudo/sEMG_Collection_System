@@ -97,18 +97,20 @@
             if (templateConfig) {
                 this.maxTrials = templateConfig.trialsPerStage || 10;
                 this.stageTimeout = (templateConfig.stageTimeout || 120) * 1000;
+                this.restBetweenTrials = templateConfig.restBetweenTrials || 1;  // 【新增】试次间隔休息时间
                 this.guideSpeed = templateConfig.guideSpeed || 0.15;
                 this.guideSize = templateConfig.guideSize || 0.15;
                 this.holdDuration = (templateConfig.holdDuration || 1.0) * 1000;  // 转换为毫秒
                 console.log('[ContinualGesture3Animation] 已加载配置:', {
                     maxTrials: this.maxTrials,
                     stageTimeout: this.stageTimeout,
+                    restBetweenTrials: this.restBetweenTrials,  // 【新增】
                     guideSpeed: this.guideSpeed,
                     guideSize: this.guideSize,
                     holdDuration: this.holdDuration
                 });
             }
-            
+
             if (window.CONTINUAL_GESTURE_3_CONFIG?.WHEEL_TASK) {
                 const wt = window.CONTINUAL_GESTURE_3_CONFIG.WHEEL_TASK;
                 this.maxTrials = wt.MAX_TRIALS || this.maxTrials;
@@ -182,12 +184,23 @@
         }
 
         startNewTrial() {
+            console.log('[ContinualGesture3Animation] 开始Trial:', this.trial + 1, '/', this.maxTrials);
+
+            // 【新增】发送 prompt: start
+            if (window.collectionController) {
+                window.collectionController.sendToRealtimeEngine('prompt', {
+                    name: 'start',
+                    stageName: this.currentStage?.name || 'unknown',
+                    trialIndex: this.trial,
+                    timestamp: Date.now()
+                });
+            }
+
             this.guidePosition = 0;
             this.cursorPosition = 0;
             this.isFollowing = false;
             this.holdStartTime = 0;
             this.phase = 'forward';
-            console.log('[ContinualGesture3Animation] 开始Trial:', this.trial + 1, '/', this.maxTrials);
         }
 
         start(stageConfig, onComplete, onTrialComplete, executionParams) {
@@ -210,17 +223,23 @@
             if (executionParams) {
                 if (executionParams.trialsPerStage) this.maxTrials = executionParams.trialsPerStage;
                 if (executionParams.stageTimeout) this.stageTimeout = executionParams.stageTimeout * 1000;
+                if (executionParams.restBetweenTrials !== undefined) {
+                    this.restBetweenTrials = executionParams.restBetweenTrials;  // 【新增】
+                }
                 if (executionParams.guideSpeed) this.guideSpeed = executionParams.guideSpeed;
                 if (executionParams.guideSize) this.guideSize = executionParams.guideSize;
                 if (executionParams.holdDuration) this.holdDuration = executionParams.holdDuration * 1000;
                 console.log('[ContinualGesture3Animation] 使用执行参数:', {
                     maxTrials: this.maxTrials,
                     stageTimeout: this.stageTimeout,
+                    restBetweenTrials: this.restBetweenTrials,  // 【新增】
                     guideSpeed: this.guideSpeed,
                     guideSize: this.guideSize,
                     holdDuration: this.holdDuration
                 });
             }
+
+            console.log('[ContinualGesture3Animation] restBetweenTrials:', this.restBetweenTrials);  // 【新增】
 
             this.reset();
             this.startNewTrial();
@@ -290,19 +309,38 @@
         }
 
         onTrialDone() {
+            // 【新增】发送 prompt: end
+            if (window.collectionController) {
+                window.collectionController.sendToRealtimeEngine('prompt', {
+                    name: 'end',
+                    stageName: this.currentStage?.name || 'unknown',
+                    trialIndex: this.trial,
+                    timestamp: Date.now()
+                });
+            }
+
             this.trial++;
             this.hits++;
-            
+
             console.log(`[ContinualGesture3Animation] Trial ${this.trial}/${this.maxTrials} 完成`);
-            
+
             if (this.onTrialComplete) {
                 this.onTrialComplete(this.trial - 1);
             }
-            
+
             if (this.trial >= this.maxTrials) {
                 setTimeout(() => this.completeStage(), 500);
             } else {
-                setTimeout(() => this.startNewTrial(), 500);
+                // 【修改】使用配置的试次间隔休息时间
+                this.phase = 'rest';
+                const restTime = (this.restBetweenTrials || 1) * 1000;  // 默认1秒
+                console.log(`[ContinualGesture3Animation] 休息 ${restTime/1000} 秒后开始下一个Trial`);
+
+                setTimeout(() => {
+                    if (this.isRunning) {
+                        this.startNewTrial();
+                    }
+                }, restTime);
             }
         }
 

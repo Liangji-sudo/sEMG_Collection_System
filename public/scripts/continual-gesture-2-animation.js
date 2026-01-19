@@ -135,8 +135,9 @@
             if (templateConfig) {
                 this.maxTrials = templateConfig.trialsPerStage || 5;
                 this.stageTimeout = (templateConfig.stageTimeout || 120) * 1000;
+                this.restBetweenTrials = templateConfig.restBetweenTrials || 1;  // 【新增】试次间隔休息时间
                 this.preparationTime = (templateConfig.preparationTime || 3) * 1000;
-                
+
                 // 同心圆动画特有配置
                 if (templateConfig.expandDuration !== undefined) {
                     this.expandDuration = templateConfig.expandDuration * 1000;
@@ -153,10 +154,11 @@
                 if (templateConfig.maxRadius !== undefined) {
                     this.maxRadius = templateConfig.maxRadius;
                 }
-                
+
                 console.log('[ContinualGesture2Animation] 配置加载完成:', {
                     maxTrials: this.maxTrials,
                     stageTimeout: this.stageTimeout,
+                    restBetweenTrials: this.restBetweenTrials,  // 【新增】
                     expandDuration: this.expandDuration,
                     holdDuration: this.holdDuration,
                     contractDuration: this.contractDuration,
@@ -303,6 +305,9 @@
                 if (executionParams.stageTimeout !== undefined) {
                     this.stageTimeout = executionParams.stageTimeout * 1000;
                 }
+                if (executionParams.restBetweenTrials !== undefined) {
+                    this.restBetweenTrials = executionParams.restBetweenTrials;  // 【新增】
+                }
                 if (executionParams.preparationTime !== undefined) {
                     this.preparationTime = executionParams.preparationTime * 1000;
                 }
@@ -322,9 +327,10 @@
                     this.maxRadius = executionParams.maxRadius;
                 }
             }
-            
+
             console.log('[ContinualGesture2Animation] ★★★ 最终参数 ★★★');
             console.log('[ContinualGesture2Animation] maxTrials:', this.maxTrials);
+            console.log('[ContinualGesture2Animation] restBetweenTrials:', this.restBetweenTrials);  // 【新增】
             console.log('[ContinualGesture2Animation] maxRadius:', this.maxRadius);
             console.log('[ContinualGesture2Animation] guideBandWidth:', this.guideBandWidth);
             
@@ -364,6 +370,17 @@
          */
         startTrial() {
             console.log(`[ContinualGesture2Animation] 开始Trial ${this.trial + 1}/${this.maxTrials}`);
+
+            // 【新增】发送 prompt: start
+            if (window.collectionController) {
+                window.collectionController.sendToRealtimeEngine('prompt', {
+                    name: 'start',
+                    stageName: this.currentStage?.name || 'unknown',
+                    trialIndex: this.trial,
+                    timestamp: Date.now()
+                });
+            }
+
             this.phase = 'expand';
             this.phaseStartTime = performance.now();
             this.guideRadius = 0;
@@ -420,6 +437,16 @@
          * 完成当前Trial
          */
         completeTrial() {
+            // 【新增】发送 prompt: end
+            if (window.collectionController) {
+                window.collectionController.sendToRealtimeEngine('prompt', {
+                    name: 'end',
+                    stageName: this.currentStage?.name || 'unknown',
+                    trialIndex: this.trial,
+                    timestamp: Date.now()
+                });
+            }
+
             let accuracy = 0;
             if (this.trackingData.length > 0) {
                 const totalError = this.trackingData.reduce((sum, d) => sum + Math.abs(d.error), 0);
@@ -427,25 +454,29 @@
                 accuracy = Math.max(0, Math.min(1, accuracy));
             }
             this.trialAccuracy.push(accuracy);
-            
+
             console.log(`[ContinualGesture2Animation] Trial ${this.trial + 1} 完成, 精度: ${(accuracy * 100).toFixed(1)}%`);
-            
+
             this.trial++;
-            
+
             if (this.onTrialComplete) {
                 this.onTrialComplete(this.trial - 1);
             }
-            
+
             if (this.trial >= this.maxTrials) {
                 console.log('[ContinualGesture2Animation] 所有Trial完成');
                 this.completeStage();
             } else {
-                this.phase = 'idle';
+                // 【修改】使用配置的试次间隔休息时间
+                this.phase = 'rest';
+                const restTime = (this.restBetweenTrials || 1) * 1000;  // 默认1秒
+                console.log(`[ContinualGesture2Animation] 休息 ${restTime/1000} 秒后开始下一个Trial`);
+
                 setTimeout(() => {
                     if (this.isRunning) {
                         this.startTrial();
                     }
-                }, 500);
+                }, restTime);
             }
         }
 

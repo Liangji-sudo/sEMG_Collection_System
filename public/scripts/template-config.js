@@ -115,6 +115,7 @@
                 trialsPerStage: 5,             // 每个Stage的动作次数（扩张+收缩为一次）
                 stageTimeout: 120,             // Stage超时时间（秒）
                 preparationTime: 3.0,          // Stage开始前准备时间（秒）
+                restBetweenTrials: 1,          // 【新增】试次间隔休息时间（秒）
                 expandDuration: 3.0,           // 扩张阶段时长（秒）
                 holdDuration: 1.0,             // 保持阶段时长（秒）
                 contractDuration: 3.0,         // 收缩阶段时长（秒）
@@ -126,6 +127,7 @@
                 trialsPerStage: 5,             // 每个Stage的动作次数
                 stageTimeout: 120,             // Stage超时时间（秒）
                 preparationTime: 3.0,          // Stage开始前准备时间（秒）
+                restBetweenTrials: 1,          // 【新增】试次间隔休息时间（秒）
                 expandDuration: 3.0,           // 扩张阶段时长（秒）
                 holdDuration: 1.0,             // 保持阶段时长（秒）
                 contractDuration: 3.0,         // 收缩阶段时长（秒）
@@ -136,6 +138,7 @@
             continual_gesture_3: {
                 trialsPerStage: 10,            // 每个Stage的试次数（完整往返次数）
                 stageTimeout: 120,             // Stage超时时间（秒）
+                restBetweenTrials: 1,          // 【新增】试次间隔休息时间（秒）
                 guideSpeed: 0.15,              // 引导速度（每秒移动的比例，0.1-0.5）
                 guideSize: 0.15,               // 引导区域大小（占半圆弧比例，0.1-0.3）
                 holdDuration: 1.0,             // 端点停留时间（秒）
@@ -1181,6 +1184,13 @@
                             <span class="param-unit">秒</span>
                         </div>
                         <div class="config-param-item">
+                            <label>试次间隔休息时间</label>
+                            <input type="number" data-task="${task.id}" data-param="restBetweenTrials"
+                                   value="${taskExec.restBetweenTrials || 1}" min="0" max="10" step="0.5">
+                            <span class="param-unit">秒</span>
+                            <span class="param-hint">（每次动作之间的休息时间）</span>
+                        </div>
+                        <div class="config-param-item">
                             <label>扩张阶段时长</label>
                             <input type="number" data-task="${task.id}" data-param="expandDuration"
                                    value="${taskExec.expandDuration || 3.0}" min="1" max="10" step="0.5">
@@ -1231,6 +1241,13 @@
                             <input type="number" data-task="${task.id}" data-param="stageTimeout"
                                    value="${taskExec.stageTimeout || 120}" min="30" max="600" step="10">
                             <span class="param-unit">秒</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label>试次间隔休息时间</label>
+                            <input type="number" data-task="${task.id}" data-param="restBetweenTrials"
+                                   value="${taskExec.restBetweenTrials || 1}" min="0" max="10" step="0.5">
+                            <span class="param-unit">秒</span>
+                            <span class="param-hint">（每次动作之间的休息时间）</span>
                         </div>
                         <div class="config-param-item">
                             <label>引导速度</label>
