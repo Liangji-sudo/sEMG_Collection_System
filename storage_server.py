@@ -1,11 +1,11 @@
 """
-storage_server.py - HDF5数据存储服务 (v4.1)
+storage_server.py - HDF5数据存储服务 (v4.2)
 
 新特性:
 1. 多级目录结构存储（增加受试者编号层级）
 2. 目录层级: task -> category1 -> category2 -> category4 -> user_id
-3. 文件命名: [受试者编号]_[stage]_[年月日]_[时分秒].h5
-4. 存储完整的metadata（受试者信息、分类信息、stage信息）
+3. 文件命名: [受试者编号]_session{N}_[stage]_[年月日]_[时分秒].h5
+4. 存储完整的metadata（受试者信息、分类信息、stage信息、session信息）
 
 目录结构示例:
 storage/
@@ -13,16 +13,17 @@ storage/
 │   ├── static/                    # 大类 (category1)
 │   │   ├── sitting/               # 大场景 (category2)
 │   │   │   ├── normal/            # 人群 (category4)
-│   │   │   │   ├── S001/          # 受试者编号 (user_id) ← 新增层级
-│   │   │   │   │   ├── S001_palm_up_20260105_143000.h5
-│   │   │   │   │   ├── S001_palm_inward_20260105_143500.h5
-│   │   │   │   │   └── S001_hand_on_knee_20260105_144000.h5
+│   │   │   │   ├── S001/          # 受试者编号 (user_id)
+│   │   │   │   │   ├── S001_session1_palm_up_20260105_143000.h5
+│   │   │   │   │   ├── S001_session1_palm_inward_20260105_143500.h5
+│   │   │   │   │   ├── S001_session2_palm_up_20260105_150000.h5
+│   │   │   │   │   └── S001_session2_palm_inward_20260105_150500.h5
 │   │   │   │   └── S002/
-│   │   │   │       ├── S002_palm_up_20260105_150000.h5
+│   │   │   │       ├── S002_session1_palm_up_20260105_160000.h5
 │   │   │   │       └── ...
 │   │   │   └── exercise/
 │   │   │       └── S001/
-│   │   │           └── S001_palm_up_20260105_160000.h5
+│   │   │           └── S001_session1_palm_up_20260105_170000.h5
 │   │   └── lying/
 │   │       └── ...
 │   └── dynamic/
@@ -104,6 +105,11 @@ class HDF5StorageServer:
         self.current_category4 = None
         self.is_collecting = False
         
+        # 【新增】Session信息
+        self.current_session_index = 0    # session索引（从0开始）
+        self.current_session_number = 1   # session编号（从1开始）
+        self.session_count = 3            # session总数
+        
         # 统计信息
         self.stats = {
             "emg1_frames": 0,
@@ -158,10 +164,10 @@ class HDF5StorageServer:
         
         return dir_path
     
-    def generate_filename(self, dir_path, user_id, stage_name):
+    def generate_filename(self, dir_path, user_id, stage_name, session_number):
         """
-        生成文件名: {user_id}_{stage_name}_{YYYYMMDD}_{HHMMSS}.h5
-        例如: S001_palm_up_20260105_143000.h5
+        生成文件名: {user_id}_session{N}_{stage_name}_{YYYYMMDD}_{HHMMSS}.h5
+        例如: S001_session2_palm_up_20260105_143000.h5
         """
         now = datetime.now()
         date_str = now.strftime("%Y%m%d")
@@ -171,8 +177,8 @@ class HDF5StorageServer:
         safe_user_id = self._sanitize_name(user_id)
         safe_stage_name = self._sanitize_name(stage_name)
         
-        # 文件名包含: 受试者编号_stage_日期_时间
-        filename = f"{safe_user_id}_{safe_stage_name}_{date_str}_{time_str}.h5"
+        # 文件名包含: 受试者编号_session{N}_stage_日期_时间
+        filename = f"{safe_user_id}_session{session_number}_{safe_stage_name}_{date_str}_{time_str}.h5"
         return os.path.join(dir_path, filename)
     
     def create_file(self, params):
@@ -188,6 +194,11 @@ class HDF5StorageServer:
             subject_info = params.get("subject_info", {})
             template_name = params.get("template_name", "default")
             
+            # 【新增】提取Session参数
+            session_index = params.get("session_index", 0)
+            session_number = params.get("session_number", 1)
+            session_count = params.get("session_count", 3)
+            
             # 保存当前信息
             self.current_task_id = task_id
             self.current_user_id = user_id
@@ -195,6 +206,13 @@ class HDF5StorageServer:
             self.current_category1 = category1
             self.current_category2 = category2
             self.current_category4 = category4
+            
+            # 【新增】保存Session信息
+            self.current_session_index = session_index
+            self.current_session_number = session_number
+            self.session_count = session_count
+            
+            debug_log(f"Session信息: session{session_number}/{session_count} (索引: {session_index})")
             
             # 如果有已打开的文件，先关闭
             if self.f:
@@ -204,8 +222,8 @@ class HDF5StorageServer:
             # 生成多级目录路径（包含user_id层级）
             dir_path = self.generate_directory_path(task_id, category1, category2, category4, user_id)
             
-            # 生成文件名（包含stage_name）
-            self.file_path = self.generate_filename(dir_path, user_id, stage_name)
+            # 生成文件名（包含session_number和stage_name）
+            self.file_path = self.generate_filename(dir_path, user_id, stage_name, session_number)
             
             # 如果文件已存在，添加序号
             base_path = self.file_path
@@ -229,6 +247,11 @@ class HDF5StorageServer:
             self.f.attrs["category4"] = category4
             self.f.attrs["template_name"] = template_name
             self.f.attrs["created_at"] = datetime.now().isoformat()
+            
+            # 【新增】保存Session信息到HDF5属性
+            self.f.attrs["session_index"] = session_index
+            self.f.attrs["session_number"] = session_number
+            self.f.attrs["session_count"] = session_count
             
             # ===================== 创建受试者信息组 =====================
             if subject_info:
@@ -497,6 +520,10 @@ class HDF5StorageServer:
             "category2": self.current_category2,
             "category4": self.current_category4,
             "is_collecting": self.is_collecting,
+            # 【新增】Session信息
+            "session_index": self.current_session_index,
+            "session_number": self.current_session_number,
+            "session_count": self.session_count,
             **self.stats
         }
     
@@ -535,9 +562,9 @@ class HDF5StorageServer:
     
     def run(self):
         """启动服务，循环处理客户端请求"""
-        debug_log("🚀 存储服务开始运行 (v4.1 - 包含受试者层级)...")
+        debug_log("🚀 存储服务开始运行 (v4.2 - 包含Session信息)...")
         debug_log(f"   目录结构: task/category1/category2/category4/user_id/")
-        debug_log(f"   文件命名: [user_id]_[stage]_[date]_[time].h5")
+        debug_log(f"   文件命名: [user_id]_session{{N}}_[stage]_[date]_[time].h5")
         
         try:
             while True:
@@ -580,7 +607,7 @@ class HDF5StorageServer:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='HDF5 Storage Server v4.1 (包含受试者层级)')
+    parser = argparse.ArgumentParser(description='HDF5 Storage Server v4.2 (包含Session信息)')
     parser.add_argument('--storage_dir', type=str, default='./storage',
                         help='HDF5文件存储目录')
     parser.add_argument('--port', type=int, default=5555,

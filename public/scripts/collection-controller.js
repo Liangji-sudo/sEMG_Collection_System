@@ -18,6 +18,11 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             
             this.collectionConfig = null;
             this.currentTaskId = 'discrete_gesture';
+            
+            // Session相关状态
+            this.sessionCount = 3;           // session总数
+            this.currentSessionIndex = 0;    // 当前session索引
+            
             this.stages = [];
             this.currentStageIndex = 0;
             this.gestures = [];
@@ -74,6 +79,19 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
         bindEvents() {
             console.log('[Collection] bindEvents() 开始');
+            
+            // Session选择事件
+            const sessionSelect = document.getElementById('sessionSwitchSelect');
+            if (sessionSelect) {
+                sessionSelect.addEventListener('change', (e) => {
+                    if (!this._isRunning) {
+                        this.switchSession(parseInt(e.target.value));
+                    } else {
+                        e.target.value = this.currentSessionIndex;
+                        this.showToast('采集进行中，无法切换Session', 'warning');
+                    }
+                });
+            }
             
             const stageSelect = document.getElementById('stageSwitchSelect');
             if (stageSelect) {
@@ -142,6 +160,14 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 } else {
                     this.stages = (template.category3 || []).filter(s => s.enabled);
                 }
+                
+                // 加载Session数量（优先从collectionConfig，其次从template）
+                if (this.collectionConfig.sessionConfig?.count) {
+                    this.sessionCount = this.collectionConfig.sessionConfig.count;
+                } else {
+                    this.sessionCount = template.sessionConfig?.count || 3;
+                }
+                console.log('[Collection] Session数量:', this.sessionCount);
                 
                 this.gestures = (template.gestures?.discrete || []).filter(g => g.enabled);
                 
@@ -242,6 +268,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this.gestures = template.gestures.discrete;
             this.executionParams = template.execution;
             this.currentExecutionParams = this.executionParams[this.currentTaskId] || this.executionParams.discrete_gesture;
+            // 加载默认Session数量
+            this.sessionCount = 3;
         }
 
         // ==================== 页面显示 ====================
@@ -269,6 +297,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
         updateUI() {
             this.updateTaskHeader();
+            this.updateSessionSelect();
             this.updateStageSelect();
             this.updateGestureList();
             this.updateControlButtons(false);
@@ -303,6 +332,27 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             const template = this.getTemplate();
             const item = template[category]?.find(c => c.id === id);
             return item?.name || id || '未知';
+        }
+
+        /**
+         * 更新Session选择器
+         */
+        updateSessionSelect() {
+            const select = document.getElementById('sessionSwitchSelect');
+            if (!select) return;
+
+            select.innerHTML = '';
+            for (let i = 0; i < this.sessionCount; i++) {
+                const option = document.createElement('option');
+                option.value = i;
+                option.textContent = `Session ${i + 1}`;
+                if (i === this.currentSessionIndex) {
+                    option.selected = true;
+                }
+                select.appendChild(option);
+            }
+            
+            console.log('[Collection] Session选择器已更新, 当前Session:', this.currentSessionIndex + 1);
         }
 
         updateStageSelect() {
@@ -350,8 +400,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             
             html += `
                 <div class="gesture-progress-summary" style="font-size: 12px; padding: 5px 8px; margin-bottom: 5px;">
-                    <span>进度: ${this.currentGestureIndex}/${this.gestures.length} 手势</span>
+                    <span>Session: ${this.currentSessionIndex + 1}/${this.sessionCount}</span>
                     <span>Stage: ${this.currentStageIndex + 1}/${this.stages.length}</span>
+                    <span>手势: ${this.currentGestureIndex}/${this.gestures.length}</span>
                 </div>
             `;
             
@@ -412,11 +463,12 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             html += `
                 <div class="gesture-progress-summary" style="font-size: 12px; padding: 8px; margin-bottom: 8px; background: #f0f9ff; border-radius: 6px;">
                     <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                        <span><i class="fas fa-sync-alt"></i> Session ${this.currentSessionIndex + 1}/${this.sessionCount}</span>
                         <span><i class="fas fa-layer-group"></i> Stage ${this.currentStageIndex + 1}/${this.stages.length}</span>
-                        <span style="font-weight: 600; color: #1e40af;">${currentTrial}/${trialsPerStage}</span>
                     </div>
-                    <div style="font-size: 11px; color: #6b7280;">
-                        目标: ${trialsPerStage} 次
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                        <span>试次进度:</span>
+                        <span style="font-weight: 600; color: #1e40af;">${currentTrial}/${trialsPerStage}</span>
                     </div>
                 </div>
             `;
@@ -516,6 +568,55 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             return { name: taskNames[this.currentTaskId] || this.currentTaskId };
         }
 
+        // ==================== Session切换 ====================
+
+        /**
+         * 切换Session
+         */
+        switchSession(sessionIndex) {
+            if (sessionIndex < 0 || sessionIndex >= this.sessionCount) return;
+            
+            console.log('[Collection] 切换Session:', sessionIndex + 1);
+            
+            this.currentSessionIndex = sessionIndex;
+            // 切换Session时重置Stage为第一个
+            this.currentStageIndex = 0;
+            this.currentGestureIndex = 0;
+            this.gestureRepeatCount = 0;
+            this.continualTrialCount = 0;
+            
+            // 重置动画模块的试次计数
+            this.resetAnimationModules();
+            
+            this.updateSessionSelect();
+            this.updateStageSelect();
+            this.updateGestureList();
+            this.updateNextStageButton();
+            this.resetDisplay();
+            
+            // 发送session变更消息
+            this.sendToRealtimeEngine('session_change', {
+                sessionIndex: sessionIndex,
+                sessionNumber: sessionIndex + 1
+            });
+            
+            this.showToast(`已切换到 Session ${sessionIndex + 1}，请重新穿戴采集设备`, 'info');
+        }
+
+        /**
+         * 获取当前Session索引
+         */
+        getCurrentSessionIndex() {
+            return this.currentSessionIndex;
+        }
+
+        /**
+         * 获取Session总数
+         */
+        getSessionCount() {
+            return this.sessionCount;
+        }
+
         // ==================== Stage切换 ====================
 
         /**
@@ -541,7 +642,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             
             this.sendToRealtimeEngine('stage_change', {
                 stageIndex: stageIndex,
-                stageName: this.stages[stageIndex]?.name || this.stages[stageIndex]?.id
+                stageName: this.stages[stageIndex]?.name || this.stages[stageIndex]?.id,
+                sessionIndex: this.currentSessionIndex,
+                sessionNumber: this.currentSessionIndex + 1
             });
         }
 
@@ -578,6 +681,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             
             this.updateControlButtons(true);
             
+            // 禁用Session和Stage选择器
+            const sessionSelect = document.getElementById('sessionSwitchSelect');
+            if (sessionSelect) sessionSelect.disabled = true;
             const stageSelect = document.getElementById('stageSwitchSelect');
             if (stageSelect) stageSelect.disabled = true;
             
@@ -592,8 +698,14 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             
             this.sendToRealtimeEngine('collection_start', {
                 taskId: this.currentTaskId,
+                sessionIndex: this.currentSessionIndex,
+                sessionNumber: this.currentSessionIndex + 1,
+                sessionCount: this.sessionCount,
                 stageName: currentStage?.name || currentStage?.id || 'stage_1',
+                stageIndex: this.currentStageIndex,
                 userId: userId,
+                // 文件名建议格式: userId_session{N}_{stageName}_{timestamp}
+                suggestedFileName: `${userId}_session${this.currentSessionIndex + 1}_${currentStage?.name || currentStage?.id || 'stage'}`,
                 config: this.collectionConfig
             });
             
@@ -638,6 +750,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 window.animationController.stop();
             }
             
+            // 重新启用Session和Stage选择器
+            const sessionSelect = document.getElementById('sessionSwitchSelect');
+            if (sessionSelect) sessionSelect.disabled = false;
             const stageSelect = document.getElementById('stageSwitchSelect');
             if (stageSelect) stageSelect.disabled = false;
             
@@ -861,6 +976,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             
             this._isRunning = false;
             
+            // 重新启用Session和Stage选择器
+            const sessionSelect = document.getElementById('sessionSwitchSelect');
+            if (sessionSelect) sessionSelect.disabled = false;
             const stageSelect = document.getElementById('stageSwitchSelect');
             if (stageSelect) stageSelect.disabled = false;
             
@@ -1032,6 +1150,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             
             this._isRunning = false;
             
+            // 重新启用Session和Stage选择器
+            const sessionSelect = document.getElementById('sessionSwitchSelect');
+            if (sessionSelect) sessionSelect.disabled = false;
             const stageSelect = document.getElementById('stageSwitchSelect');
             if (stageSelect) stageSelect.disabled = false;
             

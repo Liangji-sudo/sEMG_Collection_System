@@ -67,6 +67,11 @@ class RealtimeEngine extends EventEmitter {
         this.stageFileOpen = false;  // 当前Stage是否有打开的文件
         this.stage_start_time = 0;
         
+        // ===== Session状态 =====
+        this.currentSessionIndex = 0;    // 当前session索引（从0开始）
+        this.currentSessionNumber = 1;   // 当前session编号（从1开始）
+        this.sessionCount = 3;           // session总数
+        
         // 【新增】防止重复关闭的标志
         this.isClosingStageFile = false;
 
@@ -162,6 +167,9 @@ class RealtimeEngine extends EventEmitter {
                 case 'collection_stop':
                     this.onCollectionStop(data.completed);
                     break;
+                case 'session_change':
+                    this.onSessionChange(data.sessionIndex, data.sessionNumber);
+                    break;
                 case 'stage_change':
                     this.onStageChange(data.stageIndex, data.stageName);
                     break;
@@ -196,13 +204,22 @@ class RealtimeEngine extends EventEmitter {
         this.currentTaskId = taskId;
     }
 
+    onSessionChange(sessionIndex, sessionNumber) {
+        console.log(`[realtimeEngine] ========== Session切换 ==========`);
+        console.log(`[realtimeEngine] Session: ${sessionNumber} (索引: ${sessionIndex})`);
+        
+        this.currentSessionIndex = sessionIndex ?? 0;
+        this.currentSessionNumber = sessionNumber ?? (sessionIndex + 1);
+    }
+
     async onCollectionStart(data) {
         console.log(`[realtimeEngine] ========== 开始采集会话 ==========`);
         
-        const { taskId, stageName, userId, config } = data;
+        const { taskId, stageName, userId, config, sessionIndex, sessionNumber, sessionCount } = data;
         
         console.log(`[realtimeEngine] 任务: ${taskId}`);
         console.log(`[realtimeEngine] 用户ID: ${userId}`);
+        console.log(`[realtimeEngine] Session: ${sessionNumber}/${sessionCount} (索引: ${sessionIndex})`);
         console.log(`[realtimeEngine] 配置:`, config);
 
         this.currentTaskId = taskId;
@@ -211,6 +228,11 @@ class RealtimeEngine extends EventEmitter {
         this.isCollecting = true;
         this.collectionPaused = false;
         this.currentStageName = stageName;
+        
+        // 保存Session信息
+        this.currentSessionIndex = sessionIndex ?? 0;
+        this.currentSessionNumber = sessionNumber ?? 1;
+        this.sessionCount = sessionCount ?? 3;
         
         // 自动开始第一个Stage的文件
         if (stageName) {
@@ -311,10 +333,15 @@ class RealtimeEngine extends EventEmitter {
                 category2: config.category2 || 'default', 
                 category4: config.category4 || 'default',
                 subject_info: this.currentUser || {},
-                template_name: config.templateName || 'default'
+                template_name: config.templateName || 'default',
+                // 【新增】Session信息
+                session_index: this.currentSessionIndex,
+                session_number: this.currentSessionNumber,
+                session_count: this.sessionCount
             };
 
             console.log(`[realtimeEngine] 创建Stage文件:`, createParams);
+            console.log(`[realtimeEngine] Session信息: session${this.currentSessionNumber} (索引: ${this.currentSessionIndex})`);
 
             const response = await this.sendStorageCommand('create', createParams);
             

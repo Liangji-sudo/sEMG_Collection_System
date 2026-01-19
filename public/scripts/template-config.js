@@ -18,9 +18,15 @@
     // ==================== 默认配置模板 ====================
     const DEFAULT_TEMPLATE = {
         templateName: '标准采集模板',
-        version: '2.0',
+        version: '2.1',
         created: new Date().toISOString().split('T')[0],
         lastModified: new Date().toISOString(),
+
+        // Session配置（穿戴次数）
+        sessionConfig: {
+            count: 3,           // session数量（即穿戴次数）
+            description: '每个Session代表一次设备穿戴，受试者需要摘下重新穿戴采集设备'
+        },
 
         // 分类标签（可自定义名称）
         categoryLabels: {
@@ -221,6 +227,12 @@
             if (!this.currentTemplate.subjectFields || !Array.isArray(this.currentTemplate.subjectFields)) {
                 console.log('[TemplateConfig] 补充缺失的 subjectFields');
                 this.currentTemplate.subjectFields = DEFAULT_TEMPLATE.subjectFields.map(f => ({...f}));
+            }
+            
+            // 检查并补充 sessionConfig（v2.1新增）
+            if (!this.currentTemplate.sessionConfig) {
+                console.log('[TemplateConfig] 补充缺失的 sessionConfig');
+                this.currentTemplate.sessionConfig = JSON.parse(JSON.stringify(DEFAULT_TEMPLATE.sessionConfig));
             }
             
             // 检查并补充 categoryLabels
@@ -504,6 +516,24 @@
             const template = this.currentTemplate;
             
             container.innerHTML = `
+                <!-- Session配置 -->
+                <div class="config-section">
+                    <div class="config-section-header">
+                        <h3><i class="fa fa-sync-alt"></i> Session配置（穿戴次数）</h3>
+                    </div>
+                    <div class="session-config-block">
+                        <p class="config-hint" style="margin-bottom: 12px;">
+                            ${template.sessionConfig?.description || '每个Session代表一次设备穿戴，受试者需要摘下重新穿戴采集设备'}
+                        </p>
+                        <div class="session-count-input-group">
+                            <label for="sessionCountInput">Session数量：</label>
+                            <input type="number" id="sessionCountInput" class="session-count-input" 
+                                   value="${template.sessionConfig?.count || 3}" min="1" max="20" step="1">
+                            <span class="session-count-hint">（1-20之间）</span>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- 采集任务及手势库 -->
                 <div class="config-section">
                     <div class="config-section-header">
@@ -523,12 +553,13 @@
                         <div class="task-gestures-grid" id="discreteGesturesGrid">
                             ${template.gestures.discrete.map((gesture, index) => `
                                 <div class="gesture-chip ${gesture.enabled ? 'enabled' : 'disabled'}" 
-                                     data-gesture-type="discrete" data-index="${index}">
+                                     data-gesture-type="discrete" data-index="${index}"
+                                     title="点击${gesture.enabled ? '禁用' : '启用'}此手势">
+                                    <span class="gesture-chip-toggle-indicator">
+                                        <i class="fa ${gesture.enabled ? 'fa-check-circle' : 'fa-circle-o'}"></i>
+                                    </span>
                                     <span class="gesture-chip-icon">${gesture.icon}</span>
                                     <span class="gesture-chip-name">${gesture.name}</span>
-                                    <button class="gesture-chip-toggle" title="${gesture.enabled ? '点击禁用' : '点击启用'}">
-                                        <i class="fa ${gesture.enabled ? 'fa-check-circle' : 'fa-circle-o'}"></i>
-                                    </button>
                                 </div>
                             `).join('')}
                             <button class="gesture-chip add-gesture-chip" data-gesture-type="discrete">
@@ -684,6 +715,25 @@
          * 绑定分类配置事件
          */
         bindCategoryEvents(container) {
+            // Session数量变化
+            const sessionCountInput = container.querySelector('#sessionCountInput');
+            if (sessionCountInput) {
+                sessionCountInput.addEventListener('change', (e) => {
+                    const count = parseInt(e.target.value);
+                    if (count >= 1 && count <= 20) {
+                        if (!this.currentTemplate.sessionConfig) {
+                            this.currentTemplate.sessionConfig = { count: 3, description: '' };
+                        }
+                        this.currentTemplate.sessionConfig.count = count;
+                        this.isDirty = true;
+                        console.log('[TemplateConfig] Session数量已更新为:', count);
+                    } else {
+                        e.target.value = this.currentTemplate.sessionConfig?.count || 3;
+                        this.showToast('Session数量必须在1-20之间', 'warning');
+                    }
+                });
+            }
+
             // 复选框变化
             container.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
                 checkbox.addEventListener('change', (e) => {
@@ -746,20 +796,23 @@
 
             // ========== 手势相关事件 ==========
             
-            // 手势卡片点击切换启用状态
+            // 手势卡片点击切换启用状态 - 整个卡片都可以点击
             container.querySelectorAll('.gesture-chip:not(.add-gesture-chip)').forEach(chip => {
                 chip.addEventListener('click', (e) => {
-                    // 如果点击的是删除按钮区域，不处理
-                    if (e.target.closest('.gesture-chip-toggle')) {
-                        const gestureType = chip.dataset.gestureType;
-                        const index = parseInt(chip.dataset.index);
+                    const gestureType = chip.dataset.gestureType;
+                    const index = parseInt(chip.dataset.index);
+                    
+                    if (gestureType === 'discrete') {
+                        this.currentTemplate.gestures.discrete[index].enabled = 
+                            !this.currentTemplate.gestures.discrete[index].enabled;
+                        this.isDirty = true;
                         
-                        if (gestureType === 'discrete') {
-                            this.currentTemplate.gestures.discrete[index].enabled = 
-                                !this.currentTemplate.gestures.discrete[index].enabled;
-                            this.isDirty = true;
+                        // 添加点击反馈动画
+                        chip.style.transform = 'scale(0.95)';
+                        setTimeout(() => {
+                            chip.style.transform = '';
                             this.renderCategoriesTab();
-                        }
+                        }, 100);
                     }
                 });
             });

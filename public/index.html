@@ -927,6 +927,98 @@
             cursor: not-allowed;
         }
 
+        /* Session选择器样式 */
+        .session-switch-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-right: 20px;
+            padding-right: 20px;
+            border-right: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .session-switch-container label {
+            font-size: 12px;
+            opacity: 0.9;
+        }
+
+        .session-switch-select {
+            padding: 8px 32px 8px 12px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 8px;
+            background: rgba(255,255,255,0.15);
+            color: white;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            outline: none;
+            appearance: none;
+            -webkit-appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='white' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            min-width: 120px;
+        }
+
+        .session-switch-select:hover {
+            background: rgba(255,255,255,0.25);
+            border-color: rgba(255,255,255,0.5);
+        }
+
+        .session-switch-select:focus {
+            border-color: white;
+        }
+
+        .session-switch-select option {
+            background: #1e40af;
+            color: white;
+        }
+
+        .session-switch-select:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Session配置块样式（后台页面） */
+        .session-config-block {
+            padding: 15px;
+            background: #f8fafc;
+            border-radius: 8px;
+            border: 1px solid #e5e7eb;
+        }
+
+        .session-count-input-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .session-count-input-group label {
+            font-size: 13px;
+            font-weight: 500;
+            color: #374151;
+        }
+
+        .session-count-input {
+            width: 80px;
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 14px;
+            text-align: center;
+        }
+
+        .session-count-input:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        .session-count-hint {
+            font-size: 12px;
+            color: #6b7280;
+        }
+
         /* 保留旧的task-btn样式以防其他地方使用 */
         .task-btn {
             flex: 1;
@@ -2800,51 +2892,98 @@
         .gesture-chip {
             display: flex;
             align-items: center;
-            gap: 6px;
-            padding: 6px 10px;
+            gap: 8px;
+            padding: 10px 14px;
             background: white;
             border: 2px solid #e5e7eb;
-            border-radius: 20px;
-            font-size: 12px;
+            border-radius: 24px;
+            font-size: 13px;
             cursor: pointer;
             transition: all 0.2s;
+            min-height: 44px;
+            user-select: none;
         }
 
         .gesture-chip:hover {
             border-color: #3b82f6;
+            background: #f0f7ff;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.15);
+        }
+
+        .gesture-chip:active {
+            transform: scale(0.98);
         }
 
         .gesture-chip.enabled {
-            background: rgba(16, 185, 129, 0.1);
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(16, 185, 129, 0.08) 100%);
             border-color: #10b981;
+            box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2);
+        }
+
+        .gesture-chip.enabled:hover {
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.25) 0%, rgba(16, 185, 129, 0.15) 100%);
+            border-color: #059669;
         }
 
         .gesture-chip.disabled {
-            opacity: 0.5;
+            opacity: 0.6;
+            background: #f9fafb;
+        }
+
+        .gesture-chip.disabled:hover {
+            opacity: 0.8;
             background: #f3f4f6;
         }
 
+        .gesture-chip-toggle-indicator {
+            font-size: 16px;
+            color: #d1d5db;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 20px;
+            height: 20px;
+            transition: all 0.2s;
+        }
+
+        .gesture-chip.enabled .gesture-chip-toggle-indicator {
+            color: #10b981;
+        }
+
+        .gesture-chip:hover .gesture-chip-toggle-indicator {
+            color: #3b82f6;
+        }
+
         .gesture-chip-icon {
-            font-size: 14px;
+            font-size: 18px;
+            line-height: 1;
         }
 
         .gesture-chip-name {
             color: #374151;
-            max-width: 80px;
+            max-width: 100px;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+            font-weight: 500;
         }
 
         .gesture-chip-toggle {
             background: none;
             border: none;
-            padding: 2px;
+            padding: 4px 6px;
+            margin: -4px -6px -4px 4px;
             cursor: pointer;
             color: #9ca3af;
-            font-size: 12px;
+            font-size: 18px;
             display: flex;
             align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            transition: all 0.2s;
+            min-width: 28px;
+            min-height: 28px;
         }
 
         .gesture-chip.enabled .gesture-chip-toggle {
@@ -2853,12 +2992,14 @@
 
         .gesture-chip-toggle:hover {
             color: #3b82f6;
+            background: rgba(59, 130, 246, 0.1);
         }
 
         .add-gesture-chip {
             border-style: dashed;
             color: #9ca3af;
             background: transparent;
+            min-height: 44px;
         }
 
         .add-gesture-chip:hover {
@@ -4450,12 +4591,22 @@
                         <h2><i class="fas fa-tasks"></i> <span id="currentTaskName">离散手势采集</span></h2>
                         <span class="task-config-badge" id="taskConfigBadge">静态 · 坐姿 · 正常状态</span>
                     </div>
-                    <!-- Stage切换下拉菜单 -->
-                    <div class="stage-switch-container">
-                        <label>当前Stage:</label>
-                        <select id="stageSwitchSelect" class="stage-switch-select">
-                            <!-- 由JS动态填充 -->
-                        </select>
+                    <!-- Session和Stage切换下拉菜单 -->
+                    <div style="display: flex; align-items: center;">
+                        <!-- Session切换下拉菜单 -->
+                        <div class="session-switch-container">
+                            <label>当前Session:</label>
+                            <select id="sessionSwitchSelect" class="session-switch-select">
+                                <!-- 由JS动态填充 -->
+                            </select>
+                        </div>
+                        <!-- Stage切换下拉菜单 -->
+                        <div class="stage-switch-container">
+                            <label>当前Stage:</label>
+                            <select id="stageSwitchSelect" class="stage-switch-select">
+                                <!-- 由JS动态填充 -->
+                            </select>
+                        </div>
                     </div>
                 </div>
 

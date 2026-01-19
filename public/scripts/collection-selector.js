@@ -550,6 +550,8 @@
                 category4: getNameById('category4', this.selections.category4),
                 // category3 不需要选择，从模板中获取全部启用的子场景
                 category3List: (this.template.category3 || []).filter(c => c.enabled),
+                // Session配置
+                sessionConfig: this.template.sessionConfig || { count: 3 },
                 subject: this.selections.subject,
                 templateName: this.template.templateName,
                 timestamp: new Date().toISOString()
