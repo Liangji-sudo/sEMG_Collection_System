@@ -9,7 +9,7 @@
  * 5. 与采集控制器协同工作
  * 
  * 选择流程：
- * - 分类0：采集任务（离散手势/连续手势1/2）
+ * - 分类0：采集任务（离散手势/连续手势1/2/3）
  * - 分类1：大类（静态/动态采集）
  * - 分类2：大场景（坐姿/卧姿）
  * - 【跳过】分类3：子场景（不选择，按顺序执行）
@@ -161,7 +161,8 @@
                 tasks: [
                     { id: 'discrete_gesture', name: '离散手势采集', enabled: true },
                     { id: 'continual_gesture_1', name: '连续手势采集1', enabled: true },
-                    { id: 'continual_gesture_2', name: '连续手势采集2', enabled: true }
+                    { id: 'continual_gesture_2', name: '连续手势采集2', enabled: true },
+                    { id: 'continual_gesture_3', name: '连续手势采集3', enabled: true }
                 ],
                 category1: [
                     { id: 'static', name: '静态采集', enabled: true },
@@ -276,6 +277,7 @@
                 'discrete_gesture': '<i class="fas fa-hand-paper"></i>',
                 'continual_gesture_1': '<i class="fas fa-hand-point-up"></i>',
                 'continual_gesture_2': '<i class="fas fa-hand-peace"></i>',
+                'continual_gesture_3': '<i class="fas fa-gamepad"></i>',
                 'static': '<i class="fas fa-pause-circle"></i>',
                 'dynamic': '<i class="fas fa-running"></i>',
                 'sitting': '<i class="fas fa-chair"></i>',
@@ -552,6 +554,8 @@
                 category3List: (this.template.category3 || []).filter(c => c.enabled),
                 // Session配置
                 sessionConfig: this.template.sessionConfig || { count: 3 },
+                // 【关键】保存执行参数，确保采集控制器能获取到最新配置
+                execution: this.template.execution,
                 subject: this.selections.subject,
                 templateName: this.template.templateName,
                 timestamp: new Date().toISOString()
@@ -560,6 +564,7 @@
             localStorage.setItem('emg_current_collection_config', JSON.stringify(config));
 
             console.log('[CollectionSelector] 采集配置已保存:', config);
+            console.log('[CollectionSelector] execution参数:', config.execution);
             console.log('[CollectionSelector] 目录结构将为:', 
                 `${config.task}/${config.category1}/${config.category2}/${config.category4}/`);
 
@@ -581,7 +586,7 @@
                 
                 // 切换任务类型
                 if (window.collectionController) {
-                    const taskMap = { 'discrete_gesture': 'discrete', 'continual_gesture_1': 'continuous1', 'continual_gesture_2': 'continuous2' };
+                    const taskMap = { 'discrete_gesture': 'discrete', 'continual_gesture_1': 'continuous1', 'continual_gesture_2': 'continuous2', 'continual_gesture_3': 'continuous3' };
                     window.collectionController.selectTask(taskMap[this.selections.task] || 'discrete');
                 }
             }, 500);

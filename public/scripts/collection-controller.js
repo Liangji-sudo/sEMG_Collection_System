@@ -50,6 +50,14 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                     dwellTime: 0.5,
                     preparationTime: 3.0,
                     targetSize: 0.12
+                },
+                continual_gesture_3: {
+                    trialsPerStage: 10,
+                    stageTimeout: 120,
+                    guideSpeed: 0.15,
+                    guideSize: 0.15,
+                    holdDuration: 1.0,
+                    preparationTime: 3.0
                 }
             };
             
@@ -144,23 +152,23 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
         // ==================== 配置加载 ====================
 
         loadCollectionConfig() {
-            this.collectionConfig = window.currentCollectionConfig || 
+            this.collectionConfig = window.currentCollectionConfig ||
                 JSON.parse(localStorage.getItem('emg_current_collection_config') || 'null');
-            
+
             if (this.collectionConfig) {
                 console.log('[Collection] 加载采集配置:', this.collectionConfig);
-                
+
                 this.currentTaskId = this.collectionConfig.task_id || this.collectionConfig.task || 'discrete_gesture';
-                
+
                 // 【关键】强制从localStorage读取最新模板
                 const template = this.getLatestTemplate();
-                
+
                 if (this.collectionConfig.category3List && this.collectionConfig.category3List.length > 0) {
                     this.stages = this.collectionConfig.category3List;
                 } else {
                     this.stages = (template.category3 || []).filter(s => s.enabled);
                 }
-                
+
                 // 加载Session数量（优先从collectionConfig，其次从template）
                 if (this.collectionConfig.sessionConfig?.count) {
                     this.sessionCount = this.collectionConfig.sessionConfig.count;
@@ -168,24 +176,27 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                     this.sessionCount = template.sessionConfig?.count || 3;
                 }
                 console.log('[Collection] Session数量:', this.sessionCount);
-                
+
                 this.gestures = (template.gestures?.discrete || []).filter(g => g.enabled);
-                
-                // 【关键】加载执行参数
-                if (template.execution) {
-                    if (template.execution[this.currentTaskId]) {
-                        this.executionParams = { ...template.execution };
-                        this.currentExecutionParams = { ...template.execution[this.currentTaskId] };
+
+                // 【关键修复】优先从collectionConfig.execution读取执行参数
+                // 这确保了从选择器保存的配置能正确传递
+                const executionSource = this.collectionConfig.execution || template.execution;
+                if (executionSource) {
+                    if (executionSource[this.currentTaskId]) {
+                        this.executionParams = { ...executionSource };
+                        this.currentExecutionParams = { ...executionSource[this.currentTaskId] };
                         console.log('[Collection] ★★★ 加载执行参数 ★★★');
+                        console.log('[Collection] 参数来源:', this.collectionConfig.execution ? 'collectionConfig' : 'template');
                         console.log('[Collection] 任务类型:', this.currentTaskId);
                         console.log('[Collection] trialsPerStage:', this.currentExecutionParams.trialsPerStage);
-                    } else if (template.execution.repeatPerGesture !== undefined) {
+                    } else if (executionSource.repeatPerGesture !== undefined) {
                         console.log('[Collection] 检测到旧版本执行参数格式');
-                        this.executionParams.discrete_gesture = { ...template.execution };
+                        this.executionParams.discrete_gesture = { ...executionSource };
                         this.currentExecutionParams = this.executionParams[this.currentTaskId] || this.executionParams.discrete_gesture;
                     }
                 }
-                
+
                 console.log('[Collection] 当前任务执行参数:', this.currentExecutionParams);
             } else {
                 console.warn('[Collection] 未找到采集配置，使用默认值');
@@ -257,6 +268,14 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                         dwellTime: 0.5,
                         preparationTime: 3.0,
                         targetSize: 0.12
+                    },
+                    continual_gesture_3: {
+                        trialsPerStage: 10,
+                        stageTimeout: 120,
+                        guideSpeed: 0.15,
+                        guideSize: 0.15,
+                        holdDuration: 1.0,
+                        preparationTime: 3.0
                     }
                 }
             };
@@ -1065,6 +1084,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 animationModule = window.continualGesture1Animation;
             } else if (this.currentTaskId === 'continual_gesture_2') {
                 animationModule = window.continualGesture2Animation;
+            } else if (this.currentTaskId === 'continual_gesture_3') {
+                animationModule = window.continualGesture3Animation;
             }
             
             if (animationModule) {
@@ -1289,7 +1310,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             const taskIdMap = {
                 'discrete': 'discrete_gesture',
                 'continuous1': 'continual_gesture_1',
-                'continuous2': 'continual_gesture_2'
+                'continuous2': 'continual_gesture_2',
+                'continuous3': 'continual_gesture_3'
             };
             
             this.currentTaskId = taskIdMap[htmlTaskId] || htmlTaskId;

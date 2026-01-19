@@ -40,7 +40,8 @@
         tasks: [
             { id: 'discrete_gesture', name: '离散手势采集', enabled: true },
             { id: 'continual_gesture_1', name: '连续手势采集1', enabled: true },
-            { id: 'continual_gesture_2', name: '连续手势采集2', enabled: true }
+            { id: 'continual_gesture_2', name: '连续手势采集2', enabled: true },
+            { id: 'continual_gesture_3', name: '连续手势采集3', enabled: true }
         ],
 
         // 分类1: 大类
@@ -95,7 +96,8 @@
                 { id: 'rest', name: '保持/休息', icon: '⏸️', enabled: true }
             ],
             continual_1: [],
-            continual_2: []
+            continual_2: [],
+            continual_3: []
         },
 
         // 执行参数 - 按任务类型分开配置
@@ -123,6 +125,15 @@
                 dwellTime: 0.5,                // 停留判定时间（秒）
                 preparationTime: 3.0,          // Stage开始前准备时间（秒）
                 targetSize: 0.12               // 目标区域大小
+            },
+            // 连续手势3采集参数（手掌反转引导）
+            continual_gesture_3: {
+                trialsPerStage: 10,            // 每个Stage的试次数（完整往返次数）
+                stageTimeout: 120,             // Stage超时时间（秒）
+                guideSpeed: 0.15,              // 引导速度（每秒移动的比例，0.1-0.5）
+                guideSize: 0.15,               // 引导区域大小（占半圆弧比例，0.1-0.3）
+                holdDuration: 1.0,             // 端点停留时间（秒）
+                preparationTime: 3.0           // Stage开始前准备时间（秒）
             }
         },
 
@@ -203,6 +214,22 @@
          * 确保模板包含所有必要字段（用于兼容旧版本模板）
          */
         ensureTemplateFields() {
+            // 【新增】检查并补充缺失的 tasks（确保新任务类型存在）
+            if (!this.currentTemplate.tasks) {
+                console.log('[TemplateConfig] 补充缺失的 tasks');
+                this.currentTemplate.tasks = JSON.parse(JSON.stringify(DEFAULT_TEMPLATE.tasks));
+            } else {
+                // 确保所有任务类型都存在
+                const defaultTasks = DEFAULT_TEMPLATE.tasks;
+                const existingIds = this.currentTemplate.tasks.map(t => t.id);
+                defaultTasks.forEach(defaultTask => {
+                    if (!existingIds.includes(defaultTask.id)) {
+                        console.log(`[TemplateConfig] 补充缺失的任务: ${defaultTask.id}`);
+                        this.currentTemplate.tasks.push(JSON.parse(JSON.stringify(defaultTask)));
+                    }
+                });
+            }
+            
             // 【新增】修复手势id：如果id是gesture_时间戳格式，则改为使用name作为id
             if (this.currentTemplate.gestures?.discrete) {
                 let needsSave = false;
@@ -277,7 +304,7 @@
                 }
                 // 确保所有任务类型都有配置
                 const defaultExec = DEFAULT_TEMPLATE.execution;
-                ['discrete_gesture', 'continual_gesture_1', 'continual_gesture_2'].forEach(taskId => {
+                ['discrete_gesture', 'continual_gesture_1', 'continual_gesture_2', 'continual_gesture_3'].forEach(taskId => {
                     if (!this.currentTemplate.execution[taskId]) {
                         this.currentTemplate.execution[taskId] = JSON.parse(JSON.stringify(defaultExec[taskId]));
                     }
@@ -590,6 +617,18 @@
                             </label>
                         </div>
                         <p class="task-description">手腕动作控制光标移动到目标位置的任务，不需要配置手势库</p>
+                    </div>
+
+                    <!-- 连续手势采集3 -->
+                    <div class="task-config-block">
+                        <div class="task-header">
+                            <label class="config-item-checkbox task-checkbox">
+                                <input type="checkbox" data-category="tasks" data-id="continual_gesture_3" 
+                                       ${template.tasks.find(t => t.id === 'continual_gesture_3')?.enabled ? 'checked' : ''}>
+                                <span class="checkbox-label task-name">连续手势采集3（自定义控制）</span>
+                            </label>
+                        </div>
+                        <p class="task-description">自定义方式控制光标移动到目标位置的任务，不需要配置手势库</p>
                     </div>
                 </div>
 
@@ -1074,42 +1113,87 @@
                         </div>
                         <div class="config-param-item">
                             <label>手势提示显示时间</label>
-                            <input type="number" data-task="${task.id}" data-param="gestureDisplayTime" 
+                            <input type="number" data-task="${task.id}" data-param="gestureDisplayTime"
                                    value="${taskExec.gestureDisplayTime || 2.0}" min="1" max="10" step="0.5">
                             <span class="param-unit">秒</span>
                         </div>
                     `;
                 } else if (task.id === 'continual_gesture_1' || task.id === 'continual_gesture_2') {
+                    // 连续手势1和2的通用参数
                     html += `
                         <div class="config-param-item">
                             <label>每个Stage的试次数</label>
-                            <input type="number" data-task="${task.id}" data-param="trialsPerStage" 
+                            <input type="number" data-task="${task.id}" data-param="trialsPerStage"
                                    value="${taskExec.trialsPerStage || 10}" min="1" max="50">
                             <span class="param-unit">次</span>
                         </div>
                         <div class="config-param-item">
                             <label>Stage超时时间</label>
-                            <input type="number" data-task="${task.id}" data-param="stageTimeout" 
+                            <input type="number" data-task="${task.id}" data-param="stageTimeout"
                                    value="${taskExec.stageTimeout || 120}" min="30" max="600" step="10">
                             <span class="param-unit">秒</span>
                         </div>
                         <div class="config-param-item">
                             <label>停留判定时间</label>
-                            <input type="number" data-task="${task.id}" data-param="dwellTime" 
+                            <input type="number" data-task="${task.id}" data-param="dwellTime"
                                    value="${taskExec.dwellTime || 0.5}" min="0.1" max="2" step="0.1">
                             <span class="param-unit">秒</span>
                         </div>
                         <div class="config-param-item">
                             <label>Stage开始前准备时间</label>
-                            <input type="number" data-task="${task.id}" data-param="preparationTime" 
+                            <input type="number" data-task="${task.id}" data-param="preparationTime"
                                    value="${taskExec.preparationTime || 3.0}" min="1" max="10" step="1">
                             <span class="param-unit">秒</span>
                         </div>
                         <div class="config-param-item">
                             <label>目标区域大小</label>
-                            <input type="number" data-task="${task.id}" data-param="targetSize" 
+                            <input type="number" data-task="${task.id}" data-param="targetSize"
                                    value="${taskExec.targetSize || 0.12}" min="0.05" max="0.3" step="0.01">
                             <span class="param-unit">比例</span>
+                        </div>
+                    `;
+                } else if (task.id === 'continual_gesture_3') {
+                    // 连续手势3（手掌反转引导）的特有参数
+                    html += `
+                        <div class="config-param-item">
+                            <label>每个Stage的试次数</label>
+                            <input type="number" data-task="${task.id}" data-param="trialsPerStage"
+                                   value="${taskExec.trialsPerStage || 10}" min="1" max="50">
+                            <span class="param-unit">次</span>
+                            <span class="param-hint">（完整往返次数）</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label>Stage超时时间</label>
+                            <input type="number" data-task="${task.id}" data-param="stageTimeout"
+                                   value="${taskExec.stageTimeout || 120}" min="30" max="600" step="10">
+                            <span class="param-unit">秒</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label>引导速度</label>
+                            <input type="number" data-task="${task.id}" data-param="guideSpeed"
+                                   value="${taskExec.guideSpeed || 0.15}" min="0.05" max="0.5" step="0.05">
+                            <span class="param-unit">比例/秒</span>
+                            <span class="param-hint">（越大越快）</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label>引导区域大小</label>
+                            <input type="number" data-task="${task.id}" data-param="guideSize"
+                                   value="${taskExec.guideSize || 0.15}" min="0.08" max="0.3" step="0.02">
+                            <span class="param-unit">比例</span>
+                            <span class="param-hint">（占半圆弧比例）</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label>端点停留时间</label>
+                            <input type="number" data-task="${task.id}" data-param="holdDuration"
+                                   value="${taskExec.holdDuration || 1.0}" min="0.5" max="3" step="0.5">
+                            <span class="param-unit">秒</span>
+                            <span class="param-hint">（在掌心向上位置停留）</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label>Stage开始前准备时间</label>
+                            <input type="number" data-task="${task.id}" data-param="preparationTime"
+                                   value="${taskExec.preparationTime || 3.0}" min="1" max="10" step="1">
+                            <span class="param-unit">秒</span>
                         </div>
                     `;
                 }
