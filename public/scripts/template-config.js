@@ -110,21 +110,27 @@
                 preparationTime: 3.0,          // Stage开始前准备时间（秒）
                 gestureDisplayTime: 2.0        // 手势提示显示时间（秒）
             },
-            // 连续手势1采集参数
+            // 连续手势1采集参数（同心圆引导动画）
             continual_gesture_1: {
-                trialsPerStage: 10,            // 每个Stage的试次数（目标点数量）
+                trialsPerStage: 5,             // 每个Stage的动作次数（扩张+收缩为一次）
                 stageTimeout: 120,             // Stage超时时间（秒）
-                dwellTime: 0.5,                // 停留判定时间（秒）
                 preparationTime: 3.0,          // Stage开始前准备时间（秒）
-                targetSize: 0.12               // 目标区域大小（相对轨道高度的比例）
+                expandDuration: 3.0,           // 扩张阶段时长（秒）
+                holdDuration: 1.0,             // 保持阶段时长（秒）
+                contractDuration: 3.0,         // 收缩阶段时长（秒）
+                guideBandWidth: 10,            // 引导区域宽度（像素，半径±此值）
+                maxRadius: 150                 // 同心圆最大半径（像素）
             },
-            // 连续手势2采集参数
+            // 连续手势2采集参数（同心圆引导动画）
             continual_gesture_2: {
-                trialsPerStage: 10,            // 每个Stage的试次数
+                trialsPerStage: 5,             // 每个Stage的动作次数
                 stageTimeout: 120,             // Stage超时时间（秒）
-                dwellTime: 0.5,                // 停留判定时间（秒）
                 preparationTime: 3.0,          // Stage开始前准备时间（秒）
-                targetSize: 0.12               // 目标区域大小
+                expandDuration: 3.0,           // 扩张阶段时长（秒）
+                holdDuration: 1.0,             // 保持阶段时长（秒）
+                contractDuration: 3.0,         // 收缩阶段时长（秒）
+                guideBandWidth: 10,            // 引导区域宽度（像素）
+                maxRadius: 150                 // 同心圆最大半径（像素）
             },
             // 连续手势3采集参数（手掌反转引导）
             continual_gesture_3: {
@@ -286,22 +292,56 @@
                             gestureDisplayTime: oldExec.gestureDisplayTime || 2.0
                         },
                         continual_gesture_1: {
-                            trialsPerStage: 10,
+                            trialsPerStage: 5,
                             stageTimeout: 120,
-                            dwellTime: 0.5,
                             preparationTime: oldExec.preparationTime || 3.0,
-                            targetSize: 0.12
+                            expandDuration: 3.0,
+                            holdDuration: 1.0,
+                            contractDuration: 3.0,
+                            guideBandWidth: 10,
+                            maxRadius: 150
                         },
                         continual_gesture_2: {
-                            trialsPerStage: 10,
+                            trialsPerStage: 5,
                             stageTimeout: 120,
-                            dwellTime: 0.5,
                             preparationTime: oldExec.preparationTime || 3.0,
-                            targetSize: 0.12
+                            expandDuration: 3.0,
+                            holdDuration: 1.0,
+                            contractDuration: 3.0,
+                            guideBandWidth: 10,
+                            maxRadius: 150
                         }
                     };
                     console.log('[TemplateConfig] execution格式迁移完成');
                 }
+                
+                // 迁移旧版本的连续手势参数（dwellTime, targetSize）到新的同心圆参数
+                ['continual_gesture_1', 'continual_gesture_2'].forEach(taskId => {
+                    const taskExec = this.currentTemplate.execution[taskId];
+                    if (taskExec) {
+                        // 检查是否使用旧版本参数（有dwellTime或targetSize，但没有expandDuration）
+                        if ((taskExec.dwellTime !== undefined || taskExec.targetSize !== undefined) && 
+                            taskExec.expandDuration === undefined) {
+                            console.log(`[TemplateConfig] 迁移${taskId}的旧参数到新同心圆参数`);
+                            // 保留可用的参数
+                            const trialsPerStage = taskExec.trialsPerStage || 5;
+                            const stageTimeout = taskExec.stageTimeout || 120;
+                            const preparationTime = taskExec.preparationTime || 3.0;
+                            // 使用新的默认值
+                            this.currentTemplate.execution[taskId] = {
+                                trialsPerStage: trialsPerStage,
+                                stageTimeout: stageTimeout,
+                                preparationTime: preparationTime,
+                                expandDuration: 3.0,
+                                holdDuration: 1.0,
+                                contractDuration: 3.0,
+                                guideBandWidth: 10,
+                                maxRadius: 150
+                            };
+                        }
+                    }
+                });
+                
                 // 确保所有任务类型都有配置
                 const defaultExec = DEFAULT_TEMPLATE.execution;
                 ['discrete_gesture', 'continual_gesture_1', 'continual_gesture_2', 'continual_gesture_3'].forEach(taskId => {
@@ -1119,24 +1159,19 @@
                         </div>
                     `;
                 } else if (task.id === 'continual_gesture_1' || task.id === 'continual_gesture_2') {
-                    // 连续手势1和2的通用参数
+                    // 连续手势1和2的同心圆动画参数
                     html += `
                         <div class="config-param-item">
-                            <label>每个Stage的试次数</label>
+                            <label>每个Stage的动作次数</label>
                             <input type="number" data-task="${task.id}" data-param="trialsPerStage"
-                                   value="${taskExec.trialsPerStage || 10}" min="1" max="50">
+                                   value="${taskExec.trialsPerStage || 5}" min="1" max="20">
                             <span class="param-unit">次</span>
+                            <span class="param-hint">（扩张+保持+收缩为一次）</span>
                         </div>
                         <div class="config-param-item">
                             <label>Stage超时时间</label>
                             <input type="number" data-task="${task.id}" data-param="stageTimeout"
                                    value="${taskExec.stageTimeout || 120}" min="30" max="600" step="10">
-                            <span class="param-unit">秒</span>
-                        </div>
-                        <div class="config-param-item">
-                            <label>停留判定时间</label>
-                            <input type="number" data-task="${task.id}" data-param="dwellTime"
-                                   value="${taskExec.dwellTime || 0.5}" min="0.1" max="2" step="0.1">
                             <span class="param-unit">秒</span>
                         </div>
                         <div class="config-param-item">
@@ -1146,10 +1181,39 @@
                             <span class="param-unit">秒</span>
                         </div>
                         <div class="config-param-item">
-                            <label>目标区域大小</label>
-                            <input type="number" data-task="${task.id}" data-param="targetSize"
-                                   value="${taskExec.targetSize || 0.12}" min="0.05" max="0.3" step="0.01">
-                            <span class="param-unit">比例</span>
+                            <label>扩张阶段时长</label>
+                            <input type="number" data-task="${task.id}" data-param="expandDuration"
+                                   value="${taskExec.expandDuration || 3.0}" min="1" max="10" step="0.5">
+                            <span class="param-unit">秒</span>
+                            <span class="param-hint">（引导圆从0扩大到最大）</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label>保持阶段时长</label>
+                            <input type="number" data-task="${task.id}" data-param="holdDuration"
+                                   value="${taskExec.holdDuration || 1.0}" min="0.5" max="5" step="0.5">
+                            <span class="param-unit">秒</span>
+                            <span class="param-hint">（在最大半径保持）</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label>收缩阶段时长</label>
+                            <input type="number" data-task="${task.id}" data-param="contractDuration"
+                                   value="${taskExec.contractDuration || 3.0}" min="1" max="10" step="0.5">
+                            <span class="param-unit">秒</span>
+                            <span class="param-hint">（引导圆从最大缩小到0）</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label>引导区域宽度</label>
+                            <input type="number" data-task="${task.id}" data-param="guideBandWidth"
+                                   value="${taskExec.guideBandWidth || 10}" min="5" max="30" step="1">
+                            <span class="param-unit">像素</span>
+                            <span class="param-hint">（引导圆半径±此值）</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label>同心圆最大半径</label>
+                            <input type="number" data-task="${task.id}" data-param="maxRadius"
+                                   value="${taskExec.maxRadius || 150}" min="80" max="250" step="10">
+                            <span class="param-unit">像素</span>
+                            <span class="param-hint">（圆的最大尺寸）</span>
                         </div>
                     `;
                 } else if (task.id === 'continual_gesture_3') {
@@ -1286,17 +1350,22 @@
                         </div>
                     `;
                 } else if (task.id === 'continual_gesture_1' || task.id === 'continual_gesture_2') {
-                    const trialsPerStage = taskExec.trialsPerStage || 10;
+                    const trialsPerStage = taskExec.trialsPerStage || 5;
                     const stageTimeout = taskExec.stageTimeout || 120;
                     const preparationTime = taskExec.preparationTime || 3.0;
+                    const expandDuration = taskExec.expandDuration || 3.0;
+                    const holdDuration = taskExec.holdDuration || 1.0;
+                    const contractDuration = taskExec.contractDuration || 3.0;
 
-                    // 连续手势的Stage时间估算（假设平均完成时间是超时时间的一半）
-                    singleStageTime = Math.min(stageTimeout, trialsPerStage * 6) + preparationTime; // 假设每个trial约6秒
+                    // 单个Trial时间 = 扩张 + 保持 + 收缩 + 短暂间隔(0.5秒)
+                    const singleTrialTime = expandDuration + holdDuration + contractDuration + 0.5;
+                    // 单个Stage时间 = 所有Trial时间 + 准备时间
+                    singleStageTime = trialsPerStage * singleTrialTime + preparationTime;
 
                     taskDetails = `
                         <div class="estimation-detail">
-                            <span>每Stage试次: ${trialsPerStage}次</span>
-                            <span>超时: ${stageTimeout}秒</span>
+                            <span>每Stage动作: ${trialsPerStage}次</span>
+                            <span>单次动作: ${formatTime(singleTrialTime)}（扩${expandDuration}s+保${holdDuration}s+缩${contractDuration}s）</span>
                             <span>单个Stage: ${formatTime(singleStageTime)}</span>
                         </div>
                     `;

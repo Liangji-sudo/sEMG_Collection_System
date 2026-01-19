@@ -1,31 +1,23 @@
 /**
  * continual-gesture-2-animation.js - 连续手势2采集动画模块
  * 
- * 【修复版】
- * 1. loadConfig优先从localStorage读取最新配置
- * 2. start函数在loadConfig之后设置参数，确保外部传入的参数生效
- * 3. 添加reset方法用于重置试次计数
+ * 【同心圆版】
+ * 动画说明：
+ * - 画面中心有一个半径maxRadius的外圆（目标圆）
+ * - 引导同心圆：半径从0逐渐增加到maxRadius，引导区域是 r±guideBandWidth
+ * - 用户通过鼠标滚轮控制另一个同心圆的半径（滚轮向后=半径增大）
+ * - 受试者需要让自己控制的圆尽量保持在引导区域内
+ * - 一次采集周期：引导圆从0→maxRadius（扩张），保持holdDuration，然后maxRadius→0（收缩）
  * 
- * 概念说明：
- * - Stage: 一个采集阶段（如"手腕控制任务"）
- * - 与离散手势不同，这里使用滚轮控制光标任务（与连续手势1类似）
- * - 每个Stage包含多个目标点（Trial），用户通过滚轮移动光标到目标点
- * 
- * 任务规则：
- * - 目标点出现在N个不同位置（由配置决定）
- * - 用户通过滚轮移动光标到目标点
- * - 光标停留在目标区域500ms视为命中
- * - 完成所有目标或超时后进入下一个Stage
- * 
- * 与连续手势1的区别：
- * - 视觉主题颜色不同（橙色系）
- * - 可配置不同的任务参数
+ * Stage结构：
+ * - 每个Stage包含多个Trial（采集周期）
+ * - 每个Trial = 扩张阶段 + 保持阶段 + 收缩阶段
  */
 
 (function() {
     'use strict';
 
-    console.log('[ContinualGesture2Animation] 连续手势2动画模块开始加载...');
+    console.log('[ContinualGesture2Animation] 同心圆版动画模块开始加载...');
 
     class ContinualGesture2AnimationController {
         constructor() {
@@ -43,52 +35,52 @@
             this.currentStage = null;
             this.currentTaskId = 'continual_gesture_2';
             this.onComplete = null;
+            this.onTrialComplete = null;
             
-            // 滚轮光标任务状态
-            this.cursorPos = 0.5;
-            this.targetPos = null;
-            this.trial = 0;
-            this.hits = 0;
-            this.maxTrials = 10;            // 每个Stage的目标数量（默认值）
-            this.stageTimeout = 120000;     // Stage超时时间（120秒）
-            this.dwellMs = 500;             // 停留时间阈值
-            this.onTargetSince = null;
-            this.dwellTimer = null;
-            this.fillTimer = null;
-            this.fillProgress = 0;
+            // 同心圆参数（可配置）
+            this.maxRadius = 150;              // 外圆最大半径
+            this.guideBandWidth = 10;          // 引导区域宽度（半径±10）
+            this.guideRadius = 0;              // 当前引导圆半径
+            this.userRadius = 0;               // 用户控制的圆半径
             
-            // 目标区域配置
-            this.targetFrac = 0.12;
-            this.targetH = 0;
+            // 动画阶段
+            this.phase = 'idle';               // 'idle' | 'expand' | 'hold' | 'contract'
+            this.phaseStartTime = 0;           // 当前阶段开始时间
+            this.expandDuration = 3000;        // 扩张阶段时长（ms）
+            this.holdDuration = 1000;          // 保持阶段时长（ms）
+            this.contractDuration = 3000;      // 收缩阶段时长（ms）
             
-            // 轨道配置
-            this.trackPadding = 20;
-            this.trackWidth = 40;
-            this.cursorSize = 20;
+            // Trial计数
+            this.trial = 0;                    // 当前Trial索引
+            this.maxTrials = 5;                // 每个Stage的Trial数量
+            this.stageTimeout = 120000;        // Stage超时时间（120秒）
+            this.preparationTime = 3000;       // Stage开始前准备时间（ms）
             
             // 计时相关
-            this.startTime = null;
-            this.remainingTime = 0;
+            this.startTime = null;             // Stage开始时间
+            this.remainingTime = 0;            // 剩余时间
             
-            // 配置 - 连续手势2使用橙色主题
+            // 跟踪精度统计
+            this.trackingData = [];            // 当前Trial的跟踪数据
+            this.trialAccuracy = [];           // 每个Trial的平均精度
+            
+            // 配置
             this.config = {
                 canvasWidth: 0,
                 canvasHeight: 0,
-                trackTop: 0,
-                trackBottom: 0,
-                trackHeight: 0,
-                trackCenterX: 0,
+                centerX: 0,
+                centerY: 0,
                 colors: {
-                    track: 'rgba(15, 23, 42, 0.06)',
-                    trackBorder: 'rgba(15, 23, 42, 0.15)',
-                    target: 'rgba(245, 158, 11, 0.25)',      // 橙色目标
-                    targetActive: 'rgba(245, 158, 11, 0.45)',
-                    targetBorder: 'transparent',
-                    targetBorderActive: '#92400e',           // 深橙色边框
-                    cursor: '#ef4444',
-                    cursorBorder: '#991b1b',
-                    cursorFill: 'rgba(0, 0, 0, 0.85)',
-                    text: '#92400e',                         // 橙色文字
+                    background: 'rgba(248, 250, 252, 0.98)',
+                    outerCircle: 'rgba(15, 23, 42, 0.12)',
+                    outerCircleBorder: 'rgba(15, 23, 42, 0.25)',
+                    guideZone: 'rgba(16, 185, 129, 0.20)',       // 绿色引导区域（区别于手势1）
+                    guideZoneBorder: 'rgba(16, 185, 129, 0.5)',
+                    userCircle: '#8b5cf6',                       // 紫色用户圆（区别于手势1）
+                    userCircleBorder: '#6d28d9',
+                    userCircleOnTarget: '#10b981',
+                    userCircleOnTargetBorder: '#065f46',
+                    text: '#047857',                             // 绿色主题文字
                     muted: 'rgba(107, 114, 128, 0.9)',
                     success: '#10b981',
                     warning: '#f59e0b'
@@ -101,14 +93,14 @@
         }
 
         /**
-         * 【修复】从配置加载 - 优先从localStorage读取
+         * 从配置加载
          */
         loadConfig() {
             console.log('[ContinualGesture2Animation] loadConfig() 开始');
             
             let templateConfig = null;
             
-            // 【修复】第一优先级：直接从localStorage读取最新配置
+            // 第一优先级：直接从localStorage读取最新配置
             const saved = localStorage.getItem('emg_collection_template');
             if (saved) {
                 try {
@@ -138,38 +130,38 @@
             }
             
             if (templateConfig) {
-                this.maxTrials = templateConfig.trialsPerStage || 10;
-                this.stageTimeout = (templateConfig.stageTimeout || 120) * 1000;  // 转为毫秒
-                this.dwellMs = (templateConfig.dwellTime || 0.5) * 1000;  // 转为毫秒
-                this.targetFrac = templateConfig.targetSize || 0.12;
+                this.maxTrials = templateConfig.trialsPerStage || 5;
+                this.stageTimeout = (templateConfig.stageTimeout || 120) * 1000;
+                this.preparationTime = (templateConfig.preparationTime || 3) * 1000;
+                
+                // 同心圆动画特有配置
+                if (templateConfig.expandDuration !== undefined) {
+                    this.expandDuration = templateConfig.expandDuration * 1000;
+                }
+                if (templateConfig.holdDuration !== undefined) {
+                    this.holdDuration = templateConfig.holdDuration * 1000;
+                }
+                if (templateConfig.contractDuration !== undefined) {
+                    this.contractDuration = templateConfig.contractDuration * 1000;
+                }
+                if (templateConfig.guideBandWidth !== undefined) {
+                    this.guideBandWidth = templateConfig.guideBandWidth;
+                }
+                if (templateConfig.maxRadius !== undefined) {
+                    this.maxRadius = templateConfig.maxRadius;
+                }
+                
                 console.log('[ContinualGesture2Animation] 配置加载完成:', {
                     maxTrials: this.maxTrials,
                     stageTimeout: this.stageTimeout,
-                    dwellMs: this.dwellMs,
-                    targetFrac: this.targetFrac
+                    expandDuration: this.expandDuration,
+                    holdDuration: this.holdDuration,
+                    contractDuration: this.contractDuration,
+                    guideBandWidth: this.guideBandWidth,
+                    maxRadius: this.maxRadius
                 });
             } else {
                 console.log('[ContinualGesture2Animation] 未找到配置，使用默认值');
-            }
-            
-            // 兼容旧版本的CONTINUAL_GESTURE_2_CONFIG
-            if (window.CONTINUAL_GESTURE_2_CONFIG) {
-                const taskConfig = window.CONTINUAL_GESTURE_2_CONFIG;
-                
-                if (taskConfig.WHEEL_TASK) {
-                    const wt = taskConfig.WHEEL_TASK;
-                    this.maxTrials = wt.MAX_TRIALS || this.maxTrials;
-                    this.stageTimeout = wt.STAGE_TIMEOUT || this.stageTimeout;
-                    this.dwellMs = wt.DWELL_MS || this.dwellMs;
-                    this.targetFrac = wt.TARGET_FRAC || this.targetFrac;
-                }
-                
-                // 加载颜色配置
-                if (taskConfig.ANIMATION && taskConfig.ANIMATION.COLORS) {
-                    Object.assign(this.config.colors, taskConfig.ANIMATION.COLORS);
-                }
-                
-                console.log('[ContinualGesture2Animation] 合并旧版配置');
             }
         }
 
@@ -205,17 +197,19 @@
                     width: 100%;
                     height: 100%;
                     z-index: 50;
-                    background: rgba(255, 251, 235, 0.98);
+                    background: ${this.config.colors.background};
                 `;
                 this.containerElement.appendChild(this.canvas);
             }
             
+            // 让canvas可以获取焦点以接收滚轮事件
             this.canvas.tabIndex = 0;
             this.canvas.style.outline = 'none';
             
             this.ctx = this.canvas.getContext('2d');
             this.resizeCanvas();
             
+            // 绑定事件
             window.addEventListener('resize', this._resizeHandler);
             
             console.log('[ContinualGesture2Animation] 初始化完成');
@@ -229,6 +223,7 @@
             if (!this.canvas || !this.containerElement) return false;
             
             const rect = this.containerElement.getBoundingClientRect();
+            
             if (rect.width > 0 && rect.height > 0) {
                 const dpr = window.devicePixelRatio || 1;
                 
@@ -241,12 +236,18 @@
                 this.config.canvasWidth = rect.width;
                 this.config.canvasHeight = rect.height;
                 
-                this.config.trackTop = this.trackPadding + 80;
-                this.config.trackBottom = rect.height - this.trackPadding - 60;
-                this.config.trackHeight = this.config.trackBottom - this.config.trackTop;
-                this.config.trackCenterX = rect.width / 2;
+                // 计算圆心位置
+                this.config.centerX = rect.width / 2;
+                this.config.centerY = (rect.height - 60) / 2 + 30;
                 
-                this.targetH = Math.max(36, Math.round(this.config.trackHeight * this.targetFrac));
+                // 根据画布大小调整最大半径
+                const maxPossibleRadius = Math.min(
+                    this.config.centerX - 20,
+                    this.config.centerY - 50,
+                    rect.height - this.config.centerY - 70
+                );
+                // 使用配置的maxRadius，但不超过画布限制
+                this.maxRadius = Math.max(80, Math.min(this.maxRadius, maxPossibleRadius));
                 
                 return true;
             }
@@ -254,25 +255,20 @@
         }
 
         /**
-         * 【新增】重置试次计数（用于切换Stage时）
+         * 重置状态
          */
         reset() {
             console.log('[ContinualGesture2Animation] 重置状态');
             this.trial = 0;
-            this.hits = 0;
-            this.cursorPos = 0.5;
-            this.targetPos = null;
-            this.onTargetSince = null;
-            this.fillProgress = 0;
-            this.continualTrialCount = 0;
+            this.guideRadius = 0;
+            this.userRadius = 0;
+            this.phase = 'idle';
+            this.trackingData = [];
+            this.trialAccuracy = [];
         }
 
         /**
-         * 【修复】开始Stage动画
-         * @param {Object} stage - stage配置
-         * @param {Function} onComplete - 完成回调
-         * @param {Function} onTrialComplete - 试次完成回调（可选）
-         * @param {Object} executionParams - 执行参数（可选，优先级最高）
+         * 开始Stage动画
          */
         start(stage, onComplete, onTrialComplete, executionParams) {
             console.log('[ContinualGesture2Animation] ====== 开始Stage动画 ======');
@@ -289,7 +285,7 @@
             // 先加载配置
             this.loadConfig();
             
-            // 【关键修复】如果传入了executionParams，使用它来覆盖配置
+            // 如果传入了executionParams，使用它来覆盖配置
             if (executionParams) {
                 console.log('[ContinualGesture2Animation] 使用传入的executionParams:', executionParams);
                 if (executionParams.trialsPerStage !== undefined) {
@@ -298,72 +294,164 @@
                 if (executionParams.stageTimeout !== undefined) {
                     this.stageTimeout = executionParams.stageTimeout * 1000;
                 }
-                if (executionParams.dwellTime !== undefined) {
-                    this.dwellMs = executionParams.dwellTime * 1000;
+                if (executionParams.preparationTime !== undefined) {
+                    this.preparationTime = executionParams.preparationTime * 1000;
                 }
-                if (executionParams.targetSize !== undefined) {
-                    this.targetFrac = executionParams.targetSize;
+                if (executionParams.expandDuration !== undefined) {
+                    this.expandDuration = executionParams.expandDuration * 1000;
+                }
+                if (executionParams.holdDuration !== undefined) {
+                    this.holdDuration = executionParams.holdDuration * 1000;
+                }
+                if (executionParams.contractDuration !== undefined) {
+                    this.contractDuration = executionParams.contractDuration * 1000;
+                }
+                if (executionParams.guideBandWidth !== undefined) {
+                    this.guideBandWidth = executionParams.guideBandWidth;
+                }
+                if (executionParams.maxRadius !== undefined) {
+                    this.maxRadius = executionParams.maxRadius;
                 }
             }
             
             console.log('[ContinualGesture2Animation] ★★★ 最终参数 ★★★');
             console.log('[ContinualGesture2Animation] maxTrials:', this.maxTrials);
-            console.log('[ContinualGesture2Animation] stageTimeout:', this.stageTimeout);
-            console.log('[ContinualGesture2Animation] dwellMs:', this.dwellMs);
+            console.log('[ContinualGesture2Animation] maxRadius:', this.maxRadius);
+            console.log('[ContinualGesture2Animation] guideBandWidth:', this.guideBandWidth);
             
             this.currentStage = stage;
             this.onComplete = onComplete;
             this.onTrialComplete = onTrialComplete;
             
-            // 【关键修复】重置状态
-            this.cursorPos = 0.5;
-            this.targetPos = null;
-            this.trial = 0;
-            this.hits = 0;
-            this.onTargetSince = null;
-            this.fillProgress = 0;
+            // 重置状态
+            this.reset();
             this.isRunning = true;
             this.startTime = Date.now();
             this.remainingTime = this.stageTimeout;
             
+            // 调整Canvas
             this.resizeCanvas();
             this.canvas.style.display = 'block';
             this.canvas.focus();
             
+            // 绑定滚轮事件
             this.canvas.addEventListener('wheel', this._wheelHandler, { passive: false });
             
-            this.setRandomTarget();
+            // 开始第一个Trial
+            this.startTrial();
             
+            // 设置超时计时器
             this.stageTimer = setTimeout(() => {
                 console.log('[ContinualGesture2Animation] Stage超时');
                 this.completeStage();
             }, this.stageTimeout);
             
+            // 开始动画循环
             this.animate();
         }
 
         /**
-         * 随机选择目标位置
+         * 开始一个新的Trial（采集周期）
          */
-        pickRandomTargetPos(prev) {
-            const minEdge = 0.08;
-            const maxEdge = 0.92;
-            const minDeltaFromPrev = 0.20;
-            
-            for (let i = 0; i < 80; i++) {
-                const v = minEdge + Math.random() * (maxEdge - minEdge);
-                if (prev == null || Math.abs(v - prev) >= minDeltaFromPrev) return v;
-            }
-            return minEdge + Math.random() * (maxEdge - minEdge);
+        startTrial() {
+            console.log(`[ContinualGesture2Animation] 开始Trial ${this.trial + 1}/${this.maxTrials}`);
+            this.phase = 'expand';
+            this.phaseStartTime = performance.now();
+            this.guideRadius = 0;
+            this.trackingData = [];
         }
 
         /**
-         * 设置随机目标
+         * 更新引导圆半径（根据当前阶段和时间）
          */
-        setRandomTarget() {
-            this.targetPos = this.pickRandomTargetPos(this.targetPos);
-            this.stopDwell();
-            console.log(`[ContinualGesture2Animation] 新目标: Trial ${this.trial + 1}/${this.maxTrials}, 位置 ${this.targetPos.toFixed(2)}`);
+        updateGuideRadius() {
+            const now = performance.now();
+            const elapsed = now - this.phaseStartTime;
+            
+            switch (this.phase) {
+                case 'expand':
+                    const expandProgress = Math.min(1, elapsed / this.expandDuration);
+                    this.guideRadius = this.maxRadius * this.easeInOutSine(expandProgress);
+                    
+                    if (elapsed >= this.expandDuration) {
+                        this.phase = 'hold';
+                        this.phaseStartTime = now;
+                        this.guideRadius = this.maxRadius;
+                    }
+                    break;
+                    
+                case 'hold':
+                    this.guideRadius = this.maxRadius;
+                    
+                    if (elapsed >= this.holdDuration) {
+                        this.phase = 'contract';
+                        this.phaseStartTime = now;
+                    }
+                    break;
+                    
+                case 'contract':
+                    const contractProgress = Math.min(1, elapsed / this.contractDuration);
+                    this.guideRadius = this.maxRadius * (1 - this.easeInOutSine(contractProgress));
+                    
+                    if (elapsed >= this.contractDuration) {
+                        this.completeTrial();
+                    }
+                    break;
+            }
+        }
+
+        /**
+         * 缓动函数：easeInOutSine
+         */
+        easeInOutSine(t) {
+            return -(Math.cos(Math.PI * t) - 1) / 2;
+        }
+
+        /**
+         * 完成当前Trial
+         */
+        completeTrial() {
+            let accuracy = 0;
+            if (this.trackingData.length > 0) {
+                const totalError = this.trackingData.reduce((sum, d) => sum + Math.abs(d.error), 0);
+                accuracy = 1 - (totalError / this.trackingData.length / this.maxRadius);
+                accuracy = Math.max(0, Math.min(1, accuracy));
+            }
+            this.trialAccuracy.push(accuracy);
+            
+            console.log(`[ContinualGesture2Animation] Trial ${this.trial + 1} 完成, 精度: ${(accuracy * 100).toFixed(1)}%`);
+            
+            this.trial++;
+            
+            if (this.onTrialComplete) {
+                this.onTrialComplete(this.trial - 1);
+            }
+            
+            if (this.trial >= this.maxTrials) {
+                console.log('[ContinualGesture2Animation] 所有Trial完成');
+                this.completeStage();
+            } else {
+                this.phase = 'idle';
+                setTimeout(() => {
+                    if (this.isRunning) {
+                        this.startTrial();
+                    }
+                }, 500);
+            }
+        }
+
+        /**
+         * 完成Stage
+         */
+        completeStage() {
+            const avgAccuracy = this.trialAccuracy.length > 0 
+                ? this.trialAccuracy.reduce((a, b) => a + b, 0) / this.trialAccuracy.length 
+                : 0;
+            console.log(`[ContinualGesture2Animation] Stage完成: ${this.trial} Trials, 平均精度 ${(avgAccuracy * 100).toFixed(1)}%`);
+            this.stop();
+            if (this.onComplete) {
+                this.onComplete();
+            }
         }
 
         /**
@@ -375,122 +463,33 @@
             e.preventDefault();
             e.stopPropagation();
             
-            let multiplier = 0.001;
-            if (e.deltaMode === 1) multiplier = 0.015;
-            if (e.deltaMode === 2) multiplier = 0.25;
+            let multiplier = 0.5;
+            if (e.deltaMode === 1) multiplier = 5;
+            if (e.deltaMode === 2) multiplier = 20;
             
             const rawDelta = e.deltaY * multiplier;
-            const delta = Math.max(-0.06, Math.min(0.06, rawDelta));
+            const delta = Math.max(-5, Math.min(5, rawDelta));
             
-            this.cursorPos = Math.max(0, Math.min(1, this.cursorPos + delta));
+            this.userRadius = Math.max(0, Math.min(this.maxRadius, this.userRadius + delta));
             
-            if (this.isOnTarget()) {
-                this.startDwell();
-            } else {
-                this.stopDwell();
+            if (this.phase !== 'idle') {
+                const error = this.userRadius - this.guideRadius;
+                this.trackingData.push({
+                    time: performance.now(),
+                    guideRadius: this.guideRadius,
+                    userRadius: this.userRadius,
+                    error: error
+                });
             }
         }
 
         /**
-         * 获取光标屏幕Y坐标
-         */
-        getCursorScreenY() {
-            return this.config.trackTop + this.cursorPos * this.config.trackHeight;
-        }
-
-        /**
-         * 获取目标区域的边界
-         */
-        getTargetBounds() {
-            if (this.targetPos == null) return null;
-            
-            const targetCenterY = this.config.trackTop + this.targetPos * this.config.trackHeight;
-            const halfH = this.targetH / 2;
-            
-            return {
-                top: Math.max(this.config.trackTop, targetCenterY - halfH),
-                bottom: Math.min(this.config.trackBottom, targetCenterY + halfH),
-                centerY: targetCenterY
-            };
-        }
-
-        /**
-         * 检查光标是否在目标区域内
+         * 检查用户圆是否在引导区域内
          */
         isOnTarget() {
-            const bounds = this.getTargetBounds();
-            if (!bounds) return false;
-            
-            const cursorY = this.getCursorScreenY();
-            return cursorY >= bounds.top && cursorY <= bounds.bottom;
-        }
-
-        /**
-         * 开始停留计时
-         */
-        startDwell() {
-            if (this.onTargetSince != null) return;
-            
-            this.onTargetSince = performance.now();
-            
-            this.fillTimer = setInterval(() => {
-                if (this.onTargetSince == null) return;
-                const elapsed = performance.now() - this.onTargetSince;
-                this.fillProgress = Math.max(0, Math.min(1, elapsed / this.dwellMs));
-            }, 20);
-            
-            this.dwellTimer = setTimeout(() => {
-                if (!this.isOnTarget()) {
-                    this.stopDwell();
-                    return;
-                }
-                
-                this.hits++;
-                this.trial++;
-                console.log(`[ContinualGesture2Animation] 命中! Trial ${this.trial}/${this.maxTrials}, Hits ${this.hits}`);
-                
-                this.stopDwell();
-                
-                // 调用试次完成回调
-                if (this.onTrialComplete) {
-                    this.onTrialComplete(this.trial - 1);  // 传入0-based索引
-                }
-                
-                if (this.trial >= this.maxTrials) {
-                    console.log('[ContinualGesture2Animation] 所有目标完成');
-                    this.completeStage();
-                } else {
-                    this.setRandomTarget();
-                }
-            }, this.dwellMs);
-        }
-
-        /**
-         * 停止停留计时
-         */
-        stopDwell() {
-            this.onTargetSince = null;
-            this.fillProgress = 0;
-            
-            if (this.dwellTimer) {
-                clearTimeout(this.dwellTimer);
-                this.dwellTimer = null;
-            }
-            if (this.fillTimer) {
-                clearInterval(this.fillTimer);
-                this.fillTimer = null;
-            }
-        }
-
-        /**
-         * 完成Stage
-         */
-        completeStage() {
-            console.log(`[ContinualGesture2Animation] Stage完成: ${this.hits}/${this.trial} 命中`);
-            this.stop();
-            if (this.onComplete) {
-                this.onComplete();
-            }
+            if (this.phase === 'idle') return false;
+            const diff = Math.abs(this.userRadius - this.guideRadius);
+            return diff <= this.guideBandWidth;
         }
 
         /**
@@ -500,13 +499,14 @@
             if (!this.isRunning) return;
             
             this.remainingTime = Math.max(0, this.stageTimeout - (Date.now() - this.startTime));
+            this.updateGuideRadius();
             
             this.ctx.clearRect(0, 0, this.config.canvasWidth, this.config.canvasHeight);
             
             this.drawStageInfo();
-            this.drawTrack();
-            this.drawTarget();
-            this.drawCursor();
+            this.drawOuterCircle();
+            this.drawGuideZone();
+            this.drawUserCircle();
             this.drawProgress();
             this.drawInstructions();
             
@@ -520,8 +520,8 @@
             const ctx = this.ctx;
             const stageConfig = this.currentStage;
             
-            let stageLabel = stageConfig.label || stageConfig.name;
-            let stageIcon = stageConfig.icon || '🔄';
+            let stageLabel = stageConfig?.label || stageConfig?.name || '连续手势采集2';
+            let stageIcon = stageConfig?.icon || '🎯';
             
             ctx.save();
             
@@ -533,7 +533,17 @@
             
             ctx.fillStyle = this.config.colors.muted;
             ctx.font = '500 14px ui-sans-serif, system-ui';
-            ctx.fillText('手腕动作控制 - 滚动滚轮移动光标到目标区域', 20, 48);
+            ctx.fillText('滚动滚轮控制圆的大小，跟随绿色引导区域', 20, 48);
+            
+            const phaseText = {
+                'idle': '准备中...',
+                'expand': '扩张阶段 ↗',
+                'hold': '保持阶段 ●',
+                'contract': '收缩阶段 ↘'
+            };
+            ctx.fillStyle = this.config.colors.text;
+            ctx.font = '600 16px ui-sans-serif, system-ui';
+            ctx.fillText(phaseText[this.phase] || '', 20, 72);
             
             const seconds = Math.ceil(this.remainingTime / 1000);
             const timeColor = seconds <= 10 ? this.config.colors.warning : this.config.colors.muted;
@@ -546,95 +556,116 @@
         }
 
         /**
-         * 绘制轨道
+         * 绘制外圆（目标边界）
          */
-        drawTrack() {
+        drawOuterCircle() {
             const ctx = this.ctx;
-            const x = this.config.trackCenterX - this.trackWidth / 2;
-            const y = this.config.trackTop;
-            const w = this.trackWidth;
-            const h = this.config.trackHeight;
+            const cx = this.config.centerX;
+            const cy = this.config.centerY;
             
             ctx.save();
             
-            ctx.fillStyle = this.config.colors.track;
-            ctx.strokeStyle = this.config.colors.trackBorder;
-            ctx.lineWidth = 1;
+            ctx.fillStyle = this.config.colors.outerCircle;
+            ctx.strokeStyle = this.config.colors.outerCircleBorder;
+            ctx.lineWidth = 2;
             ctx.beginPath();
-            ctx.roundRect(x, y, w, h, 12);
+            ctx.arc(cx, cy, this.maxRadius, 0, Math.PI * 2);
             ctx.fill();
             ctx.stroke();
+            
+            ctx.fillStyle = this.config.colors.outerCircleBorder;
+            ctx.beginPath();
+            ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+            ctx.fill();
             
             ctx.restore();
         }
 
         /**
-         * 绘制目标区域
+         * 绘制引导区域（带状区域）
          */
-        drawTarget() {
-            if (this.targetPos == null) return;
+        drawGuideZone() {
+            if (this.phase === 'idle') return;
             
             const ctx = this.ctx;
-            const bounds = this.getTargetBounds();
-            if (!bounds) return;
+            const cx = this.config.centerX;
+            const cy = this.config.centerY;
             
-            const x = this.config.trackCenterX - this.trackWidth / 2;
-            const w = this.trackWidth;
-            const h = bounds.bottom - bounds.top;
-            const y = bounds.top;
-            
-            const isActive = this.onTargetSince != null;
+            const innerR = Math.max(0, this.guideRadius - this.guideBandWidth);
+            const outerR = Math.min(this.maxRadius, this.guideRadius + this.guideBandWidth);
             
             ctx.save();
             
-            ctx.fillStyle = isActive ? this.config.colors.targetActive : this.config.colors.target;
-            ctx.strokeStyle = isActive ? this.config.colors.targetBorderActive : this.config.colors.targetBorder;
+            ctx.fillStyle = this.config.colors.guideZone;
+            ctx.strokeStyle = this.config.colors.guideZoneBorder;
             ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.roundRect(x, y, w, h, 8);
-            ctx.fill();
-            if (isActive) ctx.stroke();
             
-            ctx.fillStyle = this.config.colors.muted;
+            ctx.beginPath();
+            ctx.arc(cx, cy, outerR, 0, Math.PI * 2);
+            ctx.arc(cx, cy, innerR, Math.PI * 2, 0, true);
+            ctx.closePath();
+            ctx.fill();
+            
+            ctx.strokeStyle = this.config.colors.guideZoneBorder;
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+            ctx.beginPath();
+            ctx.arc(cx, cy, this.guideRadius, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            
+            ctx.fillStyle = this.config.colors.text;
             ctx.font = '600 12px ui-sans-serif, system-ui';
-            ctx.textAlign = 'center';
+            ctx.textAlign = 'left';
             ctx.textBaseline = 'middle';
-            ctx.fillText(`T${this.trial + 1}`, this.config.trackCenterX, bounds.centerY);
+            const labelX = cx + this.guideRadius + 10;
+            const labelY = cy;
+            if (labelX < this.config.canvasWidth - 50) {
+                ctx.fillText(`r=${this.guideRadius.toFixed(0)}`, labelX, labelY);
+            }
             
             ctx.restore();
         }
 
         /**
-         * 绘制光标
+         * 绘制用户控制的圆
          */
-        drawCursor() {
+        drawUserCircle() {
             const ctx = this.ctx;
-            const y = this.getCursorScreenY();
-            const x = this.config.trackCenterX;
-            const r = this.cursorSize / 2;
+            const cx = this.config.centerX;
+            const cy = this.config.centerY;
+            
+            const isOnTarget = this.isOnTarget();
             
             ctx.save();
             
-            ctx.fillStyle = this.config.colors.cursor;
-            ctx.strokeStyle = this.config.colors.cursorBorder;
-            ctx.lineWidth = 2;
+            ctx.strokeStyle = isOnTarget 
+                ? this.config.colors.userCircleOnTargetBorder 
+                : this.config.colors.userCircleBorder;
+            ctx.lineWidth = 3;
+            
+            if (isOnTarget) {
+                ctx.shadowColor = this.config.colors.userCircleOnTarget;
+                ctx.shadowBlur = 10;
+            }
+            
             ctx.beginPath();
-            ctx.arc(x, y, r, 0, Math.PI * 2);
-            ctx.fill();
+            ctx.arc(cx, cy, this.userRadius, 0, Math.PI * 2);
             ctx.stroke();
             
-            if (this.fillProgress > 0) {
-                ctx.save();
-                ctx.beginPath();
-                ctx.arc(x, y, r - 2, 0, Math.PI * 2);
-                ctx.clip();
-                
-                ctx.fillStyle = this.config.colors.cursorFill;
-                const fillWidth = (r - 2) * 2 * this.fillProgress;
-                ctx.fillRect(x - (r - 2), y - (r - 2), fillWidth, (r - 2) * 2);
-                
-                ctx.restore();
-            }
+            ctx.shadowColor = 'transparent';
+            ctx.shadowBlur = 0;
+            
+            const markerAngle = -Math.PI / 2;
+            const markerX = cx + this.userRadius * Math.cos(markerAngle);
+            const markerY = cy + this.userRadius * Math.sin(markerAngle);
+            
+            ctx.fillStyle = isOnTarget 
+                ? this.config.colors.userCircleOnTarget 
+                : this.config.colors.userCircle;
+            ctx.beginPath();
+            ctx.arc(markerX, markerY, 6, 0, Math.PI * 2);
+            ctx.fill();
             
             ctx.restore();
         }
@@ -652,7 +683,7 @@
             ctx.font = '700 16px ui-sans-serif, system-ui';
             ctx.textAlign = 'right';
             ctx.textBaseline = 'bottom';
-            ctx.fillText(`${this.trial} / ${this.maxTrials}`, this.config.canvasWidth - 20, bottomY);
+            ctx.fillText(`Trial ${this.trial} / ${this.maxTrials}`, this.config.canvasWidth - 20, bottomY);
             
             const barWidth = 150;
             const barHeight = 8;
@@ -674,7 +705,17 @@
             ctx.font = '500 14px ui-sans-serif, system-ui';
             ctx.textAlign = 'left';
             ctx.textBaseline = 'bottom';
-            ctx.fillText(`命中: ${this.hits} | 光标: ${this.cursorPos.toFixed(2)}`, 20, bottomY);
+            
+            const isOnTarget = this.isOnTarget();
+            const statusText = isOnTarget ? '✓ 在引导区域内' : '○ 调整圆的大小';
+            const errorText = this.phase !== 'idle' 
+                ? `误差: ${(this.userRadius - this.guideRadius).toFixed(1)}` 
+                : '';
+            
+            ctx.fillText(`用户: ${this.userRadius.toFixed(0)} | 引导: ${this.guideRadius.toFixed(0)} | ${errorText}`, 20, bottomY - 20);
+            
+            ctx.fillStyle = isOnTarget ? this.config.colors.success : this.config.colors.muted;
+            ctx.fillText(statusText, 20, bottomY);
             
             ctx.restore();
         }
@@ -684,7 +725,10 @@
          */
         drawInstructions() {
             const ctx = this.ctx;
-            const centerX = this.config.canvasWidth / 2;
+            const cx = this.config.centerX;
+            const bottomY = this.config.centerY + this.maxRadius + 20;
+            
+            if (bottomY > this.config.canvasHeight - 80) return;
             
             ctx.save();
             
@@ -692,8 +736,7 @@
             ctx.font = '500 12px ui-sans-serif, system-ui';
             ctx.textAlign = 'center';
             
-            ctx.fillText('↑ 手腕上抬/滚轮上滑', centerX, this.config.trackTop - 10);
-            ctx.fillText('↓ 手腕下压/滚轮下滑', centerX, this.config.trackBottom + 20);
+            ctx.fillText('↓ 滚轮向下：圆变大 | ↑ 滚轮向上：圆变小', cx, bottomY);
             
             ctx.restore();
         }
@@ -713,8 +756,6 @@
                 clearTimeout(this.stageTimer);
                 this.stageTimer = null;
             }
-            
-            this.stopDwell();
             
             if (this.canvas) {
                 this.canvas.removeEventListener('wheel', this._wheelHandler);
@@ -759,10 +800,11 @@
         getProgress() {
             return {
                 trial: this.trial,
-                hits: this.hits,
                 maxTrials: this.maxTrials,
+                phase: this.phase,
                 percent: this.maxTrials > 0 ? (this.trial / this.maxTrials * 100) : 0,
-                remainingTime: this.remainingTime
+                remainingTime: this.remainingTime,
+                accuracy: this.trialAccuracy
             };
         }
     }
@@ -771,6 +813,6 @@
     const continualGesture2Animation = new ContinualGesture2AnimationController();
     window.continualGesture2Animation = continualGesture2Animation;
     
-    console.log('[ContinualGesture2Animation] 连续手势2动画模块加载完成');
+    console.log('[ContinualGesture2Animation] 同心圆版动画模块加载完成');
 
 })();
