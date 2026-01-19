@@ -357,11 +357,88 @@ const CONTINUAL_GESTURE_2_CONFIG = {
     }
 };
 
+/**
+ * ==================== 连续手势3采集配置（自定义控制） ====================
+ * 
+ * 连续手势3也采用滚轮光标任务模式
+ * 可根据需要配置不同的参数
+ */
+const CONTINUAL_GESTURE_3_CONFIG = {
+    NAME: '连续手势采集3（自定义控制）',
+    
+    // ==================== 任务类型标识 ====================
+    TASK_TYPE: 'wheel_cursor',
+    
+    // ==================== 滚轮任务配置 ====================
+    WHEEL_TASK: {
+        MAX_TRIALS: 10,
+        STAGE_TIMEOUT: 120000,
+        DWELL_MS: 500,
+        TARGET_FRAC: 0.12,
+        MIN_TARGET_DISTANCE: 0.20,
+    },
+    
+    // ==================== Stage定义 ====================
+    STAGES: {
+        custom_control_1: {
+            name: 'custom_control_1',
+            label: '自定义控制任务1',
+            instruction: '用自定义方式控制光标移动到目标区域',
+            icon: '🎮',
+            color: '#8b5cf6',
+            maxTrials: 10,
+            timeout: 120000,
+        },
+        custom_control_2: {
+            name: 'custom_control_2',
+            label: '自定义控制任务2',
+            instruction: '用自定义方式控制光标移动到目标区域',
+            icon: '🎮',
+            color: '#8b5cf6',
+            maxTrials: 10,
+            timeout: 120000,
+        },
+        custom_control_3: {
+            name: 'custom_control_3',
+            label: '自定义控制任务3',
+            instruction: '用自定义方式控制光标移动到目标区域',
+            icon: '🎮',
+            color: '#8b5cf6',
+            maxTrials: 10,
+            timeout: 120000,
+        },
+        custom_control_4: {
+            name: 'custom_control_4',
+            label: '自定义控制任务4',
+            instruction: '用自定义方式控制光标移动到目标区域',
+            icon: '🎮',
+            color: '#8b5cf6',
+            maxTrials: 10,
+            timeout: 120000,
+        }
+    },
+
+    // ==================== 动画配置 ====================
+    ANIMATION: {
+        COLORS: {
+            track: 'rgba(15, 23, 42, 0.06)',
+            trackBorder: 'rgba(15, 23, 42, 0.15)',
+            target: 'rgba(139, 92, 246, 0.25)',      // 紫色目标
+            targetActive: 'rgba(139, 92, 246, 0.4)',
+            cursor: '#ef4444',
+            cursorBorder: '#991b1b',
+            success: '#10b981',
+            warning: '#f59e0b'
+        }
+    }
+};
+
 // ==================== 挂载到全局 ====================
 window.COLLECTION_CONSTANTS = COLLECTION_CONSTANTS;
 window.DISCRETE_GESTURE_CONFIG = DISCRETE_GESTURE_CONFIG;
 window.CONTINUAL_GESTURE_1_CONFIG = CONTINUAL_GESTURE_1_CONFIG;
 window.CONTINUAL_GESTURE_2_CONFIG = CONTINUAL_GESTURE_2_CONFIG;
+window.CONTINUAL_GESTURE_3_CONFIG = CONTINUAL_GESTURE_3_CONFIG;
 
 /**
  * ==================== 便捷访问对象 ====================
@@ -388,7 +465,8 @@ const CollectionTiming = {
         const configMap = {
             'discrete_gesture': DISCRETE_GESTURE_CONFIG,
             'continual_gesture_1': CONTINUAL_GESTURE_1_CONFIG,
-            'continual_gesture_2': CONTINUAL_GESTURE_2_CONFIG
+            'continual_gesture_2': CONTINUAL_GESTURE_2_CONFIG,
+            'continual_gesture_3': CONTINUAL_GESTURE_3_CONFIG
         };
         return configMap[taskId] || DISCRETE_GESTURE_CONFIG;
     },
@@ -531,6 +609,19 @@ const TASK_DEFINITIONS = {
             { name: 'wrist_control_3', label: '手腕控制任务3', instruction: '用手腕动作控制光标移动到目标区域', icon: '🔄', color: '#f59e0b', maxTrials: 10, timeout: 120000 },
             { name: 'wrist_control_4', label: '手腕控制任务4', instruction: '用手腕动作控制光标移动到目标区域', icon: '🔄', color: '#f59e0b', maxTrials: 10, timeout: 120000 }
         ]
+    },
+    continual_gesture_3: {
+        id: 'continual_gesture_3',
+        name: '连续手势3',
+        description: '自定义控制光标任务',
+        icon: 'fa-gamepad',
+        taskType: 'wheel_cursor',
+        stages: [
+            { name: 'custom_control_1', label: '自定义控制任务1', instruction: '用自定义方式控制光标移动到目标区域', icon: '🎮', color: '#8b5cf6', maxTrials: 10, timeout: 120000 },
+            { name: 'custom_control_2', label: '自定义控制任务2', instruction: '用自定义方式控制光标移动到目标区域', icon: '🎮', color: '#8b5cf6', maxTrials: 10, timeout: 120000 },
+            { name: 'custom_control_3', label: '自定义控制任务3', instruction: '用自定义方式控制光标移动到目标区域', icon: '🎮', color: '#8b5cf6', maxTrials: 10, timeout: 120000 },
+            { name: 'custom_control_4', label: '自定义控制任务4', instruction: '用自定义方式控制光标移动到目标区域', icon: '🎮', color: '#8b5cf6', maxTrials: 10, timeout: 120000 }
+        ]
     }
 };
 
@@ -538,7 +629,8 @@ const TASK_DEFINITIONS = {
 const TASK_ID_MAP = {
     'discrete': 'discrete_gesture',
     'continuous1': 'continual_gesture_1',
-    'continuous2': 'continual_gesture_2'
+    'continuous2': 'continual_gesture_2',
+    'continuous3': 'continual_gesture_3'
 };
 
 // TaskConfig API（兼容原task-config.js的接口）
@@ -578,9 +670,10 @@ window.TaskConfig = {
 };
 
 // 打印加载信息
-console.log('[Constants] 采集常量已加载（v4 - 整合TaskConfig + 支持外部配置）');
+console.log('[Constants] 采集常量已加载（v5 - 支持连续手势3）');
 console.log('[Constants] 离散手势 Stage数:', Object.keys(DISCRETE_GESTURE_CONFIG.STAGES).length);
 console.log('[Constants] 离散手势 Prompt库:', Object.keys(DISCRETE_GESTURE_CONFIG.PROMPT_LIBRARY).length, '个动作');
 console.log('[Constants] 连续手势1 Stage数:', Object.keys(CONTINUAL_GESTURE_1_CONFIG.STAGES).length, '(滚轮任务)');
 console.log('[Constants] 连续手势2 Stage数:', Object.keys(CONTINUAL_GESTURE_2_CONFIG.STAGES).length, '(滚轮任务)');
+console.log('[Constants] 连续手势3 Stage数:', Object.keys(CONTINUAL_GESTURE_3_CONFIG.STAGES).length, '(滚轮任务)');
 console.log('[Constants] TaskConfig已整合，共', Object.keys(TASK_DEFINITIONS).length, '个任务定义');
