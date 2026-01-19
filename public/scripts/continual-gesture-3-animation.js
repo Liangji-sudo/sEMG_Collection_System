@@ -77,6 +77,9 @@
             
             this._wheelHandler = this.handleWheel.bind(this);
             this._resizeHandler = this.resizeCanvas.bind(this);
+
+            // 输入接口
+            this.inputInterface = null;
         }
 
         loadConfig() {
@@ -189,6 +192,12 @@
 
         start(stageConfig, onComplete, onTrialComplete, executionParams) {
             console.log('[ContinualGesture3Animation] start()');
+
+            // 获取输入接口
+            this.inputInterface = window.animationInputInterface || null;
+            if (this.inputInterface) {
+                this.inputInterface.setCurrentTask('continual_gesture_3');
+            }
 
             this.currentStage = stageConfig;
             this.onComplete = onComplete;
@@ -312,23 +321,28 @@
 
         animate(timestamp = 0) {
             if (!this.isRunning) return;
-            
+
             const deltaTime = Math.min(timestamp - this.lastFrameTime, 100);
             this.lastFrameTime = timestamp;
-            
+
             this.pulsePhase += deltaTime * 0.004;
-            
+
             if (this.startTime) {
                 this.remainingTime = Math.max(0, this.stageTimeout - (Date.now() - this.startTime));
             }
-            
+
             if (this.phase !== 'complete') {
                 this.updateGuide(deltaTime);
             }
-            
+
+            // 从输入接口更新光标位置
+            if (this.inputInterface && this.inputInterface.isCalibrated()) {
+                this.cursorPosition = this.inputInterface.getNormalizedInput();
+            }
+
             this.checkFollowing();
             this.draw();
-            
+
             this.animationId = requestAnimationFrame((t) => this.animate(t));
         }
 

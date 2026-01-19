@@ -11,7 +11,8 @@ const path = require('path');
 class DeviceSync extends EventEmitter {
     constructor() {
         super();
-        this.pythonProcess = null; // Python子进程
+        this.pythonProcess = null; // ble_server Python子进程
+        this.mocapProcess = null;  // mocap_server Python子进程
         this.packetCount = 0;
         this.lastTimestamp = 0;
         this.isConnected = false;
@@ -34,14 +35,18 @@ class DeviceSync extends EventEmitter {
         return new Promise((resolve, reject) => {
             try {
                 console.log('[deviceSync] 正在启动ble_server......');
-                
+
                 // 启动Python子进程，连接固定设备（无需传参，脚本内已固定MAC）
                 this.pythonProcess = spawn('python', [path.join(__dirname, 'ble_server.py')]);
-                
+
                 this.pythonProcess.on('spawn', () => {
                     console.log('[deviceSync] ble_server已启动');
                     this.isConnected = true;
                     this.startTime = Date.now();
+
+                    // ble_server启动后，启动mocap_server
+                    this.startMocapServer();
+
                     resolve();
                 });
 
@@ -72,6 +77,48 @@ class DeviceSync extends EventEmitter {
                 reject(error);
             }
         });
+    }
+
+    // 启动mocap_server
+    startMocapServer() {
+        try {
+            console.log('[deviceSync] 正在启动mocap_server......');
+
+            // 启动mocap_server.py，端口8767
+            this.mocapProcess = spawn('python', [path.join(__dirname, 'mocap_server.py')]);
+
+            this.mocapProcess.on('spawn', () => {
+                console.log('[deviceSync] mocap_server已启动 (端口: 8767)');
+            });
+
+            // 接收mocap_server的调试日志（stderr）
+            this.mocapProcess.stderr.on('data', (data) => {
+                const log = data.toString().trim();
+                if (log) {
+                    console.log(`[mocap_server] ${log}`);
+                }
+            });
+
+            // 接收mocap_server的标准输出
+            this.mocapProcess.stdout.on('data', (data) => {
+                const log = data.toString().trim();
+                if (log) {
+                    console.log(`[mocap_server] ${log}`);
+                }
+            });
+
+            this.mocapProcess.on('error', (error) => {
+                console.error('[deviceSync] mocap_server发生错误:', error.message);
+            });
+
+            this.mocapProcess.on('close', (code) => {
+                console.log(`[deviceSync] mocap_server已关闭，退出码: ${code}`);
+                this.mocapProcess = null;
+            });
+
+        } catch (error) {
+            console.error('[deviceSync] 启动mocap_server失败:', error);
+        }
     }
 
     // api: 获取ble_server的传输吞吐量
@@ -116,6 +163,14 @@ class DeviceSync extends EventEmitter {
     // 关闭连接
     async close() {
         return new Promise((resolve) => {
+            // 关闭mocap_server
+            if (this.mocapProcess) {
+                this.mocapProcess.kill();
+                this.mocapProcess = null;
+                console.log('[deviceSync] mocap_server关闭');
+            }
+
+            // 关闭ble_server
             if (this.pythonProcess) {
                 this.pythonProcess.kill();
                 this.pythonProcess = null;

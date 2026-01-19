@@ -1,8 +1,9 @@
-// realtimeEngine.js - v4.1 (修复BLE数据处理 + 支持多级目录结构)
+// realtimeEngine.js - v4.2 (新增动捕数据支持)
+// 修改: 新增mocap_server连接和数据转发
+
 const WebSocket = require('ws');
 const EventEmitter = require('events');
 const zmq = require('zeromq');
-const { promisify } = require('util');
 const express = require('express');
 const cors = require('cors');
 const app = express();
@@ -11,7 +12,6 @@ app.use(express.json());
 
 const { discrete_gesture_prompt_name, collection_task_name } = require('./constants.js');
 
-// 获取系统时间戳（秒，高精度）
 function getSysTimeNode() {
     const nsTimestamp = process.hrtime.bigint();
     const sTimestamp = Number(nsTimestamp) / 1000000000.0;
@@ -21,14 +21,13 @@ function getSysTimeNode() {
 class RealtimeEngine extends EventEmitter {
     constructor() {
         super();
-        // WebSocket服务器（给前端）
         this.websocket_server = null;
         this.clients = new Set();
         this.isRunning = false;
         this.dataBuffer = [];
         this.maxBufferSize = 1000;
 
-        // ===== BLE服务器客户端配置 =====
+        // BLE服务器
         this.ble_client = null;
         this.ble_clientUrl = 'ws://localhost:8766';
         this.reconnectInterval = 3000;
@@ -37,72 +36,81 @@ class RealtimeEngine extends EventEmitter {
         this.reconnectTimer = null;
         this.connectTimeoutTimer = null;
 
-        // ===== 数据包计数 =====
+        // 【新增】Mocap服务器
+        this.mocap_client = null;
+        this.mocap_clientUrl = 'ws://localhost:8767';
+        this.mocap_reconnectInterval = 3000;
+        this.mocap_maxReconnectTimes = 3;
+        this.mocap_currentReconnectTimes = 0;
+        this.mocap_reconnectTimer = null;
+        this.mocap_connected = false;
+        this.mocap_activeChannel = null;
+
+        // 数据包计数
         this.emg_packet_count = 0;
         this.emg_5_packets_count = 0;
         this.dev1_packet_count = 0;
         this.dev2_packet_count = 0;
+        this.mocap_packet_count = 0;
 
-        // ===== Storage Server配置 =====
+        // Storage Server
         this.storage_server_socket = new zmq.Request();
         this.storage_server_host = '127.0.0.1';
         this.storage_server_port = 5555;
         this.storage_connected = false;
-        
-        // 【新增】ZMQ请求队列（解决并发问题）
         this.storageRequestQueue = [];
         this.isStorageRequestPending = false;
 
-        // ===== 采集状态 =====
+        // 采集状态
         this.currentTaskId = null;
         this.currentUser = null;
         this.isCollecting = false;
         this.collectionPaused = false;
-        
-        // ===== 采集配置信息（用于文件命名）=====
-        this.collectionConfig = null;  // 包含 category1, category2, category4 等
+        this.collectionConfig = null;
 
-        // ===== Stage状态 =====
+        // Stage状态
         this.currentStageName = null;
-        this.stageFileOpen = false;  // 当前Stage是否有打开的文件
+        this.stageFileOpen = false;
         this.stage_start_time = 0;
         
-        // ===== Session状态 =====
-        this.currentSessionIndex = 0;    // 当前session索引（从0开始）
-        this.currentSessionNumber = 1;   // 当前session编号（从1开始）
-        this.sessionCount = 3;           // session总数
-        
-        // 【新增】防止重复关闭的标志
+        // Session状态
+        this.currentSessionIndex = 0;
+        this.currentSessionNumber = 1;
+        this.sessionCount = 3;
         this.isClosingStageFile = false;
 
-        // ===== Prompt状态 =====
-        this.pending_prompt = null;  // { name, time, stageName }
+        // Prompt状态
+        this.pending_prompt = null;
+        
+        // 动捕数据存储
+        this.saveMocapData = false;
     }
 
-    // ==================== 启动 ====================
     start(port = 8080) {
         return new Promise((resolve, reject) => {
             try {
-                // 1. 延迟连接BLE服务器
                 this.connectTimeoutTimer = setTimeout(() => {
                     this.ble_server_connect();
                 }, 3000);
+                
+                // 【新增】延迟连接Mocap服务器
+                setTimeout(() => {
+                    this.mocap_server_connect();
+                }, 3500);
 
-                // 2. 启动WebSocket服务器（给前端）
                 this.websocket_server = new WebSocket.Server({ port });
 
                 this.websocket_server.on('connection', (ws) => {
                     console.log('[realtimeEngine] 前端client连接已建立');
                     this.clients.add(ws);
 
-                    // 发送连接确认
                     ws.send(JSON.stringify({
                         type: 'connection_established',
                         message: '实时数据连接已建立',
-                        timestamp: Date.now()
+                        timestamp: Date.now(),
+                        mocap_connected: this.mocap_connected
                     }));
 
-                    // 监听前端消息
                     ws.on('message', (message) => {
                         this.handleFrontendMessage(message);
                     });
@@ -129,7 +137,6 @@ class RealtimeEngine extends EventEmitter {
                     reject(error);
                 });
 
-                // 3. 连接Storage Server
                 this.storage_server_connect();
 
             } catch (error) {
@@ -139,57 +146,38 @@ class RealtimeEngine extends EventEmitter {
         });
     }
 
-    // ==================== 前端消息处理 ====================
     handleFrontendMessage(rawMessage) {
         try {
             const message = JSON.parse(rawMessage.toString());
-
-            if (message.type !== 'control_command') {
-                return;
-            }
+            if (message.type !== 'control_command') return;
 
             const { action, data } = message;
             console.log(`[realtimeEngine] <<< 收到前端命令: ${action}`, data);
 
             switch (action) {
-                case 'task_change':
-                    this.onTaskChange(data.taskId);
+                case 'task_change': this.onTaskChange(data.taskId); break;
+                case 'collection_start': this.onCollectionStart(data); break;
+                case 'collection_pause': this.onCollectionPause(); break;
+                case 'collection_resume': this.onCollectionResume(); break;
+                case 'collection_stop': this.onCollectionStop(data.completed); break;
+                case 'session_change': this.onSessionChange(data.sessionIndex, data.sessionNumber); break;
+                case 'stage_change': this.onStageChange(data.stageIndex, data.stageName); break;
+                case 'stage_start': this.onStageStart(data.stageName, data.stageIndex, data.timestamp); break;
+                case 'stage_end': this.onStageEnd(data.stageName, data.timestamp); break;
+                case 'prompt_start': this.onPromptStart(data.promptName, data.promptIndex); break;
+                case 'prompt_end': this.onPromptEnd(data.promptName, data.promptIndex); break;
+                case 'prompt': this.onPrompt(data.name, data.stageName, data.timestamp); break;
+                
+                // 【新增】Mocap命令
+                case 'mocap_set_channel': this.onMocapSetChannel(data.channel); break;
+                case 'mocap_reset_channel': this.onMocapResetChannel(data.channel, data.value); break;
+                case 'mocap_get_status': this.onMocapGetStatus(); break;
+                case 'mocap_set_save': 
+                    this.saveMocapData = data.save === true;
+                    console.log(`[realtimeEngine] 动捕数据存储: ${this.saveMocapData ? '开启' : '关闭'}`);
                     break;
-                case 'collection_start':
-                    this.onCollectionStart(data);
-                    break;
-                case 'collection_pause':
-                    this.onCollectionPause();
-                    break;
-                case 'collection_resume':
-                    this.onCollectionResume();
-                    break;
-                case 'collection_stop':
-                    this.onCollectionStop(data.completed);
-                    break;
-                case 'session_change':
-                    this.onSessionChange(data.sessionIndex, data.sessionNumber);
-                    break;
-                case 'stage_change':
-                    this.onStageChange(data.stageIndex, data.stageName);
-                    break;
-                case 'stage_start':
-                    this.onStageStart(data.stageName, data.stageIndex, data.timestamp);
-                    break;
-                case 'stage_end':
-                    this.onStageEnd(data.stageName, data.timestamp);
-                    break;
-                case 'prompt_start':
-                    this.onPromptStart(data.promptName, data.promptIndex);
-                    break;
-                case 'prompt_end':
-                    this.onPromptEnd(data.promptName, data.promptIndex);
-                    break;
-                case 'prompt':
-                    this.onPrompt(data.name, data.stageName, data.timestamp);
-                    break;
-                default:
-                    console.log(`[realtimeEngine] 未知命令: ${action}`);
+                    
+                default: console.log(`[realtimeEngine] 未知命令: ${action}`);
             }
 
         } catch (error) {
@@ -197,189 +185,164 @@ class RealtimeEngine extends EventEmitter {
         }
     }
 
-    // ==================== 采集控制回调 ====================
-
     onTaskChange(taskId) {
         console.log(`[realtimeEngine] ========== 任务切换: ${taskId} ==========`);
         this.currentTaskId = taskId;
+        
+        const channelMapping = {
+            'continual_gesture_1': 'finger_joint_angle',
+            'continual_gesture_2': 'thumb_index_distance',
+            'continual_gesture_3': 'palm_rotation_angle'
+        };
+        if (channelMapping[taskId]) {
+            this.onMocapSetChannel(channelMapping[taskId]);
+        }
     }
 
     onSessionChange(sessionIndex, sessionNumber) {
-        console.log(`[realtimeEngine] ========== Session切换 ==========`);
-        console.log(`[realtimeEngine] Session: ${sessionNumber} (索引: ${sessionIndex})`);
-        
         this.currentSessionIndex = sessionIndex ?? 0;
         this.currentSessionNumber = sessionNumber ?? (sessionIndex + 1);
     }
 
     async onCollectionStart(data) {
         console.log(`[realtimeEngine] ========== 开始采集会话 ==========`);
-        
         const { taskId, stageName, userId, config, sessionIndex, sessionNumber, sessionCount } = data;
         
-        console.log(`[realtimeEngine] 任务: ${taskId}`);
-        console.log(`[realtimeEngine] 用户ID: ${userId}`);
-        console.log(`[realtimeEngine] Session: ${sessionNumber}/${sessionCount} (索引: ${sessionIndex})`);
-        console.log(`[realtimeEngine] 配置:`, config);
-
         this.currentTaskId = taskId;
         this.currentUser = { id: userId, ...config?.subject };
         this.collectionConfig = config;
         this.isCollecting = true;
         this.collectionPaused = false;
         this.currentStageName = stageName;
-        
-        // 保存Session信息
         this.currentSessionIndex = sessionIndex ?? 0;
         this.currentSessionNumber = sessionNumber ?? 1;
         this.sessionCount = sessionCount ?? 3;
-        
-        // 自动开始第一个Stage的文件
-        if (stageName) {
-            await this.createStageFile(stageName);
-        }
     }
 
-    onCollectionPause() {
-        console.log(`[realtimeEngine] ========== 暂停采集 ==========`);
-        this.collectionPaused = true;
-    }
+    onCollectionPause() { this.collectionPaused = true; }
+    onCollectionResume() { this.collectionPaused = false; }
 
-    onCollectionResume() {
-        console.log(`[realtimeEngine] ========== 继续采集 ==========`);
-        this.collectionPaused = false;
-    }
-
-    async onCollectionStop(completed = false) {
-        console.log(`[realtimeEngine] ========== 停止采集 ==========`);
-        console.log(`[realtimeEngine] 完成状态: ${completed ? '正常完成' : '手动停止'}`);
-
+    async onCollectionStop(completed) {
         if (this.stageFileOpen && !this.isClosingStageFile) {
             await this.closeStageFile();
         }
-
         this.isCollecting = false;
         this.collectionPaused = false;
     }
 
-    onStageChange(stageIndex, stageName) {
-        console.log(`[realtimeEngine] ========== Stage切换 ==========`);
-        console.log(`[realtimeEngine] 新Stage: ${stageName} (索引: ${stageIndex})`);
-        this.currentStageName = stageName;
-    }
+    onStageChange(stageIndex, stageName) { this.currentStageName = stageName; }
 
     async onStageStart(stageName, stageIndex, timestamp) {
-        console.log(`[realtimeEngine] ========== Stage开始 ==========`);
-        console.log(`[realtimeEngine] Stage: ${stageName} (索引: ${stageIndex})`);
-        console.log(`[realtimeEngine] 时间戳: ${timestamp}`);
-
-        if (this.stageFileOpen && !this.isClosingStageFile) {
-            console.log(`[realtimeEngine] 关闭上一个Stage的文件...`);
-            await this.closeStageFile();
-        }
-
         this.currentStageName = stageName;
-        this.stage_start_time = timestamp;
-
-        await this.createStageFile(stageName);
+        this.stage_start_time = timestamp || Date.now();
+        await this.openStageFile(stageName, stageIndex);
     }
 
     async onStageEnd(stageName, timestamp) {
-        console.log(`[realtimeEngine] ========== Stage结束 ==========`);
-        console.log(`[realtimeEngine] Stage: ${stageName}`);
-        console.log(`[realtimeEngine] 时间戳: ${timestamp}`);
-
         if (this.stageFileOpen && !this.isClosingStageFile) {
             await this.closeStageFile();
         }
     }
 
-    onPromptStart(promptName, promptIndex) {
-        console.log(`[realtimeEngine] ========== Prompt开始 ==========`);
-        console.log(`[realtimeEngine] Prompt: ${promptName} (索引: ${promptIndex})`);
-        // 注意：这里不设置pending_prompt，只做日志记录
-        // 实际的prompt数据由onPrompt()处理，避免重复计数
-    }
-
-    onPromptEnd(promptName, promptIndex) {
-        console.log(`[realtimeEngine] ========== Prompt结束 ==========`);
-        console.log(`[realtimeEngine] Prompt: ${promptName} (索引: ${promptIndex})`);
-    }
+    onPromptStart(promptName, promptIndex) {}
+    onPromptEnd(promptName, promptIndex) {}
 
     onPrompt(name, stageName, timestamp) {
-        console.log(`[realtimeEngine] ========== Prompt信号 ==========`);
-        console.log(`[realtimeEngine] Prompt: ${name}, Stage: ${stageName}, Time: ${timestamp}`);
-
-        this.pending_prompt = {
-            name: name,
-            time: timestamp || getSysTimeNode(),
-            stageName: stageName || this.currentStageName
-        };
+        this.pending_prompt = { name, time: timestamp || Date.now(), stageName: stageName || this.currentStageName };
+    }
+    
+    // 【新增】Mocap命令处理
+    onMocapSetChannel(channel) {
+        console.log(`[realtimeEngine] 设置Mocap通道: ${channel}`);
+        this.mocap_activeChannel = channel;
+        
+        if (this.mocap_client && this.mocap_client.readyState === WebSocket.OPEN) {
+            this.mocap_client.send(JSON.stringify({ cmd: 'set_channel', channel }));
+        }
+    }
+    
+    onMocapResetChannel(channel, value) {
+        if (this.mocap_client && this.mocap_client.readyState === WebSocket.OPEN) {
+            this.mocap_client.send(JSON.stringify({ cmd: 'reset_channel', channel, value }));
+        }
+    }
+    
+    onMocapGetStatus() {
+        this.broadcastToClients({
+            type: 'mocap_status',
+            connected: this.mocap_connected,
+            activeChannel: this.mocap_activeChannel,
+            packetCount: this.mocap_packet_count
+        });
     }
 
-    // ==================== Stage文件管理 ====================
+    async openStageFile(stageName, stageIndex) {
+        console.log(`[realtimeEngine] 尝试打开Stage文件: ${stageName}`);
+        console.log(`[realtimeEngine] storage_connected = ${this.storage_connected}`);
 
-    async createStageFile(stageName) {
+        if (!this.storage_connected) {
+            console.warn('[realtimeEngine] ⚠️ Storage未连接，无法打开文件');
+            return;
+        }
+
         try {
             const config = this.collectionConfig || {};
+            const taskName = collection_task_name[this.currentTaskId] || this.currentTaskId;
             const userId = this.currentUser?.id || 'unknown';
-            
-            // 使用config.task（中文名）作为目录名，而不是taskId（英文）
-            const createParams = {
-                task_id: config.task || this.currentTaskId || 'discrete_gesture',  // 优先使用config.task（中文）
+            const sessionNum = this.currentSessionNumber || 1;
+
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            const filename = `${userId}_${taskName}_session${sessionNum}_${stageName}_${timestamp}.h5`;
+
+            const category1 = config.category1 || 'unknown';
+            const category2 = config.category2 || 'unknown';
+            const category4 = config.category4 || '';
+
+            let subdirectory = category4
+                ? `${category1}/${category2}/${userId}/${category4}`
+                : `${category1}/${category2}/${userId}`;
+
+            console.log(`[realtimeEngine] 准备打开文件: ${filename}`);
+            console.log(`[realtimeEngine] 子目录: ${subdirectory}`);
+
+            const response = await this.sendStorageCommand('create', {
+                filename,
+                subdirectory,
+                task_id: this.currentTaskId,
                 user_id: userId,
                 stage_name: stageName,
-                category1: config.category1 || 'default',
-                category2: config.category2 || 'default', 
-                category4: config.category4 || 'default',
-                subject_info: this.currentUser || {},
-                template_name: config.templateName || 'default',
-                // 【新增】Session信息
+                stage_index: stageIndex,
                 session_index: this.currentSessionIndex,
-                session_number: this.currentSessionNumber,
-                session_count: this.sessionCount
-            };
+                session_number: sessionNum,
+                session_count: this.sessionCount,
+                category1: category1,
+                category2: category2,
+                category4: category4,
+                template_name: config.templateName || 'default',
+                subject_info: this.currentUser,
+                start_time: this.stage_start_time
+            });
 
-            console.log(`[realtimeEngine] 创建Stage文件:`, createParams);
-            console.log(`[realtimeEngine] Session信息: session${this.currentSessionNumber} (索引: ${this.currentSessionIndex})`);
-
-            const response = await this.sendStorageCommand('create', createParams);
-            
             if (response.status === 'success') {
                 this.stageFileOpen = true;
-                console.log(`[realtimeEngine] ✅ Stage文件创建成功: ${response.file_path}`);
+                console.log(`[realtimeEngine] ✅ 文件已打开: ${filename}`);
             } else {
-                console.error(`[realtimeEngine] ❌ Stage文件创建失败: ${response.msg}`);
+                console.error(`[realtimeEngine] ❌ 打开文件失败:`, response);
             }
-            
-            return response;
         } catch (error) {
-            console.error('[realtimeEngine] 创建Stage文件失败:', error);
-            return { status: 'error', msg: error.message };
+            console.error('[realtimeEngine] 打开Stage文件失败:', error);
         }
     }
 
     async closeStageFile() {
-        if (this.isClosingStageFile) {
-            console.log('[realtimeEngine] Stage文件正在关闭中，跳过');
-            return { status: 'skipped', msg: '正在关闭中' };
-        }
-        
+        if (!this.stageFileOpen || this.isClosingStageFile) return;
+
         this.isClosingStageFile = true;
-        
+
         try {
-            console.log(`[realtimeEngine] 关闭Stage文件...`);
-            
-            const response = await this.sendStorageCommand('close', {});
-            
-            if (response.status === 'success') {
-                this.stageFileOpen = false;
-                console.log(`[realtimeEngine] ✅ Stage文件已关闭: ${response.file_path}`);
-                console.log(`[realtimeEngine] 📊 统计:`, response.stats);
-            } else {
-                console.error(`[realtimeEngine] ❌ 关闭文件失败: ${response.msg}`);
-            }
-            
+            const response = await this.sendStorageCommand('close', { end_time: Date.now() });
+            this.stageFileOpen = false;
+            if (response.status === 'success') console.log(`[realtimeEngine] ✅ 文件已关闭`);
             return response;
         } catch (error) {
             console.error('[realtimeEngine] 关闭Stage文件失败:', error);
@@ -389,118 +352,113 @@ class RealtimeEngine extends EventEmitter {
         }
     }
 
-    // ==================== WebSocket广播 ====================
     broadcastToClients(dataPacket) {
         const message = JSON.stringify(dataPacket);
-
         this.clients.forEach((client) => {
             if (client.readyState === WebSocket.OPEN) {
-                try {
-                    client.send(message);
-                } catch (error) {
-                    console.error('[realtimeEngine] 发送数据到客户端失败:', error);
-                    this.clients.delete(client);
-                }
+                try { client.send(message); } 
+                catch (error) { this.clients.delete(client); }
             }
         });
     }
 
-    // ==================== BLE Server连接 ====================
     ble_server_connect() {
-        if (this.ble_client) {
-            this.ble_client.close();
-            this.ble_client = null;
-        }
+        if (this.ble_client) { this.ble_client.close(); this.ble_client = null; }
 
         try {
             this.ble_client = new WebSocket(this.ble_clientUrl);
-            console.log("[realtimeEngine] 创建BLE客户端连接...");
 
             this.ble_client.onopen = () => {
                 console.log(`[realtimeEngine] ✅ BLE服务器连接成功`);
                 this.currentReconnectTimes = 0;
                 clearTimeout(this.reconnectTimer);
-                clearTimeout(this.connectTimeoutTimer);
-                
-                // 通知前端
-                this.broadcastToClients({
-                    type: 'ble_connection_status',
-                    connected: true,
-                    message: 'BLE服务器已连接'
-                });
+                this.broadcastToClients({ type: 'ble_connection_status', connected: true, message: 'BLE服务器已连接' });
             };
 
-            // 【关键修复】正确处理BLE消息
             this.ble_client.onmessage = (event) => {
                 try {
                     const packet = JSON.parse(event.data);
-
-                    // 处理 type: 'data' 的数据包
-                    if (packet.type === 'data') {
-                        this.handleBleDataPacket(packet);
-                        return;
-                    }
-
-                    // 兼容旧格式
-                    if (packet.type === 'emg_packet') {
-                        this.attributeEMGData(packet);
-                        return;
-                    }
-                } catch (error) {
-                    console.error('[realtimeEngine] 解析BLE数据失败:', error);
-                }
+                    if (packet.type === 'data') { this.handleBleDataPacket(packet); return; }
+                    if (packet.type === 'emg_packet') { this.attributeEMGData(packet); return; }
+                } catch (error) {}
             };
 
-            this.ble_client.onerror = (error) => {
-                console.error('[realtimeEngine] BLE连接错误:', error.message || error);
-                this.handleReconnect();
-            };
-
+            this.ble_client.onerror = (error) => { this.handleReconnect(); };
             this.ble_client.onclose = (event) => {
-                const code = event.code || 0;
-                console.log(`[realtimeEngine] BLE连接关闭: code=${code}`);
-                
-                this.broadcastToClients({
-                    type: 'ble_connection_status',
-                    connected: false,
-                    message: 'BLE服务器连接已断开'
-                });
-                
-                if (code !== 1000) {
-                    this.handleReconnect();
-                }
+                this.broadcastToClients({ type: 'ble_connection_status', connected: false, message: 'BLE服务器连接已断开' });
+                if (event.code !== 1000) this.handleReconnect();
             };
 
-        } catch (error) {
-            console.error('[realtimeEngine] 创建BLE连接失败:', error);
-            this.handleReconnect('创建连接失败');
-        }
+        } catch (error) { this.handleReconnect('创建连接失败'); }
     }
 
     handleReconnect(reason = '连接断开') {
-        if (this.currentReconnectTimes >= this.maxReconnectTimes) {
-            console.error(`[realtimeEngine] 达到最大重连次数，停止重连`);
-            return;
-        }
-
+        if (this.currentReconnectTimes >= this.maxReconnectTimes) return;
         this.currentReconnectTimes++;
-        console.log(`[realtimeEngine] ${reason}，${this.reconnectInterval/1000}秒后重连(${this.currentReconnectTimes}/${this.maxReconnectTimes})...`);
+        this.reconnectTimer = setTimeout(() => { this.ble_server_connect(); }, this.reconnectInterval);
+    }
+    
+    // 【新增】Mocap Server连接
+    mocap_server_connect() {
+        if (this.mocap_client) { this.mocap_client.close(); this.mocap_client = null; }
 
-        this.reconnectTimer = setTimeout(() => {
-            this.ble_server_connect();
-        }, this.reconnectInterval);
+        try {
+            this.mocap_client = new WebSocket(this.mocap_clientUrl);
+
+            this.mocap_client.onopen = () => {
+                console.log(`[realtimeEngine] ✅ Mocap服务器连接成功`);
+                this.mocap_currentReconnectTimes = 0;
+                this.mocap_connected = true;
+                clearTimeout(this.mocap_reconnectTimer);
+                
+                this.broadcastToClients({ type: 'mocap_connection_status', connected: true, message: 'Mocap服务器已连接' });
+                
+                if (this.mocap_activeChannel) {
+                    this.mocap_client.send(JSON.stringify({ cmd: 'set_channel', channel: this.mocap_activeChannel }));
+                }
+            };
+
+            this.mocap_client.onmessage = (event) => {
+                try {
+                    const packet = JSON.parse(event.data);
+                    if (packet.type === 'mocap') { this.handleMocapDataPacket(packet); }
+                } catch (error) {}
+            };
+
+            this.mocap_client.onerror = (error) => { this.handleMocapReconnect(); };
+            this.mocap_client.onclose = (event) => {
+                this.mocap_connected = false;
+                this.broadcastToClients({ type: 'mocap_connection_status', connected: false, message: 'Mocap服务器连接已断开' });
+                if (event.code !== 1000) this.handleMocapReconnect();
+            };
+
+        } catch (error) { this.handleMocapReconnect('创建连接失败'); }
     }
 
-    // ==================== 处理BLE数据包（关键修复：使用正确的字段名） ====================
+    handleMocapReconnect(reason = '连接断开') {
+        if (this.mocap_currentReconnectTimes >= this.mocap_maxReconnectTimes) return;
+        this.mocap_currentReconnectTimes++;
+        this.mocap_reconnectTimer = setTimeout(() => { this.mocap_server_connect(); }, this.mocap_reconnectInterval);
+    }
+    
+    // 【新增】处理Mocap数据包
+    handleMocapDataPacket(packet) {
+        if (!this.isRunning) return;
+
+        try {
+            this.mocap_packet_count++;
+            this.broadcastToClients({ type: 'mocap_data', data: packet });
+        } catch (error) {
+            console.error('[realtimeEngine] 处理Mocap数据包错误:', error);
+        }
+    }
+
     handleBleDataPacket(packet) {
         if (!this.isRunning) return;
 
         try {
-            if (!packet.dev1 && !packet.dev2) {
-                return;
-            }
+            if (!packet.dev1 && !packet.dev2) return;
 
-            // 准备数据容器
             let emg1Data = null, emg2Data = null;
             let emg1Timestamps = null, emg2Timestamps = null;
             let imu1Data = null, imu2Data = null;
@@ -509,102 +467,46 @@ class RealtimeEngine extends EventEmitter {
             let stats1 = null, stats2 = null;
             let framesInPacket = 9;
 
-            // ========== 处理设备1数据 ==========
             if (packet.dev1) {
                 const dev1 = Array.isArray(packet.dev1) ? packet.dev1[0] : packet.dev1;
-
                 if (dev1) {
-                    // EMG数据（字段名: uv）
-                    if (dev1.uv && dev1.uv.length > 0) {
-                        emg1Data = this.transposeEMG(dev1.uv);
-                    }
-                    // EMG时间戳（字段名: emg_t）
-                    if (dev1.emg_t && dev1.emg_t.length > 0) {
-                        emg1Timestamps = dev1.emg_t;
-                    }
-                    // IMU数据
-                    if (dev1.imu && dev1.imu[0]) {
-                        imu1Data = {
-                            acc: dev1.imu[0][0],
-                            gyr: dev1.imu[0][1],
-                            mag: dev1.imu[0][2]
-                        };
-                    }
-                    // IMU时间戳
-                    if (dev1.imu_t && dev1.imu_t.length > 0) {
-                        imu1Timestamps = dev1.imu_t;
-                    }
-                    // 统计信息
+                    if (dev1.uv?.length > 0) emg1Data = this.transposeEMG(dev1.uv);
+                    if (dev1.emg_t?.length > 0) emg1Timestamps = dev1.emg_t;
+                    if (dev1.imu?.[0]) imu1Data = { acc: dev1.imu[0][0], gyr: dev1.imu[0][1], mag: dev1.imu[0][2] };
+                    if (dev1.imu_t?.length > 0) imu1Timestamps = dev1.imu_t;
                     stats1 = dev1.s ? { total: dev1.s[0], lost: dev1.s[1] } : null;
                     framesInPacket = dev1.n || 9;
                     this.dev1_packet_count += framesInPacket;
                 }
             }
 
-            // ========== 处理设备2数据 ==========
             if (packet.dev2) {
                 const dev2 = Array.isArray(packet.dev2) ? packet.dev2[0] : packet.dev2;
-
                 if (dev2) {
-                    if (dev2.uv && dev2.uv.length > 0) {
-                        emg2Data = this.transposeEMG(dev2.uv);
-                    }
-                    if (dev2.emg_t && dev2.emg_t.length > 0) {
-                        emg2Timestamps = dev2.emg_t;
-                    }
-                    if (dev2.imu && dev2.imu[0]) {
-                        imu2Data = {
-                            acc: dev2.imu[0][0],
-                            gyr: dev2.imu[0][1],
-                            mag: dev2.imu[0][2]
-                        };
-                    }
-                    if (dev2.imu_t && dev2.imu_t.length > 0) {
-                        imu2Timestamps = dev2.imu_t;
-                    }
+                    if (dev2.uv?.length > 0) emg2Data = this.transposeEMG(dev2.uv);
+                    if (dev2.emg_t?.length > 0) emg2Timestamps = dev2.emg_t;
+                    if (dev2.imu?.[0]) imu2Data = { acc: dev2.imu[0][0], gyr: dev2.imu[0][1], mag: dev2.imu[0][2] };
+                    if (dev2.imu_t?.length > 0) imu2Timestamps = dev2.imu_t;
                     stats2 = dev2.s ? { total: dev2.s[0], lost: dev2.s[1] } : null;
                     this.dev2_packet_count += (dev2.n || 9);
                 }
             }
 
             this.emg_packet_count += framesInPacket;
-            this.emg_5_packets_count++;
 
-            // ========== 构造广播数据包（给前端显示） ==========
-            const displayPacket = {
+            this.broadcastToClients({
                 type: 'realtime_data',
                 data: {
-                    emg1: emg1Data,
-                    emg2: emg2Data,
-                    emg1_t: emg1Timestamps,
-                    emg2_t: emg2Timestamps,
-                    imu1: imu1Data,
-                    imu2: imu2Data,
-                    imu1_t: imu1Timestamps,
-                    imu2_t: imu2Timestamps,
-                    timestamp: timestamp,
-                    packetCount: this.emg_packet_count,
-                    framesInPacket: framesInPacket,
-                    stats1: stats1,
-                    stats2: stats2,
-                    activeDevices: packet.active || []
+                    emg1: emg1Data, emg2: emg2Data, imu1: imu1Data, imu2: imu2Data,
+                    timestamp, packetCount: this.emg_packet_count, framesInPacket,
+                    stats1, stats2, activeDevices: packet.active || []
                 }
-            };
+            });
 
-            // 广播给前端
-            this.broadcastToClients(displayPacket);
-
-            // ========== 存储数据（如果正在采集且文件已打开） ==========
             if (this.isCollecting && !this.collectionPaused && this.stageFileOpen && !this.isClosingStageFile) {
                 this.saveDataToStorage({
-                    emg1: emg1Data,
-                    emg2: emg2Data,
-                    emg1_t: emg1Timestamps,
-                    emg2_t: emg2Timestamps,
-                    imu1: imu1Data,
-                    imu2: imu2Data,
-                    imu1_t: imu1Timestamps,
-                    imu2_t: imu2Timestamps
+                    emg1: emg1Data, emg2: emg2Data, emg1_t: emg1Timestamps, emg2_t: emg2Timestamps,
+                    imu1: imu1Data, imu2: imu2Data, imu1_t: imu1Timestamps, imu2_t: imu2Timestamps
                 });
             }
 
@@ -615,10 +517,8 @@ class RealtimeEngine extends EventEmitter {
 
     transposeEMG(uvData) {
         if (!uvData || uvData.length === 0) return null;
-
         const numFrames = uvData.length;
         const numChannels = uvData[0].length;
-
         const transposed = [];
         for (let ch = 0; ch < numChannels; ch++) {
             const channelData = [];
@@ -630,8 +530,6 @@ class RealtimeEngine extends EventEmitter {
         return transposed;
     }
 
-    // ==================== 存储相关 ====================
-
     async storage_server_connect() {
         try {
             const address = `tcp://${this.storage_server_host}:${this.storage_server_port}`;
@@ -639,38 +537,27 @@ class RealtimeEngine extends EventEmitter {
             this.storage_connected = true;
             console.log(`[realtimeEngine] 已连接到storage_server: ${address}`);
         } catch (err) {
-            console.error(`[realtimeEngine] 连接storage_server失败: ${err.message}`);
             this.storage_connected = false;
         }
     }
 
-    /**
-     * 发送存储命令（使用队列防止并发）
-     */
     async sendStorageCommand(cmd, params = {}) {
         return new Promise((resolve, reject) => {
             this.storageRequestQueue.push({ cmd, params, resolve, reject });
-            
-            if (!this.isStorageRequestPending) {
-                this._processStorageQueue();
-            }
+            if (!this.isStorageRequestPending) this._processStorageQueue();
         });
     }
     
     async _processStorageQueue() {
-        if (this.isStorageRequestPending || this.storageRequestQueue.length === 0) {
-            return;
-        }
+        if (this.isStorageRequestPending || this.storageRequestQueue.length === 0) return;
         
         this.isStorageRequestPending = true;
         
         while (this.storageRequestQueue.length > 0) {
             const { cmd, params, resolve, reject } = this.storageRequestQueue.shift();
-            
             try {
                 const request = JSON.stringify({ cmd, params });
                 await this.storage_server_socket.send(request);
-
                 const [responseBuffer] = await this.storage_server_socket.receive();
                 const response = JSON.parse(responseBuffer.toString('utf8'));
                 resolve(response);
@@ -683,21 +570,10 @@ class RealtimeEngine extends EventEmitter {
     }
 
     async saveDataToStorage(sensorData) {
-        if (this.isClosingStageFile || !this.stageFileOpen) {
-            return;
-        }
+        if (this.isClosingStageFile || !this.stageFileOpen) return;
         
         try {
-            const storageData = {
-                emg1: sensorData.emg1,
-                emg2: sensorData.emg2,
-                emg1_t: sensorData.emg1_t,
-                emg2_t: sensorData.emg2_t,
-                imu1: sensorData.imu1,
-                imu2: sensorData.imu2,
-                imu1_t: sensorData.imu1_t,
-                imu2_t: sensorData.imu2_t
-            };
+            const storageData = { ...sensorData };
 
             if (this.pending_prompt) {
                 storageData.prompt_name = this.pending_prompt.name;
@@ -706,68 +582,31 @@ class RealtimeEngine extends EventEmitter {
                 this.pending_prompt = null;
             }
 
-            const response = await this.sendStorageCommand('append', {
-                data: storageData
-            });
-
-            if (response.status !== 'success') {
-                console.warn('[realtimeEngine] 存储响应警告:', response.msg);
-            }
-
-        } catch (error) {
-            console.error('[realtimeEngine] 存储数据失败:', error.message);
-        }
+            await this.sendStorageCommand('append', { data: storageData });
+        } catch (error) {}
     }
 
-    // ==================== 兼容旧格式 ====================
     async attributeEMGData(emgData) {
         if (!this.isRunning) return;
-
         try {
-            if (!Array.isArray(emgData.big_bag_raw_data)) {
-                console.error("[realtimeEngine] rawData不是数组");
-                return;
-            }
-
-            if (emgData.big_bag_raw_data.length !== 5) {
-                console.error('[realtimeEngine] EMG数据组数不匹配');
-                return;
-            }
+            if (!Array.isArray(emgData.big_bag_raw_data) || emgData.big_bag_raw_data.length !== 5) return;
 
             this.emg_packet_count += 5;
             this.emg_5_packets_count++;
 
-            const dataPacket = {
+            this.broadcastToClients({
                 type: 'realtime_data',
-                data: {
-                    emg: emgData.big_bag_raw_data,
-                    imu: null,
-                    timestamp: Date.now(),
-                    packetCount: this.emg_packet_count,
-                    framesInPacket: 5
-                }
-            };
-
-            this.broadcastToClients(dataPacket);
-
-        } catch (error) {
-            console.error('[realtimeEngine] 处理EMG数据错误:', error);
-        }
+                data: { emg: emgData.big_bag_raw_data, imu: null, timestamp: Date.now(), packetCount: this.emg_packet_count, framesInPacket: 5 }
+            });
+        } catch (error) {}
     }
-
-    // ==================== 状态和控制 ====================
 
     getStatus() {
         return {
-            isRunning: this.isRunning,
-            isCollecting: this.isCollecting,
-            collectionPaused: this.collectionPaused,
-            currentTaskId: this.currentTaskId,
-            currentStageName: this.currentStageName,
-            stageFileOpen: this.stageFileOpen,
-            clientCount: this.clients.size,
-            packetCount: this.emg_packet_count,
-            storageConnected: this.storage_connected,
+            isRunning: this.isRunning, isCollecting: this.isCollecting, collectionPaused: this.collectionPaused,
+            currentTaskId: this.currentTaskId, currentStageName: this.currentStageName, stageFileOpen: this.stageFileOpen,
+            clientCount: this.clients.size, packetCount: this.emg_packet_count, mocapPacketCount: this.mocap_packet_count,
+            storageConnected: this.storage_connected, mocapConnected: this.mocap_connected,
             pendingStorageRequests: this.storageRequestQueue.length
         };
     }
@@ -776,45 +615,29 @@ class RealtimeEngine extends EventEmitter {
         return new Promise(async (resolve) => {
             this.isRunning = false;
             
-            if (this.stageFileOpen && !this.isClosingStageFile) {
-                await this.closeStageFile();
-            }
-            
+            if (this.stageFileOpen && !this.isClosingStageFile) await this.closeStageFile();
             this.isCollecting = false;
 
             this.clients.forEach(client => {
-                if (client.readyState === WebSocket.OPEN) {
-                    client.close(1001, '服务器关闭');
-                }
+                if (client.readyState === WebSocket.OPEN) client.close(1001, '服务器关闭');
             });
             this.clients.clear();
 
             if (this.websocket_server) {
-                const closeTimeout = setTimeout(() => {
-                    console.warn('[realtimeEngine] 服务器关闭超时');
-                    resolve();
-                }, 3000);
-
-                this.websocket_server.close(() => {
-                    clearTimeout(closeTimeout);
-                    console.log('[realtimeEngine] 已停止');
-                    resolve();
-                });
+                const closeTimeout = setTimeout(() => resolve(), 3000);
+                this.websocket_server.close(() => { clearTimeout(closeTimeout); resolve(); });
             } else {
                 resolve();
             }
 
-            if (this.ble_client) {
-                this.ble_client.close(1000, '服务关闭');
-                this.ble_client = null;
-            }
+            if (this.ble_client) { this.ble_client.close(1000); this.ble_client = null; }
+            if (this.mocap_client) { this.mocap_client.close(1000); this.mocap_client = null; }
 
             clearTimeout(this.reconnectTimer);
+            clearTimeout(this.mocap_reconnectTimer);
         });
     }
 }
 
-// 创建单例
 const realtimeEngine = new RealtimeEngine();
-
 module.exports = realtimeEngine;

@@ -90,6 +90,9 @@
             // 绑定事件处理器
             this._wheelHandler = this.handleWheel.bind(this);
             this._resizeHandler = this.resizeCanvas.bind(this);
+
+            // 输入接口
+            this.inputInterface = null;
         }
 
         /**
@@ -273,7 +276,13 @@
         start(stage, onComplete, onTrialComplete, executionParams) {
             console.log('[ContinualGesture2Animation] ====== 开始Stage动画 ======');
             console.log('[ContinualGesture2Animation] stage:', stage.name);
-            
+
+            // 获取输入接口
+            this.inputInterface = window.animationInputInterface || null;
+            if (this.inputInterface) {
+                this.inputInterface.setCurrentTask('continual_gesture_2');
+            }
+
             if (!this.canvas) {
                 if (!this.init('.animation-area')) {
                     console.error('[ContinualGesture2Animation] Canvas初始化失败');
@@ -497,19 +506,25 @@
          */
         animate() {
             if (!this.isRunning) return;
-            
+
             this.remainingTime = Math.max(0, this.stageTimeout - (Date.now() - this.startTime));
             this.updateGuideRadius();
-            
+
+            // 从输入接口更新用户控制的半径
+            if (this.inputInterface && this.inputInterface.isCalibrated()) {
+                const normalizedInput = this.inputInterface.getNormalizedInput();
+                this.userRadius = normalizedInput * this.maxRadius;
+            }
+
             this.ctx.clearRect(0, 0, this.config.canvasWidth, this.config.canvasHeight);
-            
+
             this.drawStageInfo();
             this.drawOuterCircle();
             this.drawGuideZone();
             this.drawUserCircle();
             this.drawProgress();
             this.drawInstructions();
-            
+
             this.animationId = requestAnimationFrame(() => this.animate());
         }
 

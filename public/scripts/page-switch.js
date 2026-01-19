@@ -101,15 +101,21 @@
          */
         showWelcome() {
             console.log('[PageSwitch] 切换到欢迎页面');
-            
+
             const welcomeScreen = document.getElementById('welcomeScreen');
             const collectionScreen = document.getElementById('collectionScreen');
             const backendPage = document.getElementById('backend-page');
-            
+
             if (welcomeScreen) welcomeScreen.classList.remove('hidden');
             if (collectionScreen) collectionScreen.style.display = 'none';
             if (backendPage) backendPage.classList.add('hidden');
-            
+
+            // 【修复】清理 toast
+            const toast = document.getElementById('toast');
+            if (toast) {
+                toast.classList.remove('visible');
+            }
+
             this.stopWaveform();
         }
 

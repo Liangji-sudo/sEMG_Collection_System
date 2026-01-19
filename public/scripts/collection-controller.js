@@ -69,7 +69,14 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this.continualProgressTimer = null;
             this.phaseTimer = null;
             this.countdownTimer = null;
-            
+
+            // ===== 标定相关状态 =====
+            this.calibrationEnabled = true;     // 是否启用标定流程
+            this.isCalibrating = false;         // 是否正在标定
+            this.calibrationPhase = null;       // 'demo' | 'min' | 'max' | null
+            this.calibrationTimer = null;       // 标定计时器
+            this.skipCalibration = false;       // 是否跳过标定
+
             console.log('[Collection] 构造函数结束');
         }
 
@@ -755,7 +762,20 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 clearInterval(this.continualProgressTimer);
                 this.continualProgressTimer = null;
             }
-            
+
+            // 清理标定状态
+            if (this.calibrationTimer) {
+                clearInterval(this.calibrationTimer);
+                this.calibrationTimer = null;
+            }
+            this.isCalibrating = false;
+            this.calibrationPhase = null;
+
+            // 隐藏标定指导动画
+            if (window.calibrationGuideAnimation) {
+                window.calibrationGuideAnimation.hide();
+            }
+
             if (window.discreteGestureAnimation) {
                 window.discreteGestureAnimation.stop();
             }
@@ -806,6 +826,175 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
         isRunning() {
             return this._isRunning;
+        }
+
+        // ==================== 标定流程（单阶段） ====================
+
+        /**
+         * 启动标定流程
+         * 流程：demo（可选）→ calibrate（受试者做完整动作范围）→ 完成
+         */
+        startCalibrationFlow() {
+            console.log('[Collection] ====== 启动标定流程 ======');
+
+            this.isCalibrating = true;
+            this.currentPhase = 'calibration';
+            this.updateGestureList();
+
+            const inputInterface = window.animationInputInterface;
+            if (inputInterface) {
+                inputInterface.setCurrentTask(this.currentTaskId);
+            }
+
+            this.sendToRealtimeEngine('task_change', { taskId: this.currentTaskId });
+
+            // 直接开始标定（跳过 demo）
+            this.startCalibration();
+        }
+
+        /**
+         * 开始标定（单阶段：受试者做完整动作范围）
+         */
+        startCalibration() {
+            console.log('[Collection] 开始标定');
+
+            this.calibrationPhase = 'calibrating';
+
+            const inputInterface = window.animationInputInterface;
+            const guideAnimation = window.calibrationGuideAnimation;
+
+            // 开始记录数据
+            if (inputInterface) {
+                inputInterface.startCalibration(this.currentTaskId);
+            }
+
+            // 显示标定指导
+            if (guideAnimation) {
+                guideAnimation.show(
+                    this.currentTaskId,
+                    'calibrate',  // 单阶段标定
+                    () => { this.endCalibration(); }
+                );
+            } else {
+                // 没有指导动画时，使用简单倒计时
+                this.showSimpleCalibrationCountdown('标定', () => { this.endCalibration(); });
+            }
+        }
+
+        /**
+         * 结束标定
+         */
+        endCalibration() {
+            console.log('[Collection] 标定结束');
+
+            const inputInterface = window.animationInputInterface;
+            if (inputInterface) {
+                const result = inputInterface.endCalibration();
+                console.log('[Collection] 标定结果:', result);
+            }
+
+            this.onCalibrationComplete();
+        }
+
+        /**
+         * 标定流程完成
+         */
+        onCalibrationComplete() {
+            console.log('[Collection] ====== 标定流程完成 ======');
+
+            this.isCalibrating = false;
+            this.calibrationPhase = null;
+
+            const inputInterface = window.animationInputInterface;
+            if (inputInterface) {
+                const status = inputInterface.getCalibrationStatus();
+                console.log('[Collection] 标定状态:', status);
+
+                // 【修复】不显示 toast，避免退出后仍然显示
+                if (status.isCalibrated) {
+                    console.log(`[Collection] 标定完成: min=${status.min?.toFixed(1)}, max=${status.max?.toFixed(1)}`);
+                }
+            }
+
+            this.updateGestureDisplay({
+                name: '标定完成',
+                instruction: '即将开始正式采集...',
+                showCountdown: false
+            });
+
+            setTimeout(() => {
+                this.currentPhase = 'prepare';
+                this.updateGestureList();
+                this.showContinualPreparation(() => {
+                    this.startContinualAnimation();
+                });
+            }, 1500);
+        }
+
+        /**
+         * 显示简单的标定倒计时（当没有guideAnimation时使用）
+         */
+        showSimpleCalibrationCountdown(label, callback) {
+            const duration = 5;
+
+            this.updateGestureDisplay({
+                name: `${label}中`,
+                instruction: '请做完整的动作范围（从最小到最大）',
+                showCountdown: true,
+                countdownValue: duration
+            });
+
+            let countdown = duration;
+            const countdownEl = document.getElementById('countdown');
+
+            this.calibrationTimer = setInterval(() => {
+                countdown--;
+                if (countdownEl) countdownEl.textContent = countdown;
+
+                if (countdown <= 0) {
+                    clearInterval(this.calibrationTimer);
+                    this.calibrationTimer = null;
+                    if (countdownEl) countdownEl.style.display = 'none';
+                    callback();
+                }
+            }, 1000);
+        }
+
+        /**
+         * 跳过标定流程
+         */
+        skipCalibrationFlow() {
+            console.log('[Collection] 跳过标定流程');
+
+            if (this.calibrationTimer) {
+                clearInterval(this.calibrationTimer);
+                this.calibrationTimer = null;
+            }
+
+            const guideAnimation = window.calibrationGuideAnimation;
+            if (guideAnimation) guideAnimation.hide();
+
+            this.skipCalibration = true;
+            this.isCalibrating = false;
+            this.calibrationPhase = null;
+
+            this.currentPhase = 'prepare';
+            this.updateGestureList();
+            this.showContinualPreparation(() => {
+                this.startContinualAnimation();
+            });
+        }
+
+        /**
+         * 重置标定
+         */
+        resetCalibration() {
+            const inputInterface = window.animationInputInterface;
+            if (inputInterface) {
+                inputInterface.resetCalibration(this.currentTaskId);
+                this.showToast('标定已重置', 'info');
+            }
+            this.skipCalibration = false;
         }
 
         // ==================== 离散手势采集流程 ====================
@@ -1015,16 +1204,30 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             console.log('[Collection] 开始连续手势采集');
             console.log('[Collection] 任务类型:', this.currentTaskId);
             console.log('[Collection] ★★★ 执行参数 ★★★:', this.currentExecutionParams);
-            
+
             const currentStage = this.stages[this.currentStageIndex];
             this.continualTrialCount = 0;
-            
-            this.currentPhase = 'prepare';
-            this.updateGestureList();
-            
-            this.showContinualPreparation(() => {
-                this.startContinualAnimation();
-            });
+
+            // 【修改】每次采集前都重新标定（不使用缓存）
+            const inputInterface = window.animationInputInterface;
+            const needCalibration = this.calibrationEnabled !== false && inputInterface;
+
+            if (needCalibration && !this.skipCalibration) {
+                console.log('[Collection] 开始标定流程');
+                // 重置标定状态，确保每次都重新标定
+                if (inputInterface) {
+                    inputInterface.resetCalibration(this.currentTaskId);
+                }
+                this.startCalibrationFlow();
+            } else {
+                console.log('[Collection] 跳过标定，直接开始采集');
+                this.currentPhase = 'prepare';
+                this.updateGestureList();
+
+                this.showContinualPreparation(() => {
+                    this.startContinualAnimation();
+                });
+            }
         }
 
         showContinualPreparation(callback) {
@@ -1091,9 +1294,16 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             if (animationModule) {
                 // 【关键修复】传递执行参数给动画模块的start函数
                 console.log('[Collection] 传递执行参数给动画模块:', this.currentExecutionParams);
-                
+
+                // 【修复】发送 stage_start 命令打开 H5 文件
+                this.sendToRealtimeEngine('stage_start', {
+                    stageName: currentStage?.name || currentStage?.id,
+                    stageIndex: this.currentStageIndex,
+                    timestamp: Date.now()
+                });
+
                 this.setupContinualProgressUpdater(animationModule);
-                
+
                 // 调用start时传入executionParams
                 animationModule.start(
                     stageConfig,
@@ -1105,7 +1315,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                     },
                     this.currentExecutionParams  // 【关键】传入执行参数
                 );
-                
+
                 console.log('[Collection] 连续手势动画已启动');
                 console.log('[Collection] 确认 maxTrials =', animationModule.maxTrials);
             } else {
@@ -1113,7 +1323,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 this.showToast('动画模块未加载', 'error');
                 this.stopTask();
             }
-            
+
             this.updateStatus('采集中');
         }
 
@@ -1153,12 +1363,12 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
         onContinualStageComplete() {
             console.log('[Collection] 连续手势Stage完成');
-            
+
             const currentStage = this.stages[this.currentStageIndex];
             this.sendToRealtimeEngine('stage_end', {
                 stageName: currentStage?.name || currentStage?.id
             });
-            
+
             if (this.currentStageIndex < this.stages.length - 1) {
                 this.updateGestureDisplay({
                     name: 'Stage完成',
@@ -1168,18 +1378,19 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             } else {
                 this.sendToRealtimeEngine('collection_stop', { completed: true });
             }
-            
+
             this._isRunning = false;
-            
+
             // 重新启用Session和Stage选择器
             const sessionSelect = document.getElementById('sessionSwitchSelect');
             if (sessionSelect) sessionSelect.disabled = false;
             const stageSelect = document.getElementById('stageSwitchSelect');
             if (stageSelect) stageSelect.disabled = false;
-            
+
             this.updateControlButtons(false);
             this.updateNextStageButton();
             this.updateGestureList();
+            this.updateStatus('采集完成');  // 【修复】更新状态显示
         }
 
         // ==================== WebSocket通信 ====================
