@@ -305,10 +305,13 @@ class RealtimeEngine extends EventEmitter {
             console.log(`[realtimeEngine] 准备打开文件: ${filename}`);
             console.log(`[realtimeEngine] 子目录: ${subdirectory}`);
 
+            // 使用中文任务名称作为 task_id，这样文件夹名称就是中文的
+            const taskIdForFolder = config.task || this.currentTaskId;
+
             const response = await this.sendStorageCommand('create', {
                 filename,
                 subdirectory,
-                task_id: this.currentTaskId,
+                task_id: taskIdForFolder,  // 使用中文任务名称
                 user_id: userId,
                 stage_name: stageName,
                 stage_index: stageIndex,
