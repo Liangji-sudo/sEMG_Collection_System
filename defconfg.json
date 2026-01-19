@@ -1,5 +1,5 @@
 {
-  "templateName": "正负向离散手势测试配置（快速）2",
+  "templateName": "正负向离散手势测试配置（快速）3",
   "version": "2.0",
   "categoryLabels": {
     "category1": "大类",
@@ -259,7 +259,7 @@
       "targetSize": 0.12
     }
   },
-  "lastModified": "2026-01-19T04:03:42.876Z",
+  "lastModified": "2026-01-19T04:14:47.858Z",
   "subjectFields": [
     {
       "id": "name",
@@ -336,61 +336,6 @@
       "max": 300
     },
     {
-      "id": "bmi",
-      "label": "BMI",
-      "type": "number",
-      "required": false,
-      "readonly": true
-    },
-    {
-      "id": "skinColor",
-      "label": "肤色",
-      "type": "select",
-      "required": false,
-      "options": [
-        {
-          "value": "light",
-          "label": "浅色"
-        },
-        {
-          "value": "medium",
-          "label": "中等"
-        },
-        {
-          "value": "dark",
-          "label": "深色"
-        }
-      ]
-    },
-    {
-      "id": "hairLevel",
-      "label": "毛发程度",
-      "type": "select",
-      "required": false,
-      "options": [
-        {
-          "value": "none",
-          "label": "无"
-        },
-        {
-          "value": "light",
-          "label": "少"
-        },
-        {
-          "value": "heavy",
-          "label": "多"
-        }
-      ]
-    },
-    {
-      "id": "armCircumference",
-      "label": "前臂围(cm)",
-      "type": "number",
-      "required": false,
-      "min": 10,
-      "max": 60
-    },
-    {
       "id": "field_1768794599819",
       "label": "右手食指长度",
       "type": "number",
@@ -405,7 +350,7 @@
       "placeholder": ""
     },
     {
-      "id": "field_1768794662361",
+      "id": "field_1768796064235",
       "label": "备注",
       "type": "textarea",
       "required": false,
