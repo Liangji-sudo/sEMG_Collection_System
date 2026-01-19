@@ -1,0 +1,419 @@
+{
+  "templateName": "正负向离散手势测试配置（快速）2",
+  "version": "2.0",
+  "categoryLabels": {
+    "category1": "大类",
+    "category2": "大场景",
+    "category3": "子场景",
+    "category4": "人群"
+  },
+  "tasks": [
+    {
+      "id": "discrete_gesture",
+      "name": "离散手势采集",
+      "enabled": true
+    },
+    {
+      "id": "continual_gesture_1",
+      "name": "连续手势采集1",
+      "enabled": true
+    },
+    {
+      "id": "continual_gesture_2",
+      "name": "连续手势采集2",
+      "enabled": true
+    }
+  ],
+  "category1": [
+    {
+      "id": "static",
+      "name": "静态采集",
+      "enabled": true
+    }
+  ],
+  "category2": [
+    {
+      "id": "sitting",
+      "name": "坐姿",
+      "enabled": true
+    },
+    {
+      "id": "站姿",
+      "name": "站姿",
+      "enabled": true
+    }
+  ],
+  "category3": [
+    {
+      "id": "手臂抬起90度_肘部伸直向前_手心朝下",
+      "name": "手臂抬起90度_肘部伸直向前_手心朝下",
+      "instruction": "手臂抬起90度_肘部伸直向前_手心朝下",
+      "enabled": true
+    },
+    {
+      "id": "手臂抬起90度_肘部伸直向前_手心朝上",
+      "name": "手臂抬起90度_肘部伸直向前_手心朝上",
+      "instruction": "手臂抬起90度_肘部伸直向前_手心朝上",
+      "enabled": true
+    },
+    {
+      "id": "手臂抬起90度_肘部伸直向前_手心与地面90度",
+      "name": "手臂抬起90度_肘部伸直向前_手心与地面90度",
+      "instruction": "手臂抬起90度_肘部伸直向前_手心与地面90度",
+      "enabled": true
+    },
+    {
+      "id": "手臂自然抬起一定角度_肘部向身体方向弯曲45度_手心自然朝向身体侧",
+      "name": "手臂自然抬起一定角度_肘部向身体方向弯曲45度_手心自然朝向身体侧",
+      "instruction": "手臂自然抬起一定角度_肘部向身体方向弯曲45度_手心自然朝向身体侧",
+      "enabled": true
+    },
+    {
+      "id": "手臂自然下垂_手心向身体侧",
+      "name": "手臂自然下垂_手心向身体侧",
+      "enabled": true,
+      "instruction": "手臂自然下垂_手心向身体侧"
+    },
+    {
+      "id": "手肘支撑在桌面上_小臂自然抬起_手心自然朝向身体侧",
+      "name": "手肘支撑在桌面上_小臂自然抬起_手心自然朝向身体侧",
+      "enabled": true,
+      "instruction": "手肘支撑在桌面上_小臂自然抬起_手心自然朝向身体侧"
+    },
+    {
+      "id": "小臂及腕部支撑在桌面上_手掌自然抬起（模拟打字准备）",
+      "name": "小臂及腕部支撑在桌面上_手掌自然抬起（模拟打字准备）",
+      "enabled": true,
+      "instruction": "小臂及腕部支撑在桌面上_手掌自然抬起（模拟打字准备）"
+    }
+  ],
+  "category4": [
+    {
+      "id": "normal",
+      "name": "正常状态",
+      "enabled": true
+    }
+  ],
+  "gestures": {
+    "discrete": [
+      {
+        "id": "正向-手部自然放松",
+        "name": "正向-手部自然放松",
+        "icon": "☚",
+        "enabled": true
+      },
+      {
+        "id": "正向-食指和拇指敲击",
+        "name": "正向-食指和拇指敲击",
+        "icon": "☛",
+        "enabled": true
+      },
+      {
+        "id": "正向-中指和拇指敲击",
+        "name": "正向-中指和拇指敲击",
+        "icon": "☜",
+        "enabled": true
+      },
+      {
+        "id": "正向-拇指贴着食指左滑",
+        "name": "正向-拇指贴着食指左滑",
+        "icon": "☝",
+        "enabled": true
+      },
+      {
+        "id": "正向-拇指贴着食指右滑",
+        "name": "正向-拇指贴着食指右滑",
+        "icon": "☞",
+        "enabled": true
+      },
+      {
+        "id": "正向-拇指贴着食指上滑",
+        "name": "正向-拇指贴着食指上滑",
+        "icon": "☟",
+        "enabled": true
+      },
+      {
+        "id": "正向-拇指贴着食指下滑",
+        "name": "正向-拇指贴着食指下滑",
+        "icon": "✋",
+        "enabled": true
+      },
+      {
+        "id": "正向-食指和拇指捏住后向左拖动",
+        "name": "正向-食指和拇指捏住后向左拖动",
+        "icon": "✌",
+        "enabled": true
+      },
+      {
+        "id": "正向-食指和拇指捏住后向右拖动",
+        "name": "正向-食指和拇指捏住后向右拖动",
+        "icon": "✍",
+        "enabled": true
+      },
+      {
+        "id": "正向-食指和拇指捏住后向上拖动",
+        "name": "正向-食指和拇指捏住后向上拖动",
+        "icon": "✋",
+        "enabled": true
+      },
+      {
+        "id": "正向-食指和拇指捏住后向下拖动",
+        "name": "正向-食指和拇指捏住后向下拖动",
+        "icon": "✋",
+        "enabled": true
+      },
+      {
+        "id": "正向-拇指贴着食指边缘连续敲击2次",
+        "name": "正向-拇指贴着食指边缘连续敲击2次",
+        "icon": "✋",
+        "enabled": true
+      },
+      {
+        "id": "正向-拇指和中指连续敲击2次",
+        "name": "正向-拇指和中指连续敲击2次",
+        "icon": "✋",
+        "enabled": true
+      },
+      {
+        "id": "正向-中指和拇指捏住并维持",
+        "name": "正向-中指和拇指捏住并维持",
+        "icon": "✋",
+        "enabled": true
+      },
+      {
+        "id": "正向-食指和拇指捏住并维持",
+        "name": "正向-食指和拇指捏住并维持",
+        "icon": "✋",
+        "enabled": true
+      },
+      {
+        "id": "正向-食指右滑",
+        "name": "正向-食指右滑",
+        "icon": "✋",
+        "enabled": true
+      },
+      {
+        "id": "正向-食指左滑",
+        "name": "正向-食指左滑",
+        "icon": "✋",
+        "enabled": true
+      },
+      {
+        "id": "负向-甩手",
+        "name": "负向-甩手",
+        "icon": "✋",
+        "enabled": true
+      },
+      {
+        "id": "负向-五指抓握",
+        "name": "负向-五指抓握",
+        "icon": "✋",
+        "enabled": true
+      },
+      {
+        "id": "负向-食指捏握",
+        "name": "负向-食指捏握",
+        "icon": "✋",
+        "enabled": true
+      },
+      {
+        "id": "负向-模拟拇指键盘敲击",
+        "name": "负向-模拟拇指键盘敲击",
+        "icon": "✋",
+        "enabled": true
+      },
+      {
+        "id": "负向-模拟食指键盘敲击",
+        "name": "负向-模拟食指键盘敲击",
+        "icon": "✋",
+        "enabled": true
+      },
+      {
+        "id": "负向-模拟中指键盘敲击",
+        "name": "负向-模拟中指键盘敲击",
+        "icon": "✋",
+        "enabled": true
+      }
+    ]
+  },
+  "execution": {
+    "discrete_gesture": {
+      "repeatPerGesture": 1,
+      "intervalBetweenRepeat": 1,
+      "restBetweenGestures": 5,
+      "preparationTime": 3,
+      "gestureDisplayTime": 2
+    },
+    "continual_gesture_1": {
+      "trialsPerStage": 2,
+      "stageTimeout": 120,
+      "dwellTime": 0.5,
+      "preparationTime": 3,
+      "targetSize": 0.12
+    },
+    "continual_gesture_2": {
+      "trialsPerStage": 2,
+      "stageTimeout": 120,
+      "dwellTime": 0.6,
+      "preparationTime": 3,
+      "targetSize": 0.12
+    }
+  },
+  "lastModified": "2026-01-19T04:03:42.876Z",
+  "subjectFields": [
+    {
+      "id": "name",
+      "label": "姓名",
+      "type": "text",
+      "required": true,
+      "placeholder": "请输入姓名"
+    },
+    {
+      "id": "id",
+      "label": "编号",
+      "type": "text",
+      "required": true,
+      "placeholder": "如 S001"
+    },
+    {
+      "id": "age",
+      "label": "年龄",
+      "type": "number",
+      "required": true,
+      "min": 1,
+      "max": 120
+    },
+    {
+      "id": "gender",
+      "label": "性别",
+      "type": "select",
+      "required": true,
+      "options": [
+        {
+          "value": "male",
+          "label": "男"
+        },
+        {
+          "value": "female",
+          "label": "女"
+        }
+      ]
+    },
+    {
+      "id": "hand",
+      "label": "惯用手",
+      "type": "select",
+      "required": true,
+      "options": [
+        {
+          "value": "right",
+          "label": "右手"
+        },
+        {
+          "value": "left",
+          "label": "左手"
+        },
+        {
+          "value": "both",
+          "label": "双手"
+        }
+      ]
+    },
+    {
+      "id": "height",
+      "label": "身高(cm)",
+      "type": "number",
+      "required": true,
+      "min": 50,
+      "max": 250
+    },
+    {
+      "id": "weight",
+      "label": "体重(kg)",
+      "type": "number",
+      "required": true,
+      "min": 20,
+      "max": 300
+    },
+    {
+      "id": "bmi",
+      "label": "BMI",
+      "type": "number",
+      "required": false,
+      "readonly": true
+    },
+    {
+      "id": "skinColor",
+      "label": "肤色",
+      "type": "select",
+      "required": false,
+      "options": [
+        {
+          "value": "light",
+          "label": "浅色"
+        },
+        {
+          "value": "medium",
+          "label": "中等"
+        },
+        {
+          "value": "dark",
+          "label": "深色"
+        }
+      ]
+    },
+    {
+      "id": "hairLevel",
+      "label": "毛发程度",
+      "type": "select",
+      "required": false,
+      "options": [
+        {
+          "value": "none",
+          "label": "无"
+        },
+        {
+          "value": "light",
+          "label": "少"
+        },
+        {
+          "value": "heavy",
+          "label": "多"
+        }
+      ]
+    },
+    {
+      "id": "armCircumference",
+      "label": "前臂围(cm)",
+      "type": "number",
+      "required": false,
+      "min": 10,
+      "max": 60
+    },
+    {
+      "id": "field_1768794599819",
+      "label": "右手食指长度",
+      "type": "number",
+      "required": true,
+      "placeholder": ""
+    },
+    {
+      "id": "field_1768794630817",
+      "label": "腕围",
+      "type": "number",
+      "required": true,
+      "placeholder": ""
+    },
+    {
+      "id": "field_1768794662361",
+      "label": "备注",
+      "type": "textarea",
+      "required": false,
+      "placeholder": ""
+    }
+  ],
+  "sessionConfig": {
+    "count": 3,
+    "description": "每个Session代表一次设备穿戴，受试者需要摘下重新穿戴采集设备"
+  }
+}
