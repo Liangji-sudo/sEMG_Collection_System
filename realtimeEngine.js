@@ -79,9 +79,6 @@ class RealtimeEngine extends EventEmitter {
         this.sessionCount = 3;
         this.isClosingStageFile = false;
 
-        // Prompt状态
-        this.pending_prompt = null;
-        
         // 动捕数据存储
         this.saveMocapData = false;
     }
@@ -249,9 +246,11 @@ class RealtimeEngine extends EventEmitter {
 
     onPrompt(name, stageName, timestamp) {
         const promptTime = timestamp || Date.now();
-        this.pending_prompt = { name, time: promptTime, stageName: stageName || this.currentStageName };
+        // 【修复】不再设置 pending_prompt，直接保存
+        // 之前的问题：设置了 pending_prompt 后立即保存，但没有清除
+        // 导致 saveDataToStorage() 又保存了一次，造成重复
 
-        // 【修复】立即保存 prompt 到 storage，不等待 EMG 数据
+        // 立即保存 prompt 到 storage，不等待 EMG 数据
         // 如果文件还没打开，等待一小段时间后重试
         let retryCount = 0;
         const savePrompt = () => {
@@ -603,18 +602,11 @@ class RealtimeEngine extends EventEmitter {
 
     async saveDataToStorage(sensorData) {
         if (this.isClosingStageFile || !this.stageFileOpen) return;
-        
+
         try {
-            const storageData = { ...sensorData };
-
-            if (this.pending_prompt) {
-                storageData.prompt_name = this.pending_prompt.name;
-                storageData.prompt_time = this.pending_prompt.time;
-                storageData.prompt_stage = this.pending_prompt.stageName;
-                this.pending_prompt = null;
-            }
-
-            await this.sendStorageCommand('append', { data: storageData });
+            // 【修复】移除 pending_prompt 处理，prompt 现在在 onPrompt() 中直接保存
+            // 不再通过 EMG 数据附带保存，避免重复
+            await this.sendStorageCommand('append', { data: sensorData });
         } catch (error) {}
     }
 

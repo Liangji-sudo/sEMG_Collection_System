@@ -1324,14 +1324,13 @@
         }
 
         /**
-         * 渲染时间估算 - 按任务类型分别计算
+         * 渲染时间估算 - 按任务类型分别计算单个Stage耗时
          */
         renderTimeEstimation() {
             const exec = this.currentTemplate.execution;
             const tasks = this.currentTemplate.tasks || [];
             const enabledTasks = tasks.filter(t => t.enabled);
-            const enabledStages = this.currentTemplate.category3.filter(s => s.enabled).length;
-            
+
             const formatTime = (seconds) => {
                 if (seconds < 60) return `${Math.round(seconds)}秒`;
                 if (seconds < 3600) return `${Math.round(seconds / 60)}分钟`;
@@ -1339,7 +1338,7 @@
             };
 
             let html = '<div class="estimation-grid">';
-            let totalAllTasks = 0;
+            let maxStageTime = 0; // 记录最长的单个Stage时间
 
             enabledTasks.forEach(task => {
                 const taskExec = exec[task.id] || {};
@@ -1354,65 +1353,81 @@
                     const restBetweenGestures = taskExec.restBetweenGestures || 30.0;
                     const preparationTime = taskExec.preparationTime || 3.0;
 
-                    // 单个手势时间 = 重复次数 * (提示时间 + 间隔) + 休息时间
+                    // 每种手势执行完总耗时 = 重复次数 * (提示时间 + 间隔) + 休息时间
                     const singleGestureTime = repeatPerGesture * (gestureDisplayTime + intervalBetweenRepeat) + restBetweenGestures;
                     // 单个Stage时间 = 所有手势时间 + 准备时间
                     singleStageTime = enabledGestures * singleGestureTime + preparationTime;
 
                     taskDetails = `
                         <div class="estimation-detail">
-                            <span>手势数: ${enabledGestures}个</span>
+                            <span>手势数量: ${enabledGestures}个</span>
                             <span>每手势重复: ${repeatPerGesture}次</span>
-                            <span>单个Stage: ${formatTime(singleStageTime)}</span>
+                            <span>每种手势耗时: ${formatTime(singleGestureTime)}</span>
                         </div>
                     `;
                 } else if (task.id === 'continual_gesture_1' || task.id === 'continual_gesture_2') {
                     const trialsPerStage = taskExec.trialsPerStage || 5;
-                    const stageTimeout = taskExec.stageTimeout || 120;
                     const preparationTime = taskExec.preparationTime || 3.0;
                     const expandDuration = taskExec.expandDuration || 3.0;
                     const holdDuration = taskExec.holdDuration || 1.0;
                     const contractDuration = taskExec.contractDuration || 3.0;
+                    const restBetweenTrials = taskExec.restBetweenTrials || 1;
 
-                    // 单个Trial时间 = 扩张 + 保持 + 收缩 + 短暂间隔(0.5秒)
-                    const singleTrialTime = expandDuration + holdDuration + contractDuration + 0.5;
-                    // 单个Stage时间 = 所有Trial时间 + 准备时间
+                    // 单次动作耗时 = 扩张 + 保持 + 收缩 + 间隔
+                    const singleTrialTime = expandDuration + holdDuration + contractDuration + restBetweenTrials;
+                    // 单个Stage时间 = 所有动作时间 + 准备时间
                     singleStageTime = trialsPerStage * singleTrialTime + preparationTime;
 
                     taskDetails = `
                         <div class="estimation-detail">
-                            <span>每Stage动作: ${trialsPerStage}次</span>
-                            <span>单次动作: ${formatTime(singleTrialTime)}（扩${expandDuration}s+保${holdDuration}s+缩${contractDuration}s）</span>
-                            <span>单个Stage: ${formatTime(singleStageTime)}</span>
+                            <span>动作数量: ${trialsPerStage}次</span>
+                            <span>单次动作: ${formatTime(singleTrialTime)}</span>
+                        </div>
+                    `;
+                } else if (task.id === 'continual_gesture_3') {
+                    const trialsPerStage = taskExec.trialsPerStage || 10;
+                    const preparationTime = taskExec.preparationTime || 3.0;
+                    const guideSpeed = taskExec.guideSpeed || 0.15;
+                    const holdDuration = taskExec.holdDuration || 1.0;
+                    const restBetweenTrials = taskExec.restBetweenTrials || 1;
+
+                    // 单次动作耗时 = 往返时间(约6.67秒，速度0.15) + 两次停留 + 间隔
+                    const singleTrialTime = (1 / guideSpeed) + holdDuration * 2 + restBetweenTrials;
+                    // 单个Stage时间 = 所有动作时间 + 准备时间
+                    singleStageTime = trialsPerStage * singleTrialTime + preparationTime;
+
+                    taskDetails = `
+                        <div class="estimation-detail">
+                            <span>动作数量: ${trialsPerStage}次</span>
+                            <span>单次动作: ${formatTime(singleTrialTime)}</span>
                         </div>
                     `;
                 }
 
-                const taskTotalTime = singleStageTime * enabledStages;
-                totalAllTasks += taskTotalTime;
+                if (singleStageTime > maxStageTime) {
+                    maxStageTime = singleStageTime;
+                }
 
                 html += `
                     <div class="estimation-item estimation-task">
                         <div class="estimation-task-header">
                             <span class="estimation-label">${task.name}</span>
-                            <span class="estimation-value">${formatTime(taskTotalTime)}</span>
+                            <span class="estimation-value estimation-stage-time">${formatTime(singleStageTime)}</span>
                         </div>
                         ${taskDetails}
                     </div>
                 `;
             });
 
-            // 总计
-            html += `
-                <div class="estimation-item">
-                    <span class="estimation-label">启用的Stage数</span>
-                    <span class="estimation-value">${enabledStages} 个</span>
-                </div>
-                <div class="estimation-item estimation-total">
-                    <span class="estimation-label">单个受试者总时间（所有任务）</span>
-                    <span class="estimation-value">${formatTime(totalAllTasks)}</span>
-                </div>
-            `;
+            // 右上角显示单个Stage最长耗时汇总（如果有多个任务）
+            if (enabledTasks.length > 1) {
+                html += `
+                    <div class="estimation-item estimation-summary">
+                        <span class="estimation-label">单个Stage总耗时（所有任务）</span>
+                        <span class="estimation-value estimation-stage-time">${formatTime(maxStageTime * enabledTasks.length)}</span>
+                    </div>
+                `;
+            }
 
             html += '</div>';
             return html;

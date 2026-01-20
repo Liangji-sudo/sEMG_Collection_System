@@ -545,6 +545,18 @@
             const enabledCat4 = t.category4.filter(c => c.enabled);
             const enabledGestures = t.gestures?.discrete?.filter(g => g.enabled) || [];
 
+            // 获取各任务的执行参数
+            const discreteExec = t.execution?.discrete_gesture || {};
+            const continual1Exec = t.execution?.continual_gesture_1 || {};
+            const continual2Exec = t.execution?.continual_gesture_2 || {};
+            const continual3Exec = t.execution?.continual_gesture_3 || {};
+
+            // 判断哪些任务类型被启用
+            const hasDiscreteGesture = enabledTasks.some(task => task.id === 'discrete_gesture');
+            const hasContinualGesture1 = enabledTasks.some(task => task.id === 'continual_gesture_1');
+            const hasContinualGesture2 = enabledTasks.some(task => task.id === 'continual_gesture_2');
+            const hasContinualGesture3 = enabledTasks.some(task => task.id === 'continual_gesture_3');
+
             let html = `
                 <div class="preview-header-info">
                     <div class="preview-stat">
@@ -559,10 +571,6 @@
                         <span class="stat-num">${enabledGestures.length}</span>
                         <span class="stat-label">离散手势</span>
                     </div>
-                    <div class="preview-stat">
-                        <span class="stat-num">${this.estimateTotalTime(t)}</span>
-                        <span class="stat-label">预计时长</span>
-                    </div>
                 </div>
 
                 <div class="preview-tree">
@@ -572,17 +580,29 @@
                             <i class="fa fa-cog"></i>
                             <span>${t.templateName}</span>
                         </div>
-                        
+
                         <!-- Level 0: 采集任务 -->
                         <div class="tree-children">
-                            ${enabledTasks.map(task => `
+                            ${enabledTasks.map(task => {
+                                // 根据任务类型显示不同的badge信息
+                                let badgeInfo = '';
+                                if (task.id === 'discrete_gesture') {
+                                    badgeInfo = `<span class="node-badge">${enabledGestures.length}个手势</span>`;
+                                } else if (task.id === 'continual_gesture_1') {
+                                    badgeInfo = `<span class="node-badge">每Stage ${continual1Exec.trialsPerStage || 5}次</span>`;
+                                } else if (task.id === 'continual_gesture_2') {
+                                    badgeInfo = `<span class="node-badge">每Stage ${continual2Exec.trialsPerStage || 5}次</span>`;
+                                } else if (task.id === 'continual_gesture_3') {
+                                    badgeInfo = `<span class="node-badge">每Stage ${continual3Exec.trialsPerStage || 10}次</span>`;
+                                }
+                                return `
                                 <div class="tree-node task-node ${task.id}">
                                     <div class="node-content">
                                         <i class="fa fa-hand-paper"></i>
                                         <span>${task.name}</span>
-                                        ${task.id === 'discrete_gesture' ? `<span class="node-badge">${enabledGestures.length}个手势</span>` : ''}
+                                        ${badgeInfo}
                                     </div>
-                                    
+
                                     <!-- Level 1: 大类 -->
                                     <div class="tree-children">
                                         ${enabledCat1.map(cat1 => `
@@ -591,7 +611,7 @@
                                                     <i class="fa fa-layer-group"></i>
                                                     <span>${cat1.name}</span>
                                                 </div>
-                                                
+
                                                 <!-- Level 2: 大场景 -->
                                                 <div class="tree-children">
                                                     ${enabledCat2.map(cat2 => `
@@ -600,7 +620,7 @@
                                                                 <i class="fa fa-map-marker-alt"></i>
                                                                 <span>${cat2.name}</span>
                                                             </div>
-                                                            
+
                                                             <!-- Level 3: 子场景 (Stage) - 折叠显示 -->
                                                             <div class="tree-children collapsed-children">
                                                                 <div class="node-content stages-summary" onclick="this.parentElement.classList.toggle('expanded')">
@@ -626,7 +646,7 @@
                                         `).join('')}
                                     </div>
                                 </div>
-                            `).join('')}
+                            `}).join('')}
                         </div>
                     </div>
                 </div>
@@ -640,7 +660,7 @@
                 </div>
 
                 <!-- 离散手势库 -->
-                ${enabledGestures.length > 0 ? `
+                ${hasDiscreteGesture && enabledGestures.length > 0 ? `
                 <div class="preview-section-inline">
                     <h4><i class="fa fa-hand-paper"></i> 离散手势库 (${enabledGestures.length}个)</h4>
                     <div class="preview-gestures">
@@ -648,18 +668,41 @@
                             <span class="preview-gesture">${g.icon} ${g.name}</span>
                         `).join('')}
                     </div>
+                    <div class="preview-params">
+                        <span>每个手势重复 <strong>${discreteExec.repeatPerGesture || 5}</strong> 次</span>
+                    </div>
                 </div>
                 ` : ''}
 
-                <!-- 执行参数 -->
+                <!-- 连续手势1参数 -->
+                ${hasContinualGesture1 ? `
                 <div class="preview-section-inline">
-                    <h4><i class="fa fa-clock"></i> 执行参数</h4>
+                    <h4><i class="fa fa-sync-alt"></i> 连续手势采集1</h4>
                     <div class="preview-params">
-                        <span>每手势重复 <strong>${t.execution?.repeatPerGesture || 5}</strong> 次</span>
-                        <span>间隔 <strong>${t.execution?.intervalBetweenRepeat || 1}</strong> 秒</span>
-                        <span>手势间休息 <strong>${t.execution?.restBetweenGestures || 30}</strong> 秒</span>
+                        <span>每Stage采集 <strong>${continual1Exec.trialsPerStage || 5}</strong> 次</span>
                     </div>
                 </div>
+                ` : ''}
+
+                <!-- 连续手势2参数 -->
+                ${hasContinualGesture2 ? `
+                <div class="preview-section-inline">
+                    <h4><i class="fa fa-sync-alt"></i> 连续手势采集2</h4>
+                    <div class="preview-params">
+                        <span>每Stage采集 <strong>${continual2Exec.trialsPerStage || 5}</strong> 次</span>
+                    </div>
+                </div>
+                ` : ''}
+
+                <!-- 连续手势3参数 -->
+                ${hasContinualGesture3 ? `
+                <div class="preview-section-inline">
+                    <h4><i class="fa fa-sync-alt"></i> 连续手势采集3</h4>
+                    <div class="preview-params">
+                        <span>每Stage采集 <strong>${continual3Exec.trialsPerStage || 10}</strong> 次</span>
+                    </div>
+                </div>
+                ` : ''}
             `;
 
             return html;
