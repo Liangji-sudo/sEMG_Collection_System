@@ -7,6 +7,7 @@ const { spawn } = require('child_process');
 const EventEmitter = require('events');
 const realtimeEngine = require('./realtimeEngine');
 const path = require('path');
+const { getPythonCommand } = require('./pythonPath');
 
 class DeviceSync extends EventEmitter {
     constructor() {
@@ -36,8 +37,9 @@ class DeviceSync extends EventEmitter {
             try {
                 console.log('[deviceSync] 正在启动ble_server......');
 
-                // 启动Python子进程，连接固定设备（无需传参，脚本内已固定MAC）
-                this.pythonProcess = spawn('python', [path.join(__dirname, 'ble_server.py')]);
+                // 自动判断使用 Python 脚本还是打包后的 exe
+                const { command, args } = getPythonCommand('ble_server');
+                this.pythonProcess = spawn(command, args);
 
                 this.pythonProcess.on('spawn', () => {
                     console.log('[deviceSync] ble_server已启动');
@@ -84,8 +86,9 @@ class DeviceSync extends EventEmitter {
         try {
             console.log('[deviceSync] 正在启动mocap_server......');
 
-            // 启动mocap_server.py，端口8767
-            this.mocapProcess = spawn('python', [path.join(__dirname, 'mocap_server.py')]);
+            // 自动判断使用 Python 脚本还是打包后的 exe
+            const { command, args } = getPythonCommand('mocap_server');
+            this.mocapProcess = spawn(command, args);
 
             this.mocapProcess.on('spawn', () => {
                 console.log('[deviceSync] mocap_server已启动 (端口: 8767)');

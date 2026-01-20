@@ -1,16 +1,18 @@
 /*
  dataStorage.js
  负责启动storage_server, 以及监控storage_server的传输信息（数据不接受，只接收一些统计信息，为前端提供api接口）
- 
+
  修改记录：
  - 引入 paths.js 获取正确的存储路径
  - 启动 Python 时传入 --storage_dir 参数
+ - 支持打包后使用 exe 或开发时使用 Python
 */
 
 const { spawn } = require('child_process');
 const EventEmitter = require('events');
 const path = require('path');
 const { PATHS } = require('./paths'); // [新增] 引入路径管理模块
+const { getPythonCommand } = require('./pythonPath'); // [新增] Python路径解析
 
 class DataStorage extends EventEmitter {
     constructor() {
@@ -23,24 +25,20 @@ class DataStorage extends EventEmitter {
         return new Promise((resolve, reject) => {
             try {
                 console.log('[dataStorage] 正在启动storage_server......');
-                
-                // [关键修改] 获取 Python 脚本的绝对路径
-                // 在打包后，脚本位于 resources/app/ 下，与 dataStorage.js 同级
-                const scriptPath = path.join(__dirname, 'storage_server.py');
-                
+
                 // [关键修改] 获取外部可写的 storage 目录 (exe同级目录)
                 const storageDir = PATHS.storage;
-
-                console.log(`[dataStorage] Python脚本路径: ${scriptPath}`);
                 console.log(`[dataStorage] 数据存储目标路径: ${storageDir}`);
 
-                // [关键修改] 启动参数：脚本路径 + storage路径参数
-                this.pythonProcess = spawn('python', [
-                    scriptPath, 
-                    '--storage_dir', 
+                // 自动判断使用 Python 脚本还是打包后的 exe
+                const { command, args } = getPythonCommand('storage_server', [
+                    '--storage_dir',
                     storageDir
                 ]);
-                
+
+                console.log(`[dataStorage] 启动命令: ${command} ${args.join(' ')}`);
+                this.pythonProcess = spawn(command, args);
+
                 this.pythonProcess.on('spawn', () => {
                     console.log('[dataStorage] storage_server已启动');
                     resolve();

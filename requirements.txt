@@ -1,0 +1,15 @@
+# Python dependencies for sEMG Collection System
+# Install: pip install -r requirements.txt
+
+# BLE communication
+bleak>=0.21.0
+msgpack>=1.0.0
+websockets>=11.0
+
+# Data storage (HDF5)
+h5py>=3.8.0
+numpy>=1.24.0
+pyzmq>=25.0.0
+
+# Build tools (for packaging)
+pyinstaller>=6.0.0
