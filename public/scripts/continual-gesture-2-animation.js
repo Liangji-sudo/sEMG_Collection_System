@@ -351,10 +351,15 @@
             
             // 绑定滚轮事件
             this.canvas.addEventListener('wheel', this._wheelHandler, { passive: false });
-            
-            // 开始第一个Trial
-            this.startTrial();
-            
+
+            // 【修复】延迟开始第一个Trial，等待H5文件打开
+            // stage_start 命令是异步的，需要等文件创建完成
+            setTimeout(() => {
+                if (this.isRunning) {
+                    this.startTrial();
+                }
+            }, 200);
+
             // 设置超时计时器
             this.stageTimer = setTimeout(() => {
                 console.log('[ContinualGesture2Animation] Stage超时');

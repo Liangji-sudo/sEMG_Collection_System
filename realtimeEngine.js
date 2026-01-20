@@ -252,17 +252,32 @@ class RealtimeEngine extends EventEmitter {
         this.pending_prompt = { name, time: promptTime, stageName: stageName || this.currentStageName };
 
         // 【修复】立即保存 prompt 到 storage，不等待 EMG 数据
-        if (this.stageFileOpen && !this.isClosingStageFile) {
-            this.sendStorageCommand('append', {
-                data: {
-                    prompt_name: name,
-                    prompt_time: promptTime,
-                    prompt_stage: stageName || this.currentStageName
+        // 如果文件还没打开，等待一小段时间后重试
+        let retryCount = 0;
+        const savePrompt = () => {
+            if (this.stageFileOpen && !this.isClosingStageFile) {
+                this.sendStorageCommand('append', {
+                    data: {
+                        prompt_name: name,
+                        prompt_time: promptTime,
+                        prompt_stage: stageName || this.currentStageName
+                    }
+                }).catch(err => {
+                    console.error('[realtimeEngine] 保存 prompt 失败:', err);
+                });
+            } else {
+                // 文件还没打开，100ms 后重试（最多重试 5 次）
+                retryCount++;
+                if (retryCount <= 5) {
+                    console.log(`[realtimeEngine] 文件未打开，100ms 后重试保存 prompt (${retryCount}/5)`);
+                    setTimeout(savePrompt, 100);
+                } else {
+                    console.warn('[realtimeEngine] 保存 prompt 失败：文件未打开（已重试 5 次）');
                 }
-            }).catch(err => {
-                console.error('[realtimeEngine] 保存 prompt 失败:', err);
-            });
-        }
+            }
+        };
+
+        savePrompt();
     }
     
     // 【新增】Mocap命令处理

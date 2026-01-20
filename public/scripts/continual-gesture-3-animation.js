@@ -242,7 +242,14 @@
             console.log('[ContinualGesture3Animation] restBetweenTrials:', this.restBetweenTrials);  // 【新增】
 
             this.reset();
-            this.startNewTrial();
+
+            // 【修复】延迟开始第一个Trial，等待H5文件打开
+            // stage_start 命令是异步的，需要等文件创建完成
+            setTimeout(() => {
+                if (this.isRunning) {
+                    this.startNewTrial();
+                }
+            }, 200);
 
             if (this.canvas) {
                 this.canvas.style.display = 'block';
