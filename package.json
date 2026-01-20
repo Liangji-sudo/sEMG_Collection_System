@@ -7,7 +7,7 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "exe": "python build_python.py",
-    "package": "electron-packager . 数据采集系统 --platform=win32 --arch=x64 --out=dist --overwrite --ignore=storage --ignore=build_temp --ignore=dist --ignore=__pycache__ --ignore=.git",
+    "package": "electron-packager . 数据采集系统 --platform=win32 --arch=x64 --out=dist --overwrite",
     "build": "npm run exe && npm run package",
     "clean": "rmdir /s /q dist python_dist build_temp 2>nul || true",
     "setup:electron": "npm install electron electron-packager --save-dev"
