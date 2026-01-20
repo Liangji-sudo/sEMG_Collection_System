@@ -207,25 +207,30 @@
             console.log('[DiscreteGestureAnimation] 手势名称:', gesture.name);
             console.log('[DiscreteGestureAnimation] 手势图标:', gesture.icon);
             console.log('[DiscreteGestureAnimation] 执行参数:', executionParams);
-            
+
+            // 【修复】先初始化Canvas（如果需要），避免后续init()覆盖promptLibrary
+            if (!this.canvas) {
+                this.init('.animation-area');
+            }
+
             // 从executionParams获取重复次数
             const repeatCount = executionParams?.repeatPerGesture || 5;
-            
+
             // 【修复】直接使用gesture.name作为gestureId，确保显示用户定义的名称
             const gestureId = gesture.name;
-            
+
             // 【修复】确保icon不为空，检查多种可能的空值情况
             let icon = gesture.icon;
             if (!icon || icon === '' || icon === 'undefined' || icon === 'null') {
                 icon = '✋';  // 默认图标
             }
-            
+
             this.promptLibrary[gestureId] = {
                 label: gesture.name,
                 icon: icon,
                 color: gesture.color || '#3b82f6'
             };
-            
+
             console.log('[DiscreteGestureAnimation] 添加到promptLibrary:', this.promptLibrary[gestureId]);
             
             // 创建重复的promptSequence
@@ -460,14 +465,16 @@
          */
         triggerPrompt(prompt) {
             console.log(`[DiscreteGestureAnimation] 触发Prompt: ${prompt.name} - ${prompt.label}`);
-            
+
+            // 通过回调通知 collection-controller，由它统一发送 prompt
             if (this.onPromptTriggered) {
                 this.onPromptTriggered(prompt.name, prompt.index, this.currentStage.name);
             }
-            
-            if (window.animationController && window.animationController.sendPrompt) {
-                window.animationController.sendPrompt(prompt.name, this.currentStage.name);
-            }
+
+            // 【移除】不再通过 animationController 重复发送，避免双重 prompt
+            // if (window.animationController && window.animationController.sendPrompt) {
+            //     window.animationController.sendPrompt(prompt.name, this.currentStage.name);
+            // }
         }
 
         /**

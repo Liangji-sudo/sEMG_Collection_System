@@ -1001,7 +1001,15 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
         startDiscreteGestureCollection() {
             console.log('[Collection] 开始离散手势顺序采集');
-            
+
+            // 【修复】发送 stage_start 命令打开 H5 文件
+            const currentStage = this.stages[this.currentStageIndex];
+            this.sendToRealtimeEngine('stage_start', {
+                stageName: currentStage?.name || currentStage?.id,
+                stageIndex: this.currentStageIndex,
+                timestamp: Date.now()
+            });
+
             this.currentPhase = 'prepare';
             this.showPreparation(() => {
                 this.startNextGesture();

@@ -114,8 +114,9 @@
          * 发送Prompt信号到realtimeEngine
          */
         sendPrompt(promptName, stageName) {
-            const timestamp = Date.now() / 1000;
-            
+            // 【修复】统一使用毫秒时间戳，与其他地方保持一致
+            const timestamp = Date.now();
+
             this.sendToRealtimeEngine('prompt', {
                 name: promptName,
                 stageName: stageName,
