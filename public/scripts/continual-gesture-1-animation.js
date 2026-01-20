@@ -238,19 +238,22 @@
                 
                 this.config.canvasWidth = rect.width;
                 this.config.canvasHeight = rect.height;
-                
+
                 // 计算圆心位置（画布中心偏上一点，留出底部信息区域）
                 this.config.centerX = rect.width / 2;
                 this.config.centerY = (rect.height - 60) / 2 + 30; // 上方留30px，下方留60px
-                
-                // 根据画布大小调整最大半径，尽量让圆大一些
+
+                // 根据画布大小计算可用的最大半径
                 const maxPossibleRadius = Math.min(
                     this.config.centerX - 20,           // 左右边距20px
                     this.config.centerY - 50,           // 上边距50px（留给标题）
                     rect.height - this.config.centerY - 70  // 下边距70px（留给进度信息）
                 );
-                this.maxRadius = Math.max(80, Math.min(150, maxPossibleRadius));
-                
+                // 【修复】不再硬编码150的上限，使用配置的maxRadius或画布允许的最大值
+                // 如果配置的maxRadius超过画布允许的范围，则使用画布允许的最大值
+                const configuredMaxRadius = this.maxRadius || 150;
+                this.maxRadius = Math.max(80, Math.min(configuredMaxRadius, maxPossibleRadius));
+
                 return true;
             }
             return false;
