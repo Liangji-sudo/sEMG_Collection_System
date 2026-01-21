@@ -77,23 +77,23 @@
         // 手势库
         gestures: {
             discrete: [
-                { id: 'thumb_up', name: '拇指上滑', icon: '👆', enabled: true },
-                { id: 'thumb_down', name: '拇指下滑', icon: '👇', enabled: true },
-                { id: 'thumb_left', name: '拇指左滑', icon: '👈', enabled: true },
-                { id: 'thumb_right', name: '拇指右滑', icon: '👉', enabled: true },
-                { id: 'thumb_press', name: '拇指按压', icon: '👍', enabled: true },
-                { id: 'index_tap', name: '食指点击', icon: '☝️', enabled: true },
-                { id: 'index_double_tap', name: '食指双击', icon: '✌️', enabled: true },
-                { id: 'middle_tap', name: '中指点击', icon: '🖕', enabled: true },
-                { id: 'pinch', name: '捏合', icon: '🤏', enabled: true },
-                { id: 'spread', name: '张开', icon: '🖐️', enabled: true },
-                { id: 'fist', name: '握拳', icon: '✊', enabled: true },
-                { id: 'release', name: '松开', icon: '✋', enabled: true },
-                { id: 'wrist_up', name: '手腕上抬', icon: '⬆️', enabled: true },
-                { id: 'wrist_down', name: '手腕下压', icon: '⬇️', enabled: true },
-                { id: 'wrist_rotate_cw', name: '手腕顺时针', icon: '🔃', enabled: true },
-                { id: 'wrist_rotate_ccw', name: '手腕逆时针', icon: '🔄', enabled: true },
-                { id: 'rest', name: '保持/休息', icon: '⏸️', enabled: true }
+                { id: 'thumb_up', name: '拇指上滑', icon: '👆', gifFile: 'thumb_up.gif', enabled: true },
+                { id: 'thumb_down', name: '拇指下滑', icon: '👇', gifFile: 'thumb_down.gif', enabled: true },
+                { id: 'thumb_left', name: '拇指左滑', icon: '👈', gifFile: 'thumb_left.gif', enabled: true },
+                { id: 'thumb_right', name: '拇指右滑', icon: '👉', gifFile: 'thumb_right.gif', enabled: true },
+                { id: 'thumb_press', name: '拇指按压', icon: '👍', gifFile: 'thumb_press.gif', enabled: true },
+                { id: 'index_tap', name: '食指点击', icon: '☝️', gifFile: 'index_tap.gif', enabled: true },
+                { id: 'index_double_tap', name: '食指双击', icon: '✌️', gifFile: 'index_double_tap.gif', enabled: true },
+                { id: 'middle_tap', name: '中指点击', icon: '🖕', gifFile: 'middle_tap.gif', enabled: true },
+                { id: 'pinch', name: '捏合', icon: '🤏', gifFile: 'pinch.gif', enabled: true },
+                { id: 'spread', name: '张开', icon: '🖐️', gifFile: 'spread.gif', enabled: true },
+                { id: 'fist', name: '握拳', icon: '✊', gifFile: 'fist.gif', enabled: true },
+                { id: 'release', name: '松开', icon: '✋', gifFile: 'release.gif', enabled: true },
+                { id: 'wrist_up', name: '手腕上抬', icon: '⬆️', gifFile: 'wrist_up.gif', enabled: true },
+                { id: 'wrist_down', name: '手腕下压', icon: '⬇️', gifFile: 'wrist_down.gif', enabled: true },
+                { id: 'wrist_rotate_cw', name: '手腕顺时针', icon: '🔃', gifFile: 'wrist_rotate_cw.gif', enabled: true },
+                { id: 'wrist_rotate_ccw', name: '手腕逆时针', icon: '🔄', gifFile: 'wrist_rotate_ccw.gif', enabled: true },
+                { id: 'rest', name: '保持/休息', icon: '⏸️', gifFile: 'rest.gif', enabled: true }
             ],
             continual_1: [],
             continual_2: [],
@@ -982,6 +982,7 @@
             if (!container) return;
 
             const gestures = this.currentTemplate.gestures.discrete;
+            const continualGestures = this.currentTemplate.gestures;
 
             container.innerHTML = `
                 <div class="config-section">
@@ -991,7 +992,7 @@
                             <i class="fa fa-plus"></i> 添加手势
                         </button>
                     </div>
-                    <p class="config-hint">勾选启用的手势，每个手势将按顺序采集</p>
+                    <p class="config-hint">勾选启用的手势，每个手势将按顺序采集。GIF文件放在 tutorial/gestures/discrete/ 目录下</p>
                     <div class="config-gestures-grid">
                         ${gestures.map((gesture, index) => `
                             <div class="config-gesture-item ${gesture.enabled ? 'enabled' : 'disabled'}">
@@ -999,13 +1000,46 @@
                                     <input type="checkbox" data-index="${index}" ${gesture.enabled ? 'checked' : ''}>
                                     <span class="gesture-icon">${gesture.icon}</span>
                                 </label>
-                                <input type="text" class="gesture-name-input" data-index="${index}" 
-                                       value="${gesture.name}" placeholder="手势名称">
+                                <input type="text" class="gesture-name-input" data-index="${index}"
+                                       value="${gesture.name}" placeholder="手势名称" title="手势名称">
+                                <input type="text" class="gesture-gif-input" data-index="${index}"
+                                       value="${gesture.gifFile || ''}" placeholder="GIF文件名" title="GIF文件名（如 thumb_up.gif）">
                                 <button class="gesture-delete-btn" data-index="${index}">
                                     <i class="fa fa-times"></i>
                                 </button>
                             </div>
                         `).join('')}
+                    </div>
+                </div>
+
+                <!-- 连续手势 GIF 配置 -->
+                <div class="config-section">
+                    <div class="config-section-header">
+                        <h3><i class="fa fa-sync-alt"></i> 连续手势示范 GIF</h3>
+                    </div>
+                    <p class="config-hint">为每种连续手势任务配置示范 GIF，文件放在对应的 tutorial/gestures/ 子目录下</p>
+                    <div class="continual-gif-config">
+                        <div class="continual-gif-item">
+                            <label>连续手势1 (滚轮控制)</label>
+                            <input type="text" class="continual-gif-input" data-task="continual_1"
+                                   value="${continualGestures.continual_1?.[0]?.gifFile || ''}"
+                                   placeholder="如 continual_01.gif">
+                            <span class="gif-path-hint">tutorial/gestures/continual_1/</span>
+                        </div>
+                        <div class="continual-gif-item">
+                            <label>连续手势2 (手腕控制)</label>
+                            <input type="text" class="continual-gif-input" data-task="continual_2"
+                                   value="${continualGestures.continual_2?.[0]?.gifFile || ''}"
+                                   placeholder="如 continual_2.gif">
+                            <span class="gif-path-hint">tutorial/gestures/continual_2/</span>
+                        </div>
+                        <div class="continual-gif-item">
+                            <label>连续手势3 (自定义控制)</label>
+                            <input type="text" class="continual-gif-input" data-task="continual_3"
+                                   value="${continualGestures.continual_3?.[0]?.gifFile || ''}"
+                                   placeholder="如 continual_03.gif">
+                            <span class="gif-path-hint">tutorial/gestures/continual_3/</span>
+                        </div>
                     </div>
                 </div>
 
@@ -1023,8 +1057,8 @@
                             <span class="stat-label">已启用</span>
                         </div>
                         <div class="stat-item">
-                            <span class="stat-value">${gestures.filter(g => !g.enabled).length}</span>
-                            <span class="stat-label">已禁用</span>
+                            <span class="stat-value">${gestures.filter(g => g.gifFile).length}</span>
+                            <span class="stat-label">已配置GIF</span>
                         </div>
                     </div>
                 </div>
@@ -1060,6 +1094,16 @@
                 });
             });
 
+            // GIF文件名输入
+            container.querySelectorAll('.gesture-gif-input').forEach(input => {
+                input.addEventListener('change', (e) => {
+                    const index = parseInt(e.target.dataset.index);
+                    const gifFile = e.target.value.trim();
+                    this.currentTemplate.gestures.discrete[index].gifFile = gifFile;
+                    this.isDirty = true;
+                });
+            });
+
             // 删除按钮
             container.querySelectorAll('.gesture-delete-btn').forEach(btn => {
                 btn.addEventListener('click', async (e) => {
@@ -1081,11 +1125,13 @@
                     if (name && name.trim()) {
                         const trimmedName = name.trim();
                         const icon = await this.showPrompt('请输入手势图标（emoji）：', '✋');
-                        
+                        const gifFile = await this.showPrompt('请输入GIF文件名（如 gesture.gif）：', '');
+
                         this.currentTemplate.gestures.discrete.push({
                             id: trimmedName,  // 使用名称作为id
                             name: trimmedName,
                             icon: icon || '✋',
+                            gifFile: gifFile || '',
                             enabled: true
                         });
                         this.isDirty = true;
@@ -1094,6 +1140,35 @@
                     }
                 });
             }
+
+            // 连续手势 GIF 输入
+            container.querySelectorAll('.continual-gif-input').forEach(input => {
+                input.addEventListener('change', (e) => {
+                    const taskType = e.target.dataset.task;
+                    const gifFile = e.target.value.trim();
+
+                    // 确保连续手势数组存在
+                    if (!this.currentTemplate.gestures[taskType]) {
+                        this.currentTemplate.gestures[taskType] = [];
+                    }
+
+                    // 如果数组为空，添加一个默认手势对象
+                    if (this.currentTemplate.gestures[taskType].length === 0) {
+                        this.currentTemplate.gestures[taskType].push({
+                            id: taskType,
+                            name: taskType,
+                            gifFile: gifFile,
+                            enabled: true
+                        });
+                    } else {
+                        // 更新第一个手势的 gifFile
+                        this.currentTemplate.gestures[taskType][0].gifFile = gifFile;
+                    }
+
+                    this.isDirty = true;
+                    console.log(`[TemplateConfig] 更新 ${taskType} GIF:`, gifFile);
+                });
+            });
         }
 
         /**

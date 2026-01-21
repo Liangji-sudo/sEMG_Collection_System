@@ -85,6 +85,49 @@
                 });
             }
 
+            // 教程按钮（采集页）
+            const tutorialBtn = document.getElementById('tutorialBtn');
+            if (tutorialBtn) {
+                tutorialBtn.addEventListener('click', () => {
+                    console.log('[PageSwitch] 点击教程按钮');
+                    this.showTutorialModal();
+                });
+            }
+
+            // 教程弹窗关闭按钮
+            const closeTutorialBtn = document.getElementById('closeTutorialModal');
+            if (closeTutorialBtn) {
+                closeTutorialBtn.addEventListener('click', () => {
+                    this.hideTutorialModal();
+                });
+            }
+
+            // 教程弹窗跳过按钮
+            const tutorialSkipBtn = document.getElementById('tutorialSkipBtn');
+            if (tutorialSkipBtn) {
+                tutorialSkipBtn.addEventListener('click', () => {
+                    this.hideTutorialModal();
+                });
+            }
+
+            // 教程弹窗重播按钮
+            const tutorialReplayBtn = document.getElementById('tutorialReplayBtn');
+            if (tutorialReplayBtn) {
+                tutorialReplayBtn.addEventListener('click', () => {
+                    this.replayTutorialVideo();
+                });
+            }
+
+            // 点击遮罩层关闭教程弹窗
+            const tutorialModal = document.getElementById('tutorialModal');
+            if (tutorialModal) {
+                tutorialModal.addEventListener('click', (e) => {
+                    if (e.target === tutorialModal) {
+                        this.hideTutorialModal();
+                    }
+                });
+            }
+
             // 关闭用户模态框按钮（如果有）
             const closeModalBtn = document.getElementById('closeUserModal');
             if (closeModalBtn) {
@@ -334,6 +377,119 @@
                 setTimeout(() => {
                     toast.classList.remove('visible');
                 }, 3000);
+            }
+        }
+
+        // ==================== 教程视频 ====================
+
+        /**
+         * 获取当前任务类型对应的视频文件名
+         */
+        getTutorialVideoFile() {
+            // 从 collectionController 获取当前任务类型
+            if (window.collectionController && window.collectionController.currentTaskId) {
+                const taskId = window.collectionController.currentTaskId;
+                // 任务ID到视频文件名的映射
+                const videoMap = {
+                    'discrete_gesture': 'discrete.mp4',
+                    'continual_gesture_1': 'continual_1.mp4',
+                    'continual_gesture_2': 'continual_2.mp4',
+                    'continual_gesture_3': 'continual_3.mp4'
+                };
+                const videoFile = videoMap[taskId];
+                if (videoFile) {
+                    return `tutorial/video/${videoFile}`;
+                }
+            }
+            return null;
+        }
+
+        /**
+         * 获取当前任务类型的中文名称
+         */
+        getTutorialTitle() {
+            if (window.collectionController && window.collectionController.currentTaskId) {
+                const taskId = window.collectionController.currentTaskId;
+                const titles = {
+                    'discrete_gesture': '离散手势采集教程',
+                    'continual_gesture_1': '连续手势1采集教程',
+                    'continual_gesture_2': '连续手势2采集教程',
+                    'continual_gesture_3': '连续手势3采集教程'
+                };
+                return titles[taskId] || '任务教程';
+            }
+            return '任务教程';
+        }
+
+        /**
+         * 显示教程视频弹窗
+         */
+        showTutorialModal() {
+            const modal = document.getElementById('tutorialModal');
+            const video = document.getElementById('tutorialVideo');
+            const source = document.getElementById('tutorialVideoSource');
+            const title = document.getElementById('tutorialModalTitle');
+
+            if (!modal || !video || !source) {
+                console.warn('[PageSwitch] 教程弹窗元素未找到');
+                return;
+            }
+
+            const videoFile = this.getTutorialVideoFile();
+            if (!videoFile) {
+                this.showToast('请先选择采集任务');
+                return;
+            }
+
+            // 设置标题
+            if (title) {
+                title.textContent = this.getTutorialTitle();
+            }
+
+            // 设置视频源
+            source.src = videoFile;
+            video.load();
+
+            // 显示弹窗
+            modal.classList.add('active');
+
+            // 自动播放
+            video.play().catch(err => {
+                console.warn('[PageSwitch] 视频自动播放失败:', err);
+            });
+
+            console.log('[PageSwitch] 显示教程视频:', videoFile);
+        }
+
+        /**
+         * 隐藏教程视频弹窗
+         */
+        hideTutorialModal() {
+            const modal = document.getElementById('tutorialModal');
+            const video = document.getElementById('tutorialVideo');
+
+            if (modal) {
+                modal.classList.remove('active');
+            }
+
+            if (video) {
+                video.pause();
+                video.currentTime = 0;
+            }
+
+            console.log('[PageSwitch] 关闭教程视频弹窗');
+        }
+
+        /**
+         * 重播教程视频
+         */
+        replayTutorialVideo() {
+            const video = document.getElementById('tutorialVideo');
+            if (video) {
+                video.currentTime = 0;
+                video.play().catch(err => {
+                    console.warn('[PageSwitch] 视频重播失败:', err);
+                });
             }
         }
     }

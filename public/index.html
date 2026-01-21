@@ -637,6 +637,142 @@
             gap: 4px;
         }
 
+        .tutorial-btn {
+            padding: 3px 10px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            font-size: 11px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-right: 10px;
+        }
+
+        .tutorial-btn:hover {
+            background: #2563eb;
+        }
+
+        /* 教程视频弹窗 */
+        .tutorial-modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 10000;
+        }
+
+        .tutorial-modal-overlay.active {
+            display: flex;
+        }
+
+        .tutorial-modal {
+            background: #1f2937;
+            border-radius: 12px;
+            max-width: 900px;
+            width: 90%;
+            max-height: 90vh;
+            overflow: hidden;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5);
+        }
+
+        .tutorial-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            background: #111827;
+            border-bottom: 1px solid #374151;
+        }
+
+        .tutorial-modal-title {
+            color: white;
+            font-size: 16px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .tutorial-modal-close {
+            background: transparent;
+            border: none;
+            color: #9ca3af;
+            font-size: 20px;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+
+        .tutorial-modal-close:hover {
+            color: white;
+            background: #374151;
+        }
+
+        .tutorial-modal-body {
+            padding: 20px;
+        }
+
+        .tutorial-video-container {
+            position: relative;
+            width: 100%;
+            background: black;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .tutorial-video {
+            width: 100%;
+            max-height: 500px;
+            display: block;
+        }
+
+        .tutorial-controls {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            padding: 16px;
+            background: #111827;
+            border-radius: 0 0 8px 8px;
+        }
+
+        .tutorial-control-btn {
+            padding: 8px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s;
+        }
+
+        .tutorial-skip-btn {
+            background: #374151;
+            color: white;
+        }
+
+        .tutorial-skip-btn:hover {
+            background: #4b5563;
+        }
+
+        .tutorial-replay-btn {
+            background: #3b82f6;
+            color: white;
+        }
+
+        .tutorial-replay-btn:hover {
+            background: #2563eb;
+        }
+
         .main-content {
             display: flex;
             flex: 1;
@@ -1137,6 +1273,80 @@
             margin-top: 8px;
             font-size: 12px;
             color: #6b7280;
+        }
+
+        /* 手势示范 GIF 显示区域 */
+        .gesture-gif-container {
+            position: absolute;
+            bottom: 70px;
+            left: 20px;
+            width: 180px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            z-index: 100;
+            display: none;
+        }
+
+        .gesture-gif-container.active {
+            display: block;
+        }
+
+        .gesture-gif-header {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 12px;
+            background: #3b82f6;
+            color: white;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .gesture-gif-header i {
+            font-size: 14px;
+        }
+
+        .gesture-gif-content {
+            position: relative;
+            width: 100%;
+            height: 140px;
+            background: #f8fafc;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .gesture-gif-image {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            display: none;
+        }
+
+        .gesture-gif-image.loaded {
+            display: block;
+        }
+
+        .gesture-gif-placeholder {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            color: #9ca3af;
+        }
+
+        .gesture-gif-placeholder i {
+            font-size: 32px;
+        }
+
+        .gesture-gif-placeholder span {
+            font-size: 12px;
+        }
+
+        .gesture-gif-placeholder.hidden {
+            display: none;
         }
 
         /* 状态指示 */
@@ -2832,7 +3042,7 @@
         /* 手势配置 */
         .config-gestures-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
             gap: 12px;
         }
 
@@ -3012,11 +3222,12 @@
             display: flex;
             align-items: center;
             gap: 8px;
-            padding: 12px;
+            padding: 10px 12px;
             background: #f9fafb;
             border-radius: 8px;
             border: 2px solid transparent;
             transition: all 0.2s;
+            flex-wrap: wrap;
         }
 
         .config-gesture-item.enabled {
@@ -3033,6 +3244,7 @@
             align-items: center;
             gap: 8px;
             cursor: pointer;
+            flex-shrink: 0;
         }
 
         .gesture-checkbox input {
@@ -3051,7 +3263,66 @@
             border-radius: 4px;
             font-size: 12px;
             background: white;
-            min-width: 0;
+            min-width: 80px;
+        }
+
+        .gesture-gif-input {
+            width: 100px;
+            padding: 6px 8px;
+            border: 1px solid #e5e7eb;
+            border-radius: 4px;
+            font-size: 11px;
+            background: white;
+            color: #6b7280;
+            flex-shrink: 0;
+        }
+
+        .gesture-gif-input::placeholder {
+            color: #9ca3af;
+        }
+
+        /* 连续手势 GIF 配置 */
+        .continual-gif-config {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .continual-gif-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            background: #f9fafb;
+            border-radius: 8px;
+        }
+
+        .continual-gif-item label {
+            min-width: 180px;
+            font-size: 13px;
+            font-weight: 500;
+            color: #374151;
+        }
+
+        .continual-gif-input {
+            flex: 1;
+            max-width: 200px;
+            padding: 8px 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            font-size: 13px;
+            background: white;
+        }
+
+        .continual-gif-input:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        .gif-path-hint {
+            font-size: 11px;
+            color: #9ca3af;
         }
 
         .gesture-delete-btn {
@@ -4602,7 +4873,11 @@
                         <span class="task-config-badge" id="taskConfigBadge">静态 · 坐姿 · 正常状态</span>
                     </div>
                     <!-- Session和Stage切换下拉菜单 -->
-                    <div style="display: flex; align-items: center;">
+                    <div style="display: flex; align-items: center; gap: 15px;">
+                        <!-- 教程按钮 -->
+                        <button class="tutorial-btn" id="tutorialBtn" title="查看教程视频">
+                            <i class="fas fa-video"></i> 教程
+                        </button>
                         <!-- Session切换下拉菜单 -->
                         <div class="session-switch-container">
                             <label>当前Session:</label>
@@ -4660,6 +4935,21 @@
                             <div class="progress-fill" id="progressFill"></div>
                         </div>
                         <div class="progress-text" id="progressText">0 / 0 完成</div>
+                    </div>
+
+                    <!-- 手势示范 GIF 显示区域（左下角） -->
+                    <div class="gesture-gif-container" id="gestureGifContainer">
+                        <div class="gesture-gif-header">
+                            <i class="fas fa-hand-point-right"></i>
+                            <span>手势示范</span>
+                        </div>
+                        <div class="gesture-gif-content">
+                            <img class="gesture-gif-image" id="gestureGifImage" src="" alt="手势示范">
+                            <div class="gesture-gif-placeholder" id="gestureGifPlaceholder">
+                                <i class="fas fa-image"></i>
+                                <span>等待开始</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -4842,6 +5132,37 @@
     <!--
     <script defer src="scripts/collection_page_right_collect.js"></script>
     -->
+
+    <!-- 教程视频弹窗 -->
+    <div class="tutorial-modal-overlay" id="tutorialModal">
+        <div class="tutorial-modal">
+            <div class="tutorial-modal-header">
+                <div class="tutorial-modal-title">
+                    <i class="fas fa-video"></i>
+                    <span id="tutorialModalTitle">任务教程</span>
+                </div>
+                <button class="tutorial-modal-close" id="closeTutorialModal">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="tutorial-modal-body">
+                <div class="tutorial-video-container">
+                    <video class="tutorial-video" id="tutorialVideo" controls>
+                        <source id="tutorialVideoSource" src="" type="video/mp4">
+                        您的浏览器不支持视频播放
+                    </video>
+                </div>
+                <div class="tutorial-controls">
+                    <button class="tutorial-control-btn tutorial-skip-btn" id="tutorialSkipBtn">
+                        <i class="fas fa-forward"></i> 跳过
+                    </button>
+                    <button class="tutorial-control-btn tutorial-replay-btn" id="tutorialReplayBtn">
+                        <i class="fas fa-redo"></i> 重播
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
 
 </body>
 </html>

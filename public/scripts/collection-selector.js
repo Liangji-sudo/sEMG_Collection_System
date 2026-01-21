@@ -556,6 +556,8 @@
                 sessionConfig: this.template.sessionConfig || { count: 3 },
                 // 【关键】保存执行参数，确保采集控制器能获取到最新配置
                 execution: this.template.execution,
+                // 【新增】保存手势配置（包含 gifFile 字段）
+                gestures: this.template.gestures,
                 subject: this.selections.subject,
                 templateName: this.template.templateName,
                 timestamp: new Date().toISOString()

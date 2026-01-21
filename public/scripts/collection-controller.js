@@ -184,7 +184,15 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 }
                 console.log('[Collection] Session数量:', this.sessionCount);
 
-                this.gestures = (template.gestures?.discrete || []).filter(g => g.enabled);
+                // 【修复】优先从 collectionConfig 中读取手势（包含 gifFile 字段）
+                // 如果 collectionConfig 中没有手势，则从 template 中读取
+                if (this.collectionConfig.gestures?.discrete) {
+                    this.gestures = this.collectionConfig.gestures.discrete.filter(g => g.enabled);
+                    console.log('[Collection] 从 collectionConfig 加载手势，数量:', this.gestures.length);
+                } else {
+                    this.gestures = (template.gestures?.discrete || []).filter(g => g.enabled);
+                    console.log('[Collection] 从 template 加载手势，数量:', this.gestures.length);
+                }
 
                 // 【关键修复】优先从collectionConfig.execution读取执行参数
                 // 这确保了从选择器保存的配置能正确传递
@@ -744,12 +752,12 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
         stopTask() {
             if (!this._isRunning) return;
-            
+
             console.log('[Collection] ===== 停止采集任务 =====');
-            
+
             this._isRunning = false;
             this._isPaused = false;
-            
+
             if (this.phaseTimer) {
                 clearTimeout(this.phaseTimer);
                 this.phaseTimer = null;
@@ -776,6 +784,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 window.calibrationGuideAnimation.hide();
             }
 
+            // 【新增】隐藏手势示范 GIF
+            this.hideGestureGif();
+
             if (window.discreteGestureAnimation) {
                 window.discreteGestureAnimation.stop();
             }
@@ -788,18 +799,18 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             if (window.animationController) {
                 window.animationController.stop();
             }
-            
+
             // 重新启用Session和Stage选择器
             const sessionSelect = document.getElementById('sessionSwitchSelect');
             if (sessionSelect) sessionSelect.disabled = false;
             const stageSelect = document.getElementById('stageSwitchSelect');
             if (stageSelect) stageSelect.disabled = false;
-            
+
             this.updateControlButtons(false);
             this.updateNextStageButton();
             this.updateGestureList();
             this.updateStatus('已停止');
-            
+
             this.sendToRealtimeEngine('collection_stop', { completed: false });
         }
 
@@ -1045,21 +1056,24 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
         startNextGesture() {
             if (!this._isRunning || this._isPaused) return;
-            
+
             if (this.currentGestureIndex >= this.gestures.length) {
                 this.onAllGesturesComplete();
                 return;
             }
-            
+
             const gesture = this.gestures[this.currentGestureIndex];
             console.log(`[Collection] 开始手势: ${gesture.name} (${this.currentGestureIndex + 1}/${this.gestures.length})`);
-            
+
             this.currentPhase = 'gesture';
             this.gestureRepeatCount = 0;
-            
+
             this.updateProgress();
             this.updateGestureList();
-            
+
+            // 【新增】显示手势示范 GIF
+            this.showGestureGif(gesture);
+
             if (window.discreteGestureAnimation) {
                 window.discreteGestureAnimation.startGesture(gesture, this.currentExecutionParams, () => {
                     this.onGestureAnimationComplete();
@@ -1169,40 +1183,43 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
         onAllGesturesComplete() {
             console.log('[Collection] ===== 当前Stage所有手势采集完成 =====');
-            
+
             this.currentPhase = 'complete';
-            
+
+            // 【新增】隐藏手势示范 GIF
+            this.hideGestureGif();
+
             const hasMoreStages = this.currentStageIndex < this.stages.length - 1;
             const nextStageName = hasMoreStages ? this.stages[this.currentStageIndex + 1]?.name : '';
-            
+
             this.updateGestureDisplay({
                 name: '🎉 Stage采集完成！',
-                instruction: hasMoreStages ? 
-                    `可以点击"进入下一Stage"继续采集: ${nextStageName}` : 
+                instruction: hasMoreStages ?
+                    `可以点击"进入下一Stage"继续采集: ${nextStageName}` :
                     '所有Stage已完成！',
                 showCountdown: false
             });
-            
+
             const currentStage = this.stages[this.currentStageIndex];
             this.sendToRealtimeEngine('stage_end', {
                 stageName: currentStage?.name || currentStage?.id
             });
-            
+
             this.sendToRealtimeEngine('collection_stop', { completed: true });
-            
+
             this._isRunning = false;
-            
+
             // 重新启用Session和Stage选择器
             const sessionSelect = document.getElementById('sessionSwitchSelect');
             if (sessionSelect) sessionSelect.disabled = false;
             const stageSelect = document.getElementById('stageSwitchSelect');
             if (stageSelect) stageSelect.disabled = false;
-            
+
             this.updateControlButtons(false);
             this.updateNextStageButton();
             this.updateGestureList();
             this.updateStatus('采集完成');
-            
+
             this.showToast('当前Stage采集完成！', 'success');
         }
 
@@ -1272,18 +1289,21 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             console.log('[Collection] ====== 启动连续手势动画 ======');
             console.log('[Collection] 任务类型:', this.currentTaskId);
             console.log('[Collection] ★★★ trialsPerStage:', this.currentExecutionParams.trialsPerStage);
-            
+
             const currentStage = this.stages[this.currentStageIndex];
             this.currentPhase = 'continual';
-            
+
             this.updateGestureDisplay({
                 name: '光标移动任务',
                 instruction: '请通过滚轮移动光标到目标位置',
                 showCountdown: false
             });
-            
+
             this.updateGestureList();
-            
+
+            // 【新增】显示连续手势的 GIF 示范
+            this.showContinualGestureGif();
+
             const stageConfig = {
                 name: currentStage?.name || currentStage?.id || 'stage',
                 label: currentStage?.name || 'Stage',
@@ -1371,6 +1391,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
         onContinualStageComplete() {
             console.log('[Collection] 连续手势Stage完成');
+
+            // 【新增】隐藏手势示范 GIF
+            this.hideGestureGif();
 
             const currentStage = this.stages[this.currentStageIndex];
             this.sendToRealtimeEngine('stage_end', {
@@ -1520,6 +1543,126 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 toast.innerHTML = `<i class="fas fa-${icon}-circle"></i> ${message}`;
                 toast.classList.add('visible');
                 setTimeout(() => toast.classList.remove('visible'), 3000);
+            }
+        }
+
+        // ==================== GIF 手势示范 ====================
+
+        /**
+         * 获取当前任务类型对应的 GIF 目录
+         */
+        getGifDirectory() {
+            const dirMap = {
+                'discrete_gesture': 'discrete',
+                'continual_gesture_1': 'continual_1',
+                'continual_gesture_2': 'continual_2',
+                'continual_gesture_3': 'continual_3'
+            };
+            return dirMap[this.currentTaskId] || 'discrete';
+        }
+
+        /**
+         * 显示手势示范 GIF
+         * @param {Object} gesture - 手势对象，包含 gifFile 字段
+         */
+        showGestureGif(gesture) {
+            const container = document.getElementById('gestureGifContainer');
+            const image = document.getElementById('gestureGifImage');
+            const placeholder = document.getElementById('gestureGifPlaceholder');
+
+            if (!container || !image || !placeholder) {
+                console.warn('[Collection] GIF 显示元素未找到');
+                return;
+            }
+
+            // 获取 GIF 文件路径
+            const gifFile = gesture?.gifFile;
+            if (!gifFile) {
+                // 没有配置 GIF 文件，显示占位符
+                image.classList.remove('loaded');
+                placeholder.classList.remove('hidden');
+                placeholder.querySelector('span').textContent = gesture?.name || '无示范';
+                container.classList.add('active');
+                console.log('[Collection] 手势无 GIF 配置:', gesture?.name);
+                return;
+            }
+
+            const gifDir = this.getGifDirectory();
+            const gifPath = `tutorial/gestures/${gifDir}/${gifFile}`;
+
+            console.log('[Collection] 显示 GIF:', gifPath);
+
+            // 加载 GIF
+            image.onload = () => {
+                image.classList.add('loaded');
+                placeholder.classList.add('hidden');
+            };
+
+            image.onerror = () => {
+                console.warn('[Collection] GIF 加载失败:', gifPath);
+                image.classList.remove('loaded');
+                placeholder.classList.remove('hidden');
+                placeholder.querySelector('span').textContent = '加载失败';
+            };
+
+            image.src = gifPath;
+            container.classList.add('active');
+        }
+
+        /**
+         * 隐藏手势示范 GIF
+         */
+        hideGestureGif() {
+            const container = document.getElementById('gestureGifContainer');
+            const image = document.getElementById('gestureGifImage');
+
+            if (container) {
+                container.classList.remove('active');
+            }
+
+            if (image) {
+                image.classList.remove('loaded');
+                image.src = '';
+            }
+
+            console.log('[Collection] 隐藏 GIF 显示');
+        }
+
+        /**
+         * 显示连续手势的 GIF 示范
+         * 连续手势每个任务类型只有一个 GIF
+         */
+        showContinualGestureGif() {
+            // 任务ID到手势配置key的映射
+            const gestureKeyMap = {
+                'continual_gesture_1': 'continual_1',
+                'continual_gesture_2': 'continual_2',
+                'continual_gesture_3': 'continual_3'
+            };
+
+            const gestureKey = gestureKeyMap[this.currentTaskId];
+            if (!gestureKey) {
+                console.log('[Collection] 非连续手势任务，跳过 GIF 显示');
+                return;
+            }
+
+            // 从 collectionConfig 中获取连续手势的 GIF 配置
+            const gestureConfig = this.collectionConfig?.gestures?.[gestureKey];
+
+            if (gestureConfig && gestureConfig.length > 0 && gestureConfig[0].gifFile) {
+                console.log('[Collection] 显示连续手势 GIF:', gestureKey, gestureConfig[0].gifFile);
+                this.showGestureGif(gestureConfig[0]);
+            } else {
+                // 尝试从 template 中读取
+                const template = this.getLatestTemplate();
+                const templateGesture = template?.gestures?.[gestureKey];
+
+                if (templateGesture && templateGesture.length > 0 && templateGesture[0].gifFile) {
+                    console.log('[Collection] 从 template 显示连续手势 GIF:', gestureKey, templateGesture[0].gifFile);
+                    this.showGestureGif(templateGesture[0]);
+                } else {
+                    console.log('[Collection] 连续手势无 GIF 配置:', gestureKey);
+                }
             }
         }
 
