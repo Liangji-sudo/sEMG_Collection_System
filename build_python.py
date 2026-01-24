@@ -21,7 +21,21 @@ SCRIPTS = [
     {
         'name': 'ble_server',
         'script': 'ble_server.py',
-        'hidden_imports': ['msgpack', 'websockets', 'asyncio'],
+        'hidden_imports': [
+            'msgpack', 'websockets', 'asyncio', 'json',
+            # BLE 相关（关键！）
+            'bleak', 'bleak.backends', 'bleak.backends.winrt',
+            'bleak.backends.winrt.scanner', 'bleak.backends.winrt.client',
+            # 滤波器相关
+            'scipy', 'scipy.signal', 'numpy',
+            # Windows BLE 后端依赖
+            'winrt', 'winrt.windows.devices.bluetooth',
+            'winrt.windows.devices.bluetooth.genericattributeprofile',
+            'winrt.windows.devices.bluetooth.advertisement',
+            'winrt.windows.devices.enumeration',
+            'winrt.windows.foundation',
+            'winrt.windows.storage.streams',
+        ],
     },
     {
         'name': 'storage_server',
