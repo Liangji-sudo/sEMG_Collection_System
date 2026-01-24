@@ -1,3 +1,8 @@
 storage/
 log/
 config/
+node_modules/
+dist/
+build/
+.claude/
+
