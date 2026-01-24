@@ -80,7 +80,7 @@ def build_script(config):
     # 构建 PyInstaller 命令
     cmd = [
         sys.executable, '-m', 'PyInstaller',
-        '--onefile',                    # 打包成单个文件
+        '--onedir',                     # 打包成文件夹（比 --onefile 快很多）
         '--console',                    # 保留控制台窗口（便于调试）
         '--clean',                      # 清理临时文件
         f'--name={name}',               # 输出文件名

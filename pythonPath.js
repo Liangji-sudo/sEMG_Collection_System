@@ -23,7 +23,8 @@ const PYTHON_DIST_DIR = path.join(__dirname, 'python_dist');
  * @returns {{command: string, args: string[]}}
  */
 function getPythonCommand(scriptName, extraArgs = []) {
-    const exePath = path.join(PYTHON_DIST_DIR, `${scriptName}.exe`);
+    // --onedir 模式：exe 在子文件夹中
+    const exePath = path.join(PYTHON_DIST_DIR, scriptName, `${scriptName}.exe`);
     const pyPath = path.join(__dirname, `${scriptName}.py`);
 
     // 优先使用打包好的 exe（无需 Python 环境）
