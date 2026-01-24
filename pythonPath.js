@@ -2,12 +2,12 @@
  * Python 可执行文件路径解析器
  *
  * 策略：
- * - 优先使用打包好的 exe 文件（无需安装 Python 环境）
- * - 如果 exe 不存在，才尝试使用 Python 运行 .py 脚本
+ * - 优先使用 Python 运行 .py 脚本（需要预先安装 Python 环境）
+ * - 如果 .py 不存在，才尝试使用 exe
  *
  * 部署说明：
- * - 运行 python build_python.py 打包 Python 脚本为 exe
- * - exe 文件会输出到 python_dist/ 目录
+ * - 新机器需要先运行 install_python_env.bat 安装 Python 和依赖
+ * - 然后才能运行数据采集系统
  */
 
 const path = require('path');
@@ -23,20 +23,10 @@ const PYTHON_DIST_DIR = path.join(__dirname, 'python_dist');
  * @returns {{command: string, args: string[]}}
  */
 function getPythonCommand(scriptName, extraArgs = []) {
-    // --onedir 模式：exe 在子文件夹中
-    const exePath = path.join(PYTHON_DIST_DIR, scriptName, `${scriptName}.exe`);
     const pyPath = path.join(__dirname, `${scriptName}.py`);
+    const exePath = path.join(PYTHON_DIST_DIR, `${scriptName}.exe`);
 
-    // 优先使用打包好的 exe（无需 Python 环境）
-    if (fs.existsSync(exePath)) {
-        console.log(`[pythonPath] 使用 exe: ${exePath}`);
-        return {
-            command: exePath,
-            args: [...extraArgs]
-        };
-    }
-
-    // 备用：使用 Python 脚本（需要 Python 环境）
+    // 优先使用 Python 脚本
     if (fs.existsSync(pyPath)) {
         console.log(`[pythonPath] 使用 Python 脚本: ${pyPath}`);
         return {
@@ -45,7 +35,16 @@ function getPythonCommand(scriptName, extraArgs = []) {
         };
     }
 
-    throw new Error(`找不到: ${scriptName}.exe 或 ${scriptName}.py`);
+    // 备用：使用 exe
+    if (fs.existsSync(exePath)) {
+        console.log(`[pythonPath] 使用 exe: ${exePath}`);
+        return {
+            command: exePath,
+            args: [...extraArgs]
+        };
+    }
+
+    throw new Error(`找不到: ${scriptName}.py 或 ${scriptName}.exe`);
 }
 
 module.exports = { getPythonCommand, PYTHON_DIST_DIR };
