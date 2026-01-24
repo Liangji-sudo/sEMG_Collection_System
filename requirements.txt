@@ -14,5 +14,8 @@ pyzmq>=25.0.0
 # Signal processing (EMG filtering)
 scipy>=1.10.0
 
+# Mouse input (for mocap simulation)
+pynput>=1.7.0
+
 # Build tools (for packaging)
 pyinstaller>=6.0.0

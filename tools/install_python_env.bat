@@ -101,7 +101,7 @@ if exist "%WHEELS_DIR%\*.whl" (
     echo.
 
     :: 定义所需的包
-    set PACKAGES=websockets bleak msgpack numpy scipy h5py pyzmq
+    set PACKAGES=websockets bleak msgpack numpy scipy h5py pyzmq pynput
 
     echo 正在从本地 wheels 目录安装所有依赖...
     echo.
@@ -176,6 +176,10 @@ if %errorLevel% equ 0 (echo   [OK] h5py) else (echo   [FAIL] h5py & set ALL_OK=0
 echo 检查 zmq (进程通信)...
 python -c "import zmq" 2>nul
 if %errorLevel% equ 0 (echo   [OK] zmq) else (echo   [FAIL] zmq & set ALL_OK=0)
+
+echo 检查 pynput (鼠标输入)...
+python -c "import pynput" 2>nul
+if %errorLevel% equ 0 (echo   [OK] pynput) else (echo   [FAIL] pynput & set ALL_OK=0)
 
 :: ==================== 显示结果 ====================
 echo.

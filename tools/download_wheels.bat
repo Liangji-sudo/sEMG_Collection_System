@@ -24,7 +24,7 @@ echo [信息] whl 文件将下载到: %WHEELS_DIR%
 echo.
 
 :: 定义需要下载的包（包含 pip）
-set PACKAGES=pip websockets bleak msgpack numpy scipy h5py pyzmq
+set PACKAGES=pip websockets bleak msgpack numpy scipy h5py pyzmq pynput
 
 echo ┌──────────────────────────────────────────────────────┐
 echo │  正在下载依赖包 (Windows x64, Python 3.11)          │
