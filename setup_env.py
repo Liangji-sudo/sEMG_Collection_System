@@ -3,12 +3,21 @@ sEMG 数据采集系统 - 环境安装程序
 带 GUI 界面，支持安装/卸载 Python 依赖
 """
 
+import sys
+import os
+
+# 【关键】防止打包后递归调用
+if getattr(sys, 'frozen', False):
+    # 打包后的环境，使用 'python' 命令而不是 sys.executable
+    PYTHON_CMD = 'python'
+else:
+    # 开发环境
+    PYTHON_CMD = sys.executable
+
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 import subprocess
-import sys
 import threading
-import os
 
 # 需要安装的依赖包
 PACKAGES = [
@@ -21,18 +30,13 @@ PACKAGES = [
     ('pyzmq', 'ZeroMQ 通信'),
 ]
 
+
 class SetupApp:
     def __init__(self, root):
         self.root = root
         self.root.title("sEMG 数据采集系统 - 环境配置")
         self.root.geometry("600x500")
         self.root.resizable(False, False)
-
-        # 设置图标（如果存在）
-        try:
-            self.root.iconbitmap("icon.ico")
-        except:
-            pass
 
         self.create_widgets()
         self.check_environment()
@@ -56,13 +60,11 @@ class SetupApp:
         status_frame = ttk.LabelFrame(self.root, text="环境状态", padding=10)
         status_frame.pack(fill=tk.X, padx=10, pady=10)
 
-        # Python 状态
         self.python_status = tk.StringVar(value="检测中...")
         tk.Label(status_frame, text="Python:").grid(row=0, column=0, sticky=tk.W)
         self.python_label = tk.Label(status_frame, textvariable=self.python_status)
         self.python_label.grid(row=0, column=1, sticky=tk.W, padx=10)
 
-        # pip 状态
         self.pip_status = tk.StringVar(value="检测中...")
         tk.Label(status_frame, text="pip:").grid(row=1, column=0, sticky=tk.W)
         self.pip_label = tk.Label(status_frame, textvariable=self.pip_status)
@@ -72,7 +74,6 @@ class SetupApp:
         pkg_frame = ttk.LabelFrame(self.root, text="依赖包状态", padding=10)
         pkg_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        # 创建表格
         columns = ('package', 'description', 'status')
         self.tree = ttk.Treeview(pkg_frame, columns=columns, show='headings', height=7)
         self.tree.heading('package', text='包名')
@@ -94,32 +95,19 @@ class SetupApp:
         btn_frame = tk.Frame(self.root)
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
 
-        self.install_btn = ttk.Button(
-            btn_frame,
-            text="安装所有依赖",
-            command=self.install_all,
-            width=20
-        )
+        self.install_btn = ttk.Button(btn_frame, text="安装所有依赖",
+                                       command=self.install_all, width=20)
         self.install_btn.pack(side=tk.LEFT, padx=5)
 
-        self.uninstall_btn = ttk.Button(
-            btn_frame,
-            text="卸载所有依赖",
-            command=self.uninstall_all,
-            width=20
-        )
+        self.uninstall_btn = ttk.Button(btn_frame, text="卸载所有依赖",
+                                         command=self.uninstall_all, width=20)
         self.uninstall_btn.pack(side=tk.LEFT, padx=5)
 
-        self.refresh_btn = ttk.Button(
-            btn_frame,
-            text="刷新状态",
-            command=self.check_environment,
-            width=15
-        )
+        self.refresh_btn = ttk.Button(btn_frame, text="刷新状态",
+                                       command=self.check_environment, width=15)
         self.refresh_btn.pack(side=tk.RIGHT, padx=5)
 
     def log(self, message):
-        """添加日志"""
         self.log_text.config(state=tk.NORMAL)
         self.log_text.insert(tk.END, message + "\n")
         self.log_text.see(tk.END)
@@ -127,25 +115,23 @@ class SetupApp:
         self.root.update()
 
     def clear_log(self):
-        """清空日志"""
         self.log_text.config(state=tk.NORMAL)
         self.log_text.delete(1.0, tk.END)
         self.log_text.config(state=tk.DISABLED)
 
     def check_environment(self):
-        """检测环境"""
         self.clear_log()
         self.log("正在检测环境...")
 
-        # 清空表格
         for item in self.tree.get_children():
             self.tree.delete(item)
 
         # 检测 Python
         try:
             result = subprocess.run(
-                [sys.executable, '--version'],
-                capture_output=True, text=True, timeout=10
+                [PYTHON_CMD, '--version'],
+                capture_output=True, text=True, timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
             version = result.stdout.strip() or result.stderr.strip()
             self.python_status.set(f"✓ {version}")
@@ -154,13 +140,14 @@ class SetupApp:
         except Exception as e:
             self.python_status.set("✗ 未安装")
             self.python_label.config(fg="red")
-            self.log(f"Python 未安装: {e}")
+            self.log(f"Python 未安装或不在 PATH 中")
 
         # 检测 pip
         try:
             result = subprocess.run(
-                [sys.executable, '-m', 'pip', '--version'],
-                capture_output=True, text=True, timeout=10
+                [PYTHON_CMD, '-m', 'pip', '--version'],
+                capture_output=True, text=True, timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
             if result.returncode == 0:
                 self.pip_status.set("✓ 已安装")
@@ -168,10 +155,10 @@ class SetupApp:
                 self.log("pip: 已安装")
             else:
                 raise Exception("pip not found")
-        except Exception as e:
+        except:
             self.pip_status.set("✗ 未安装")
             self.pip_label.config(fg="red")
-            self.log(f"pip 未安装: {e}")
+            self.log("pip 未安装")
 
         # 检测依赖包
         self.log("正在检测依赖包...")
@@ -182,14 +169,13 @@ class SetupApp:
         self.log("环境检测完成")
 
     def check_package(self, package_name):
-        """检测单个包是否安装"""
         try:
             result = subprocess.run(
-                [sys.executable, '-m', 'pip', 'show', package_name],
-                capture_output=True, text=True, timeout=10
+                [PYTHON_CMD, '-m', 'pip', 'show', package_name],
+                capture_output=True, text=True, timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
             if result.returncode == 0:
-                # 提取版本号
                 for line in result.stdout.split('\n'):
                     if line.startswith('Version:'):
                         version = line.split(':')[1].strip()
@@ -201,26 +187,22 @@ class SetupApp:
             return "? 检测失败"
 
     def install_all(self):
-        """安装所有依赖"""
         if messagebox.askyesno("确认", "确定要安装所有依赖包吗？"):
             self.install_btn.config(state=tk.DISABLED)
             self.uninstall_btn.config(state=tk.DISABLED)
-            threading.Thread(target=self._install_all_thread, daemon=True).start()
+            threading.Thread(target=self._install_thread, daemon=True).start()
 
-    def _install_all_thread(self):
-        """安装线程"""
+    def _install_thread(self):
         self.clear_log()
         self.log("开始安装依赖...")
+        self.log(f"使用 Python: {PYTHON_CMD}")
 
-        # 先升级 pip
         self.log("\n[1/8] 升级 pip...")
-        self.run_pip_command(['install', '--upgrade', 'pip'])
+        self.run_pip(['install', '--upgrade', 'pip'])
 
-        # 安装每个包
         for i, (pkg_name, pkg_desc) in enumerate(PACKAGES, 2):
             self.log(f"\n[{i}/8] 安装 {pkg_name} ({pkg_desc})...")
-            success = self.run_pip_command(['install', pkg_name])
-            if success:
+            if self.run_pip(['install', pkg_name]):
                 self.log(f"  ✓ {pkg_name} 安装成功")
             else:
                 self.log(f"  ✗ {pkg_name} 安装失败")
@@ -232,21 +214,18 @@ class SetupApp:
         self.root.after(0, lambda: messagebox.showinfo("完成", "依赖安装完成！"))
 
     def uninstall_all(self):
-        """卸载所有依赖"""
-        if messagebox.askyesno("确认", "确定要卸载所有依赖包吗？\n这将移除所有 sEMG 系统相关的 Python 包。"):
+        if messagebox.askyesno("确认", "确定要卸载所有依赖包吗？"):
             self.install_btn.config(state=tk.DISABLED)
             self.uninstall_btn.config(state=tk.DISABLED)
-            threading.Thread(target=self._uninstall_all_thread, daemon=True).start()
+            threading.Thread(target=self._uninstall_thread, daemon=True).start()
 
-    def _uninstall_all_thread(self):
-        """卸载线程"""
+    def _uninstall_thread(self):
         self.clear_log()
         self.log("开始卸载依赖...")
 
-        for i, (pkg_name, pkg_desc) in enumerate(PACKAGES, 1):
+        for i, (pkg_name, _) in enumerate(PACKAGES, 1):
             self.log(f"\n[{i}/{len(PACKAGES)}] 卸载 {pkg_name}...")
-            success = self.run_pip_command(['uninstall', '-y', pkg_name])
-            if success:
+            if self.run_pip(['uninstall', '-y', pkg_name]):
                 self.log(f"  ✓ {pkg_name} 已卸载")
             else:
                 self.log(f"  - {pkg_name} 未安装或卸载失败")
@@ -257,12 +236,13 @@ class SetupApp:
         self.root.after(0, lambda: self.uninstall_btn.config(state=tk.NORMAL))
         self.root.after(0, lambda: messagebox.showinfo("完成", "依赖卸载完成！"))
 
-    def run_pip_command(self, args):
-        """运行 pip 命令"""
+    def run_pip(self, args):
         try:
+            # 【关键】使用 PYTHON_CMD 而不是 sys.executable
             result = subprocess.run(
-                [sys.executable, '-m', 'pip'] + args,
-                capture_output=True, text=True, timeout=300
+                [PYTHON_CMD, '-m', 'pip'] + args,
+                capture_output=True, text=True, timeout=300,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
             return result.returncode == 0
         except Exception as e:
