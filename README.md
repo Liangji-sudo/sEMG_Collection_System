@@ -1,7 +1,7 @@
 # usage
 
-## 打包py脚本
-python build_python.py
+## 安装python环境
+build_setup.bat
 
 ## 安装electron 及其打包工具
 npm install electron --save-dev
