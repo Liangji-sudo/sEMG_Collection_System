@@ -73,35 +73,71 @@ if %errorLevel% equ 0 (
 
 :: ==================== 升级pip ====================
 echo.
-echo [3/4] 升级pip到最新版本...
-python -m pip install --upgrade pip -q
-echo       pip已升级
+echo [3/4] 升级pip...
+
+:: wheels 目录（与 bat 同级）
+set WHEELS_DIR=%~dp0wheels
+if exist "%WHEELS_DIR%\pip-*.whl" (
+    echo       从本地 wheels 目录升级 pip...
+    python -m pip install --no-index --find-links="%WHEELS_DIR%" --upgrade pip -q
+) else (
+    echo       [跳过] wheels 目录中没有 pip，使用当前版本
+)
+echo       pip 已就绪
 
 :: ==================== 安装依赖包 ====================
 echo.
 echo [4/4] 安装Python依赖包...
 echo.
 
-:: 定义所需的包
-set PACKAGES=websockets bleak msgpack-python scipy numpy h5py pyzmq
+:: wheels 目录（与 bat 同级）
+if exist "%WHEELS_DIR%\*.whl" (
+    echo ┌──────────────────────────────────────────────────────┐
+    echo │  [离线模式] 检测到本地 wheels 目录                   │
+    echo │  将从本地安装，不会联网下载                          │
+    echo └──────────────────────────────────────────────────────┘
+    echo.
+    echo wheels 目录: %WHEELS_DIR%
+    echo.
 
-echo 需要安装的包: %PACKAGES%
-echo.
+    :: 定义所需的包
+    set PACKAGES=websockets bleak msgpack numpy scipy h5py pyzmq
 
-:: 逐个安装并显示进度
-set /a COUNT=0
-set /a TOTAL=7
+    echo 正在从本地 wheels 目录安装所有依赖...
+    echo.
 
-for %%p in (%PACKAGES%) do (
-    set /a COUNT+=1
-    echo [!COUNT!/%TOTAL%] 正在安装 %%p ...
-    python -m pip install %%p -q
+    :: 强制离线安装，不允许联网
+    python -m pip install --no-index --find-links="%WHEELS_DIR%" !PACKAGES!
+
     if !errorLevel! equ 0 (
-        echo        %%p 安装成功
+        echo.
+        echo [OK] 所有依赖包安装成功
     ) else (
-        echo        [警告] %%p 安装可能失败，继续安装其他包...
+        echo.
+        echo [错误] 离线安装失败！
+        echo 可能原因：
+        echo   1. wheels 目录中缺少某些 whl 文件
+        echo   2. whl 文件与当前 Python 版本不匹配
+        echo.
+        echo 请检查 wheels 目录中的文件，或重新运行 download_wheels.bat
+        pause
+        exit /b 1
     )
+) else (
+    echo ┌──────────────────────────────────────────────────────┐
+    echo │  [错误] 未检测到本地 wheels 目录                     │
+    echo │  请先运行 download_wheels.bat 下载依赖包             │
+    echo └──────────────────────────────────────────────────────┘
+    echo.
+    echo 期望的 wheels 目录: %WHEELS_DIR%
+    echo.
+    pause
+    exit /b 1
 )
+
+goto :verify_install
+
+:verify_install
 
 :: ==================== 验证安装 ====================
 echo.
