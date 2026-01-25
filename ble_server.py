@@ -1257,9 +1257,23 @@ async def handle_data_client(websocket):
 
 # ================= 主函数 =================
 
+async def warmup_ble_adapter():
+    """预热蓝牙适配器 - 解决首次扫描失败的问题"""
+    log("预热蓝牙适配器...")
+    try:
+        # 进行一次快速扫描来初始化Windows蓝牙后端
+        await BleakScanner.discover(timeout=2.0)
+        log("蓝牙适配器预热完成")
+    except Exception as e:
+        log(f"蓝牙适配器预热警告: {e} (可忽略)")
+
+
 async def main():
     state.main_loop = asyncio.get_running_loop()
-    
+
+    # 预热蓝牙适配器（解决首次扫描失败问题）
+    await warmup_ble_adapter()
+
     # 初始化滤波器
     init_filters()
     
