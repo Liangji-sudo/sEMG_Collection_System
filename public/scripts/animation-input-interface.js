@@ -216,24 +216,39 @@
         }
 
         // ==================== 动捕数据接收 ====================
-        
+
         onMocapData(data) {
+            // 调试：打印收到的数据
+            if (this._debugCounter === undefined) this._debugCounter = 0;
+            this._debugCounter++;
+            if (this._debugCounter % 50 === 0) {
+                console.log(`[AnimationInputInterface] 收到mocap数据 #${this._debugCounter}:`,
+                    'inputSource=', this.inputSource,
+                    'currentTaskId=', this.currentTaskId,
+                    'channels=', data.channels ? Object.keys(data.channels) : 'none');
+            }
+
             if (this.inputSource !== 'mocap') return;
             if (!this.currentTaskId) return;
-            
+
             const channelName = this.channelMapping[this.currentTaskId];
             if (!channelName) return;
-            
+
             if (data.channels && data.channels[channelName] !== undefined) {
                 const channelData = data.channels[channelName];
                 this.rawValue = typeof channelData === 'object' ? channelData.value : channelData;
-                
+
+                // 调试：打印解析的值
+                if (this._debugCounter % 50 === 0) {
+                    console.log(`[AnimationInputInterface] 通道 ${channelName} = ${this.rawValue}`);
+                }
+
                 if (this.calibration.isCalibrating) {
                     this.calibration.rawValues.push(this.rawValue);
                 }
-                
+
                 this._updateNormalizedValue();
-                
+
                 if (this.onDataUpdate) {
                     this.onDataUpdate({
                         rawValue: this.rawValue,
