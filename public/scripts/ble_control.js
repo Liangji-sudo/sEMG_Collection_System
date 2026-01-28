@@ -15,7 +15,7 @@
 
     // ================= 配置 =================
     const WS_URL = 'ws://localhost:8764';  // 控制端口
-    const RECONNECT_DELAY = 3000;
+    const RECONNECT_DELAY = 1000;  // 1秒重连，加快连接速度
     const HEARTBEAT_INTERVAL = 30000;
 
     // ================= 状态 =================
@@ -42,68 +42,89 @@
     };
 
     // ================= WebSocket 连接 =================
-    
+
     function connect() {
+        // 如果已经连接，直接返回
         if (BleState.ws && BleState.ws.readyState === WebSocket.OPEN) {
+            console.log('[BLE] 已经连接，跳过');
             return;
         }
-        
+
+        // 清理旧的 WebSocket 对象
+        if (BleState.ws) {
+            console.log('[BLE] 清理旧连接, readyState:', BleState.ws.readyState);
+            BleState.ws.onopen = null;
+            BleState.ws.onclose = null;
+            BleState.ws.onerror = null;
+            BleState.ws.onmessage = null;
+            if (BleState.ws.readyState === WebSocket.OPEN || BleState.ws.readyState === WebSocket.CONNECTING) {
+                BleState.ws.close();
+            }
+            BleState.ws = null;
+        }
+
         console.log('[BLE] 连接服务器:', WS_URL);
         updateServerStatus('connecting');
-        
+
         try {
             BleState.ws = new WebSocket(WS_URL);
-            
+
             BleState.ws.onopen = () => {
-                console.log('[BLE] 已连接');
+                console.log('[BLE] ✅ 已连接到BLE服务器');
                 BleState.connected = true;
                 BleState.reconnecting = false;
                 updateServerStatus('connected');
                 startHeartbeat();
             };
-            
-            BleState.ws.onclose = () => {
-                console.log('[BLE] 连接关闭');
+
+            BleState.ws.onclose = (event) => {
+                console.log('[BLE] 连接关闭, code:', event.code, 'reason:', event.reason);
                 BleState.connected = false;
+                BleState.ws = null;
                 updateServerStatus('disconnected');
                 stopHeartbeat();
                 scheduleReconnect();
             };
-            
+
             BleState.ws.onerror = (err) => {
                 console.error('[BLE] WebSocket 错误');
                 if (BleState.onError) {
                     BleState.onError('WebSocket 连接错误');
                 }
             };
-            
+
             BleState.ws.onmessage = (event) => {
                 handleMessage(event.data);
             };
-            
+
         } catch (err) {
             console.error('[BLE] 连接失败:', err);
+            BleState.ws = null;
             scheduleReconnect();
         }
     }
-    
+
     function disconnect() {
         BleState.reconnecting = false;
         stopHeartbeat();
         if (BleState.ws) {
+            BleState.ws.onclose = null; // 防止触发重连
             BleState.ws.close();
             BleState.ws = null;
         }
+        BleState.connected = false;
     }
-    
+
     function scheduleReconnect() {
-        if (BleState.reconnecting) return;
+        if (BleState.reconnecting) {
+            console.log('[BLE] 已在重连队列中，跳过');
+            return;
+        }
         BleState.reconnecting = true;
         console.log(`[BLE] ${RECONNECT_DELAY/1000}秒后重连...`);
         setTimeout(() => {
-            if (BleState.reconnecting) {
-                connect();
-            }
+            BleState.reconnecting = false; // 重置标志，允许下次重连
+            connect();
         }, RECONNECT_DELAY);
     }
     
@@ -127,9 +148,10 @@
     
     function send(data) {
         if (!BleState.ws || BleState.ws.readyState !== WebSocket.OPEN) {
-            console.warn('[BLE] 未连接，无法发送');
+            console.warn('[BLE] 未连接，无法发送, readyState:', BleState.ws?.readyState);
             return false;
         }
+        console.log('[BLE] 发送命令:', data);
         BleState.ws.send(JSON.stringify(data));
         return true;
     }
@@ -507,7 +529,12 @@ async function decodeData(buffer) {
         // 扫描
         scan: () => {
             updateScanButton(true);
-            return send({ action: 'scan' });
+            const result = send({ action: 'scan' });
+            if (!result) {
+                updateScanButton(false);
+                showToast('未连接到BLE服务器，无法扫描', 'error');
+            }
+            return result;
         },
         
         // 连接设备
