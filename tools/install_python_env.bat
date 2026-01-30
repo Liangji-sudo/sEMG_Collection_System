@@ -100,8 +100,8 @@ if exist "%WHEELS_DIR%\*.whl" (
     echo wheels 目录: %WHEELS_DIR%
     echo.
 
-    :: 定义所需的包
-    set PACKAGES=websockets bleak msgpack numpy scipy h5py pyzmq pynput
+    :: 定义所需的包（包含 nokovpy 动捕SDK）
+    set PACKAGES=websockets bleak msgpack numpy scipy h5py pyzmq pynput nokovpy
 
     echo 正在从本地 wheels 目录安装所有依赖...
     echo.
@@ -180,6 +180,10 @@ if %errorLevel% equ 0 (echo   [OK] zmq) else (echo   [FAIL] zmq & set ALL_OK=0)
 echo 检查 pynput (鼠标输入)...
 python -c "import pynput" 2>nul
 if %errorLevel% equ 0 (echo   [OK] pynput) else (echo   [FAIL] pynput & set ALL_OK=0)
+
+echo 检查 nokov (动捕SDK)...
+python -c "from nokov.nokovsdk import PySDKClient" 2>nul
+if %errorLevel% equ 0 (echo   [OK] nokov) else (echo   [SKIP] nokov - 未安装，将使用模拟器模式)
 
 :: ==================== 显示结果 ====================
 echo.

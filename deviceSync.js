@@ -87,7 +87,14 @@ class DeviceSync extends EventEmitter {
             console.log('[deviceSync] 正在启动mocap_server......');
 
             // 自动判断使用 Python 脚本还是打包后的 exe
-            const { command, args } = getPythonCommand('mocap_server');
+            // 模拟器模式：使用 --simulator 参数连接 mocap_simulator.py
+            // SDK模式：使用 -s 参数连接真实 Nokov SDK
+            const USE_SIMULATOR = true;  // 设为 false 使用真实SDK
+            const mocapArgs = USE_SIMULATOR
+                ? ['--simulator']
+                : ['-s', '10.1.1.198'];
+
+            const { command, args } = getPythonCommand('mocap_server', mocapArgs);
             this.mocapProcess = spawn(command, args);
 
             this.mocapProcess.on('spawn', () => {
