@@ -150,15 +150,20 @@ class MocapDataReceiver:
         self.latest_frame = 0
         self._running = False
         self._reconnect_delay = 2.0
+        # 【新增】帧缓冲区，用于批量发送
+        self._frame_buffer = []
+        self._buffer_lock = asyncio.Lock() if hasattr(asyncio, 'Lock') else None
 
     async def connect(self):
         """连接到动捕数据源"""
+        import asyncio
+        self._buffer_lock = asyncio.Lock()
+
         while self._running:
             try:
-                print(f"[MocapReceiver] 连接到动捕数据源: {self.source_url}")
                 self.ws = await websockets.connect(self.source_url)
                 self.connected = True
-                print(f"[MocapReceiver] ✅ 已连接到动捕数据源")
+                print(f"[MocapReceiver] 已连接到动捕数据源")
 
                 async for message in self.ws:
                     if not self._running:
@@ -170,26 +175,28 @@ class MocapDataReceiver:
                         if msg_type == "mocap_data":
                             self.latest_markers = data.get("markers", {})
                             self.latest_frame = data.get("frame", 0)
-
-                        elif msg_type == "welcome":
-                            print(f"[MocapReceiver] 动捕源信息: {data.get('total_frames')} 帧, "
-                                  f"{data.get('duration', 0):.1f}秒")
+                            # 【新增】将帧数据加入缓冲区
+                            async with self._buffer_lock:
+                                self._frame_buffer.append({
+                                    "markers": self.latest_markers,
+                                    "frame": self.latest_frame,
+                                    "time": data.get("time", 0)
+                                })
 
                     except json.JSONDecodeError:
                         pass
 
             except websockets.exceptions.ConnectionClosed:
-                print(f"[MocapReceiver] 连接断开")
+                pass
             except ConnectionRefusedError:
-                print(f"[MocapReceiver] 无法连接到动捕数据源 (可能未启动 mocap_simulator.py)")
+                pass
             except Exception as e:
-                print(f"[MocapReceiver] 连接错误: {e}")
+                print(f"[MocapReceiver] 错误: {e}")
 
             self.connected = False
             self.ws = None
 
             if self._running:
-                print(f"[MocapReceiver] {self._reconnect_delay}秒后重连...")
                 await asyncio.sleep(self._reconnect_delay)
 
     def start(self):
@@ -205,6 +212,13 @@ class MocapDataReceiver:
     def get_markers(self):
         """获取最新的 marker 数据"""
         return self.latest_markers
+
+    async def get_buffered_frames(self):
+        """获取并清空缓冲区中的所有帧"""
+        async with self._buffer_lock:
+            frames = self._frame_buffer.copy()
+            self._frame_buffer.clear()
+            return frames
 
 
 # ==================== 动捕服务器 ====================
@@ -273,18 +287,10 @@ class MocapServer:
         self.channels['thumb_index_distance']['value'] = pinch_dist
         self.channels['palm_rotation_angle']['value'] = palm_angle
 
-        # 始终打印调试信息（每 200ms 一次，便于验证计算）
-        if self._debug_counter % 10 == 0:
-            frame = self.receiver.latest_frame
-            status = "采集中" if self.collecting else "待机"
-            print(f"[MocapServer] [{status}] Frame:{frame:>5} | "
-                  f"食指角度:{finger_angle:>6.1f}° | 捏合距离:{pinch_dist:>6.1f}mm | 翻转角度:{palm_angle:>6.1f}°")
-
     async def register(self, websocket):
         """注册新客户端"""
         self.clients.add(websocket)
-        client_info = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
-        print(f"[MocapServer] 客户端连接: {client_info} (总数: {len(self.clients)})")
+        print(f"[MocapServer] 客户端连接 (总数: {len(self.clients)})")
 
     async def unregister(self, websocket):
         """注销客户端"""
@@ -302,7 +308,6 @@ class MocapServer:
                 gesture = data.get('gesture')  # 'continual_gesture_1', 'continual_gesture_2', 'continual_gesture_3'
                 self.collecting = True
                 self.active_gesture = gesture
-                print(f"[MocapServer] 开始采集: {gesture}")
 
                 # 设置对应的活动通道
                 if gesture == 'continual_gesture_1':
@@ -324,7 +329,6 @@ class MocapServer:
                 # 停止采集
                 self.collecting = False
                 self.active_gesture = None
-                print(f"[MocapServer] 停止采集")
                 await websocket.send(json.dumps({
                     'type': 'response',
                     'cmd': 'stop_collecting',
@@ -336,7 +340,6 @@ class MocapServer:
                 channel = data.get('channel')
                 if channel in self.channels:
                     self.active_channel = channel
-                    print(f"[MocapServer] 活动通道切换为: {channel}")
                 await websocket.send(json.dumps({
                     'type': 'response',
                     'cmd': 'set_channel',
@@ -350,7 +353,6 @@ class MocapServer:
                 value = data.get('value', 0)
                 if channel in self.channels:
                     self.channels[channel]['value'] = value
-                    print(f"[MocapServer] 重置通道 {channel} = {value}")
                 await websocket.send(json.dumps({
                     'type': 'response',
                     'cmd': 'reset_channel',
@@ -374,9 +376,9 @@ class MocapServer:
                 }))
 
         except json.JSONDecodeError:
-            print(f"[MocapServer] 无效JSON: {message}")
+            pass
         except Exception as e:
-            print(f"[MocapServer] 处理消息错误: {e}")
+            print(f"[MocapServer] 错误: {e}")
 
     async def handler(self, websocket, path=None):
         """WebSocket连接处理"""
@@ -399,6 +401,9 @@ class MocapServer:
                 self.update_from_mocap()
                 self._debug_counter += 1
 
+                # 【修改】获取缓冲区中的所有帧（批量）
+                buffered_frames = await self.receiver.get_buffered_frames()
+
                 # 构建数据包
                 data = {
                     'type': 'mocap',
@@ -415,15 +420,12 @@ class MocapServer:
                             'unit': ch['unit']
                         }
                         for name, ch in self.channels.items()
-                    }
+                    },
+                    # 【修改】批量发送所有缓冲的帧数据
+                    'frames': buffered_frames,  # [{markers, frame, time}, ...]
+                    'frame_count': len(buffered_frames)
                 }
                 message = json.dumps(data)
-
-                # 调试：每 200ms 打印一次发送的数据
-                if self._debug_counter % 10 == 0:
-                    ch = self.channels[self.active_channel]
-                    print(f"[MocapServer] 广播数据: {self.active_channel}={ch['value']:.1f}{ch['unit']} "
-                          f"(mocap连接:{self.receiver.connected}, 客户端:{len(self.clients)})")
 
                 # 广播给所有客户端
                 disconnected = set()
@@ -454,23 +456,7 @@ class MocapServer:
             self.port
         )
 
-        print("=" * 60)
-        print("[MocapServer] 动捕数据服务器已启动")
-        print("=" * 60)
-        print(f"  WebSocket端口: ws://{self.host}:{self.port}")
-        print(f"  动捕数据源: {MOCAP_SOURCE_URL}")
-        print(f"  数据发送频率: {self.send_rate}Hz")
-        print("=" * 60)
-        print("  控制命令:")
-        print("    start_collecting - 开始采集 (需指定 gesture)")
-        print("    stop_collecting  - 停止采集")
-        print("    get_status       - 获取状态")
-        print("=" * 60)
-        print("  手势类型:")
-        print("    continual_gesture_1 - 食指上抬 (finger_joint_angle)")
-        print("    continual_gesture_2 - 拇指食指捏合 (thumb_index_distance)")
-        print("    continual_gesture_3 - 手掌翻转 (palm_rotation_angle)")
-        print("=" * 60)
+        print(f"[MocapServer] 已启动 ws://{self.host}:{self.port} (数据源: {MOCAP_SOURCE_URL})")
 
         # 启动数据广播任务
         broadcast_task = asyncio.create_task(self.broadcast_data())

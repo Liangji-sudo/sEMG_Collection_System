@@ -479,6 +479,27 @@ class RealtimeEngine extends EventEmitter {
         try {
             this.mocap_packet_count++;
             this.broadcastToClients({ type: 'mocap_data', data: packet });
+
+            // 【修改】采集时批量保存 mocap 原始数据到 storage
+            if (this.isCollecting && !this.collectionPaused && this.stageFileOpen && !this.isClosingStageFile) {
+                // 获取批量帧数据
+                const frames = packet.frames;  // [{markers, frame, time}, ...]
+
+                if (frames && frames.length > 0) {
+                    // 为每帧添加系统时间戳（与蓝牙数据、prompt保持一致）
+                    const sysTime = getSysTimeNode();
+                    const framesWithSysTime = frames.map((f, idx) => ({
+                        ...f,
+                        sys_time: sysTime + idx * 0.005  // 每帧间隔5ms (200Hz)
+                    }));
+
+                    // 批量发送所有帧到 storage
+                    this.saveDataToStorage({
+                        mocap_frames: framesWithSysTime,  // 批量帧数据（带系统时间戳）
+                        mocap_batch_size: framesWithSysTime.length
+                    });
+                }
+            }
         } catch (error) {
             console.error('[realtimeEngine] 处理Mocap数据包错误:', error);
         }

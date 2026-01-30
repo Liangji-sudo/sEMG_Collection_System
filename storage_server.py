@@ -64,6 +64,26 @@ IMU_DTYPE = np.dtype([
     ("time", "<f8")         # 时间戳
 ])
 
+# 【新增】MOCAP数据集类型：12个marker点的3D坐标 + 帧号 + 时间戳
+# marker顺序: rt1, rt2, rt3, ri1, ri2, ri3, rm1, rm2, rm3, m1, m2, m3
+MOCAP_MARKER_NAMES = ["rt1", "rt2", "rt3", "ri1", "ri2", "ri3", "rm1", "rm2", "rm3", "m1", "m2", "m3"]
+MOCAP_DTYPE = np.dtype([
+    ("rt1", "<f4", (3,)),   # 拇指指尖 [x, y, z]
+    ("rt2", "<f4", (3,)),   # 拇指第一关节
+    ("rt3", "<f4", (3,)),   # 拇指第二关节
+    ("ri1", "<f4", (3,)),   # 食指指尖
+    ("ri2", "<f4", (3,)),   # 食指第一关节
+    ("ri3", "<f4", (3,)),   # 食指第二关节
+    ("rm1", "<f4", (3,)),   # 中指指尖
+    ("rm2", "<f4", (3,)),   # 中指第一关节
+    ("rm3", "<f4", (3,)),   # 中指第二关节
+    ("m1", "<f4", (3,)),    # 食指指根
+    ("m2", "<f4", (3,)),    # 中指指根
+    ("m3", "<f4", (3,)),    # 腕部
+    ("frame", "<i4"),       # 帧号
+    ("time", "<f8")         # 时间戳
+])
+
 # 字符串存储配置
 STR_VLEN_DTYPE = h5py.special_dtype(vlen=str)
 
@@ -116,6 +136,7 @@ class HDF5StorageServer:
             "emg2_frames": 0,
             "imu1_frames": 0,
             "imu2_frames": 0,
+            "mocap_frames": 0,  # 【新增】动捕帧数
             "prompts": 0
         }
     
@@ -294,26 +315,36 @@ class HDF5StorageServer:
             )
             imu2_ds.attrs["device"] = "device_2"
             imu2_ds.attrs["description"] = "IMU data from device 2 (acc, gyr, mag)"
-            
+
+            # ===================== 【新增】创建MOCAP数据集 =====================
+            mocap_ds = self.f.create_dataset(
+                "mocap", shape=(0,), dtype=MOCAP_DTYPE,
+                chunks=(500,), maxshape=(None,), compression="gzip"
+            )
+            mocap_ds.attrs["description"] = "Motion capture marker data (12 markers x 3D coordinates)"
+            mocap_ds.attrs["markers"] = str(MOCAP_MARKER_NAMES)
+            mocap_ds.attrs["coordinate_unit"] = "mm"
+
             # ===================== 创建Prompts组 =====================
             prompts = self.f.create_group("prompts")
-            
+
             prompts.create_dataset(
                 "names", shape=(0,), dtype=STR_VLEN_DTYPE,
                 chunks=(1000,), maxshape=(None,)
             )
-            
+
             prompts.create_dataset(
                 "times", shape=(0,), dtype=np.float64,
                 chunks=(1000,), maxshape=(None,)
             )
-            
+
             # 重置统计
             self.stats = {
                 "emg1_frames": 0,
                 "emg2_frames": 0,
                 "imu1_frames": 0,
                 "imu2_frames": 0,
+                "mocap_frames": 0,  # 【新增】
                 "prompts": 0
             }
             self.is_collecting = True
@@ -341,36 +372,43 @@ class HDF5StorageServer:
         """追加数据"""
         if not self.f:
             return {"status": "error", "msg": "文件未打开，请先调用create"}
-        
+
         try:
             data = params.get("data", {})
-            
+
             with self.lock:
                 # 追加EMG1
                 if data.get("emg1") and data.get("emg1_t"):
                     self._append_emg("emg1", data["emg1"], data["emg1_t"])
-                
+
                 # 追加EMG2
                 if data.get("emg2") and data.get("emg2_t"):
                     self._append_emg("emg2", data["emg2"], data["emg2_t"])
-                
+
                 # 追加IMU1
                 if data.get("imu1") and data.get("imu1_t"):
                     self._append_imu("imu1", data["imu1"], data["imu1_t"])
-                
+
                 # 追加IMU2
                 if data.get("imu2") and data.get("imu2_t"):
                     self._append_imu("imu2", data["imu2"], data["imu2_t"])
-                
+
+                # 【修改】批量追加MOCAP
+                if data.get("mocap_frames"):
+                    self._append_mocap_batch(data["mocap_frames"])
+                # 兼容单帧模式
+                elif data.get("mocap"):
+                    self._append_mocap(data["mocap"], data.get("mocap_t", 0), data.get("mocap_frame", 0))
+
                 # 追加Prompt
                 if data.get("prompt_name"):
                     self._append_prompt(
                         data["prompt_name"],
                         data.get("prompt_time", 0)
                     )
-            
+
             return {"status": "success", "msg": "数据已追加"}
-            
+
         except Exception as e:
             debug_log(f"❌ 追加数据失败: {e}")
             return {"status": "error", "msg": f"追加数据失败：{str(e)}"}
@@ -441,7 +479,82 @@ class HDF5StorageServer:
         except Exception as e:
             debug_log(f"❌ 追加{dataset_name}失败: {e}")
             return 0
-    
+
+    def _append_mocap(self, markers_data, timestamp, frame):
+        """追加MOCAP数据"""
+        try:
+            ds = self.f["mocap"]
+
+            if not markers_data:
+                return 0
+
+            # 构造结构化数组（每次一帧）
+            data_struct = np.empty(1, dtype=MOCAP_DTYPE)
+
+            # 填充12个marker点的坐标
+            for marker_name in MOCAP_MARKER_NAMES:
+                coords = markers_data.get(marker_name, [0, 0, 0])
+                data_struct[0][marker_name] = np.array(coords[:3], dtype=np.float32)
+
+            data_struct[0]["frame"] = int(frame) if frame else 0
+            data_struct[0]["time"] = float(timestamp) if timestamp else 0
+
+            # 追加到数据集
+            current_len = ds.shape[0]
+            ds.resize(current_len + 1, axis=0)
+            ds[current_len] = data_struct[0]
+
+            # 更新统计
+            self.stats["mocap_frames"] += 1
+
+            return 1
+
+        except Exception as e:
+            debug_log(f"❌ 追加mocap失败: {e}")
+            return 0
+
+    def _append_mocap_batch(self, frames_data):
+        """批量追加MOCAP数据"""
+        try:
+            ds = self.f["mocap"]
+
+            if not frames_data or len(frames_data) == 0:
+                return 0
+
+            num_frames = len(frames_data)
+
+            # 构造结构化数组（批量）
+            data_struct = np.empty(num_frames, dtype=MOCAP_DTYPE)
+
+            for i, frame_data in enumerate(frames_data):
+                markers_data = frame_data.get("markers", {})
+                frame_num = frame_data.get("frame", 0)
+                # 优先使用系统时间戳 sys_time，与蓝牙数据、prompt保持一致
+                timestamp = frame_data.get("sys_time", frame_data.get("time", 0))
+
+                # 填充12个marker点的坐标
+                for marker_name in MOCAP_MARKER_NAMES:
+                    coords = markers_data.get(marker_name, [0, 0, 0])
+                    data_struct[i][marker_name] = np.array(coords[:3], dtype=np.float32)
+
+                data_struct[i]["frame"] = int(frame_num) if frame_num else 0
+                data_struct[i]["time"] = float(timestamp) if timestamp else 0
+
+            # 批量追加到数据集
+            current_len = ds.shape[0]
+            new_len = current_len + num_frames
+            ds.resize(new_len, axis=0)
+            ds[current_len:new_len] = data_struct
+
+            # 更新统计
+            self.stats["mocap_frames"] += num_frames
+
+            return num_frames
+
+        except Exception as e:
+            debug_log(f"❌ 批量追加mocap失败: {e}")
+            return 0
+
     def _append_prompt(self, name, time):
         """追加Prompt数据"""
         try:
@@ -491,12 +604,12 @@ class HDF5StorageServer:
                 self.f = None
             
             self.is_collecting = False
-            
+
             rel_path = os.path.relpath(self.file_path, self.storage_dir) if self.file_path else "N/A"
             debug_log(f"✅ 文件已关闭: {rel_path}")
             debug_log(f"📊 统计: EMG1={self.stats['emg1_frames']}, EMG2={self.stats['emg2_frames']}, "
                      f"IMU1={self.stats['imu1_frames']}, IMU2={self.stats['imu2_frames']}, "
-                     f"Prompts={self.stats['prompts']}")
+                     f"MOCAP={self.stats['mocap_frames']}, Prompts={self.stats['prompts']}")
             
             return {
                 "status": "success",
