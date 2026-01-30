@@ -234,6 +234,9 @@ class MocapServer:
         # 动捕数据接收器
         self.receiver = MocapDataReceiver()
 
+        # 【新增】SDK连接状态
+        self.sdk_connected = False
+
         # 当前采集状态
         self.collecting = False
         self.active_gesture = None  # 'continual_gesture_1', 'continual_gesture_2', 'continual_gesture_3'
@@ -373,6 +376,43 @@ class MocapServer:
                         'send_rate': self.send_rate,
                         'client_count': len(self.clients)
                     }
+                }))
+
+            elif cmd == 'sdk_connect':
+                # 【新增】连接动捕SDK
+                print("[MocapServer] 收到SDK连接请求")
+                # TODO: 这里后续实现真正的SDK连接逻辑
+                self.sdk_connected = True
+                print("[MocapServer] SDK连接成功 (模拟)")
+                await websocket.send(json.dumps({
+                    'type': 'response',
+                    'cmd': 'sdk_connect',
+                    'status': 'ok',
+                    'sdk_connected': True,
+                    'message': 'SDK连接成功'
+                }))
+
+            elif cmd == 'sdk_disconnect':
+                # 【新增】断开动捕SDK
+                print("[MocapServer] 收到SDK断开请求")
+                # TODO: 这里后续实现真正的SDK断开逻辑
+                self.sdk_connected = False
+                print("[MocapServer] SDK已断开 (模拟)")
+                await websocket.send(json.dumps({
+                    'type': 'response',
+                    'cmd': 'sdk_disconnect',
+                    'status': 'ok',
+                    'sdk_connected': False,
+                    'message': 'SDK已断开'
+                }))
+
+            elif cmd == 'sdk_get_status':
+                # 【新增】获取SDK连接状态
+                await websocket.send(json.dumps({
+                    'type': 'response',
+                    'cmd': 'sdk_get_status',
+                    'status': 'ok',
+                    'sdk_connected': getattr(self, 'sdk_connected', False)
                 }))
 
         except json.JSONDecodeError:

@@ -169,11 +169,14 @@ class RealtimeEngine extends EventEmitter {
                 case 'mocap_set_channel': this.onMocapSetChannel(data.channel); break;
                 case 'mocap_reset_channel': this.onMocapResetChannel(data.channel, data.value); break;
                 case 'mocap_get_status': this.onMocapGetStatus(); break;
-                case 'mocap_set_save': 
+                case 'mocap_set_save':
                     this.saveMocapData = data.save === true;
                     console.log(`[realtimeEngine] 动捕数据存储: ${this.saveMocapData ? '开启' : '关闭'}`);
                     break;
-                    
+                case 'mocap_sdk_connect': this.onMocapSdkConnect(); break;
+                case 'mocap_sdk_disconnect': this.onMocapSdkDisconnect(); break;
+                case 'mocap_sdk_get_status': this.onMocapSdkGetStatus(); break;
+
                 default: console.log(`[realtimeEngine] 未知命令: ${action}`);
             }
 
@@ -302,6 +305,39 @@ class RealtimeEngine extends EventEmitter {
             activeChannel: this.mocap_activeChannel,
             packetCount: this.mocap_packet_count
         });
+    }
+
+    // 【新增】动捕SDK连接控制
+    onMocapSdkConnect() {
+        console.log('[realtimeEngine] 请求连接动捕SDK');
+        if (this.mocap_client && this.mocap_client.readyState === WebSocket.OPEN) {
+            this.mocap_client.send(JSON.stringify({ cmd: 'sdk_connect' }));
+        } else {
+            this.broadcastToClients({
+                type: 'mocap_sdk_status',
+                connected: false,
+                error: 'mocap_server未连接'
+            });
+        }
+    }
+
+    onMocapSdkDisconnect() {
+        console.log('[realtimeEngine] 请求断开动捕SDK');
+        if (this.mocap_client && this.mocap_client.readyState === WebSocket.OPEN) {
+            this.mocap_client.send(JSON.stringify({ cmd: 'sdk_disconnect' }));
+        }
+    }
+
+    onMocapSdkGetStatus() {
+        if (this.mocap_client && this.mocap_client.readyState === WebSocket.OPEN) {
+            this.mocap_client.send(JSON.stringify({ cmd: 'sdk_get_status' }));
+        } else {
+            this.broadcastToClients({
+                type: 'mocap_sdk_status',
+                connected: false,
+                sdk_connected: false
+            });
+        }
     }
 
     async openStageFile(stageName, stageIndex) {
@@ -453,6 +489,16 @@ class RealtimeEngine extends EventEmitter {
                 try {
                     const packet = JSON.parse(event.data);
                     if (packet.type === 'mocap') { this.handleMocapDataPacket(packet); }
+                    // 【新增】转发SDK状态响应给前端
+                    else if (packet.type === 'response' && packet.cmd && packet.cmd.startsWith('sdk_')) {
+                        this.broadcastToClients({
+                            type: 'mocap_sdk_status',
+                            cmd: packet.cmd,
+                            status: packet.status,
+                            sdk_connected: packet.sdk_connected,
+                            message: packet.message
+                        });
+                    }
                 } catch (error) {}
             };
 

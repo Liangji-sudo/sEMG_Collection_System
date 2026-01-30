@@ -4560,18 +4560,18 @@
                     </div>
                 </div>
 
-                <!-- 设备电量 -->
+                <!-- 动捕控制 -->
                 <div class="status-card">
                     <div class="status-card-header">
                         <div class="status-card-title">
-                            <i class="fas fa-battery-three-quarters"></i> 设备电量
+                            <i class="fas fa-video"></i> 动捕控制
                         </div>
+                        <span class="status-badge disconnected" id="mocapSdkStatus">未连接</span>
                     </div>
-                    <div class="status-value"><span id="batteryPercent">--</span><small>%</small></div>
-                    <div class="status-sub">预计 <span id="batteryHours">--</span> 小时</div>
-                    <div class="status-progress">
-                        <div class="status-progress-fill yellow" id="batteryBar" style="width: 0%;"></div>
-                    </div>
+                    <div class="status-sub" id="mocapSdkInfo">点击按钮连接动捕SDK</div>
+                    <button class="config-btn load-btn" id="mocapSdkToggleBtn" style="width: 100%; margin-top: 8px;">
+                        <i class="fas fa-play"></i> <span id="mocapSdkBtnText">连接SDK</span>
+                    </button>
                 </div>
 
                 <!-- 配置管理 -->
@@ -5166,6 +5166,120 @@
             </div>
         </div>
     </div>
+
+    <!-- 动捕SDK控制脚本 -->
+    <script>
+    (function() {
+        'use strict';
+
+        // 状态
+        let sdkConnected = false;
+        let ws = null;
+        const wsUrl = 'ws://localhost:8080';
+
+        // DOM元素（延迟获取）
+        let toggleBtn, btnText, statusBadge, infoText;
+
+        // 连接WebSocket
+        function connectWs() {
+            if (ws && ws.readyState === WebSocket.OPEN) return;
+
+            try {
+                ws = new WebSocket(wsUrl);
+
+                ws.onopen = () => {
+                    console.log('[MocapControl] WebSocket已连接');
+                    // 获取当前SDK状态
+                    ws.send(JSON.stringify({ type: 'control_command', action: 'mocap_sdk_get_status', data: {} }));
+                };
+
+                ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        // 只处理SDK状态消息，忽略其他广播消息(如mocap_data)
+                        if (data.type === 'mocap_sdk_status') {
+                            console.log('[MocapControl] SDK状态:', data.sdk_connected);
+                            updateUI(data.sdk_connected);
+                        }
+                    } catch (e) {
+                        console.error('[MocapControl] 解析消息失败:', e);
+                    }
+                };
+
+                ws.onclose = () => {
+                    console.log('[MocapControl] WebSocket断开，3秒后重连');
+                    setTimeout(connectWs, 3000);
+                };
+
+                ws.onerror = (e) => {
+                    console.error('[MocapControl] WebSocket错误:', e);
+                };
+            } catch (e) {
+                console.error('[MocapControl] 创建WebSocket失败:', e);
+                setTimeout(connectWs, 3000);
+            }
+        }
+
+        // 更新UI
+        function updateUI(connected) {
+            sdkConnected = connected;
+            if (!statusBadge || !btnText || !infoText || !toggleBtn) return;
+
+            if (connected) {
+                statusBadge.textContent = '已连接';
+                statusBadge.className = 'status-badge connected';
+                btnText.textContent = '断开SDK';
+                toggleBtn.querySelector('i').className = 'fas fa-stop';
+                infoText.textContent = '动捕SDK运行中';
+            } else {
+                statusBadge.textContent = '未连接';
+                statusBadge.className = 'status-badge disconnected';
+                btnText.textContent = '连接SDK';
+                toggleBtn.querySelector('i').className = 'fas fa-play';
+                infoText.textContent = '点击按钮连接动捕SDK';
+            }
+        }
+
+        // 切换连接状态
+        function toggleSdk() {
+            console.log('[MocapControl] 按钮点击, 当前状态:', sdkConnected);
+
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                console.warn('[MocapControl] WebSocket未连接');
+                return;
+            }
+
+            const action = sdkConnected ? 'mocap_sdk_disconnect' : 'mocap_sdk_connect';
+            console.log('[MocapControl] 发送命令:', action);
+            ws.send(JSON.stringify({ type: 'control_command', action: action, data: {} }));
+        }
+
+        // 初始化
+        function init() {
+            toggleBtn = document.getElementById('mocapSdkToggleBtn');
+            btnText = document.getElementById('mocapSdkBtnText');
+            statusBadge = document.getElementById('mocapSdkStatus');
+            infoText = document.getElementById('mocapSdkInfo');
+
+            console.log('[MocapControl] 初始化, 按钮元素:', toggleBtn ? '找到' : '未找到');
+
+            if (toggleBtn) {
+                toggleBtn.addEventListener('click', toggleSdk);
+                console.log('[MocapControl] 按钮事件已绑定');
+            }
+
+            // 连接WebSocket
+            connectWs();
+        }
+
+        // 等待DOM加载完成
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', init);
+        } else {
+            init();
+        }
+    })();
+    </script>
 
 </body>
 </html>
