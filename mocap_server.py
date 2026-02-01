@@ -88,7 +88,9 @@ def fit_plane_normal(p1, p2, p3):
 
 
 def calculate_finger_joint_angle(markers):
-    """计算食指上抬角度（连续手势1）"""
+    """计算食指上抬角度（连续手势1）
+    返回: 0° = 食指竖直（与手掌垂直）, 90° = 食指平放（与手掌平行）
+    """
     ri1 = np.array(markers.get("ri1", [0, 0, 0]))
     ri2 = np.array(markers.get("ri2", [0, 0, 0]))
     ri3 = np.array(markers.get("ri3", [0, 0, 0]))
@@ -102,9 +104,11 @@ def calculate_finger_joint_angle(markers):
     cos_angle = abs(np.dot(index_dir, palm_normal))
     cos_angle = np.clip(cos_angle, -1, 1)
     angle_with_normal = math.degrees(math.acos(cos_angle))
-    angle_with_plane = 90 - angle_with_normal
 
-    return angle_with_plane
+    # 直接返回食指与法线的夹角
+    # 食指平放时与法线夹角≈90°
+    # 食指竖直时与法线夹角≈0°
+    return angle_with_normal
 
 
 def calculate_thumb_index_distance(markers):
