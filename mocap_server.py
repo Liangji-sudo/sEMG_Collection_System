@@ -120,12 +120,16 @@ def calculate_thumb_index_distance(markers):
 
 
 def calculate_palm_rotation_angle(markers):
-    """计算手掌翻转角度（连续手势3）"""
-    m1 = np.array(markers.get("m1", [0, 0, 0]))
-    m2 = np.array(markers.get("m2", [0, 0, 0]))
-    m3 = np.array(markers.get("m3", [0, 0, 0]))
+    """计算手掌翻转角度（连续手势3）
 
-    palm_normal = fit_plane_normal(m1, m2, m3)
+    使用拇指指尖(rt1)、拇指第一关节(rt2)、食指第一关节(ri2)
+    三个marker点构成的平面，计算其向下法线与(0,0,-1)的夹角
+    """
+    rt1 = np.array(markers.get("rt1", [0, 0, 0]))
+    rt2 = np.array(markers.get("rt2", [0, 0, 0]))
+    ri2 = np.array(markers.get("ri2", [0, 0, 0]))
+
+    palm_normal = fit_plane_normal(rt1, rt2, ri2)
     downward = np.array([0, 0, -1])
 
     cos_angle = np.dot(palm_normal, downward)
