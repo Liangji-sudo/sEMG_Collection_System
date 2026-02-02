@@ -33,7 +33,7 @@
                     calibrate: {
                         title: '标定动作范围',
                         instruction: '请做完整动作：食指从伸直到弯曲',
-                        duration: 5000,
+                        duration: 10000,
                         videoUrl: null
                     }
                 },
@@ -43,7 +43,7 @@
                     calibrate: {
                         title: '标定动作范围',
                         instruction: '请做完整动作：拇指食指从分开到捏合',
-                        duration: 5000,
+                        duration: 10000,
                         videoUrl: null
                     }
                 },
@@ -53,7 +53,7 @@
                     calibrate: {
                         title: '标定动作范围',
                         instruction: '请做完整动作：手掌从向下到向上翻转',
-                        duration: 5000,
+                        duration: 10000,
                         videoUrl: null
                     }
                 }

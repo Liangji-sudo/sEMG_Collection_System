@@ -382,7 +382,8 @@
 
             // 从输入接口更新光标位置
             if (this.inputInterface && this.inputInterface.isCalibrated()) {
-                this.cursorPosition = this.inputInterface.getNormalizedInput();
+                // 反转方向：0-180° 映射到 右端-左端（掌心向下在左，掌心向上在右）
+                this.cursorPosition = 1 - this.inputInterface.getNormalizedInput();
             }
 
             this.checkFollowing();
