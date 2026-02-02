@@ -68,20 +68,24 @@ def log(message):
 # ===================== bin文件解析 =====================
 
 class EMGBinParser:
-    """EMG bin文件解析器"""
+    """EMG bin文件解析器
+
+    注意：解析后的数据是原始ADC值（int），不是μV值。
+    如需转换为μV，请使用: uv_value = raw_value * lsb_uv
+    """
 
     def __init__(self, bin_path):
         self.bin_path = bin_path
         self.sample_rate = 0
         self.gain = 12
         self.bit_depth = 24
-        self.lsb_uv = 0
+        self.lsb_uv = 0  # LSB系数，用于转换为μV
         self.timestamp_str = ""
-        self.frames = {}  # {frame_id: channels_data}
+        self.frames = {}  # {frame_id: channels_data} - 存储原始ADC值
         self.frame_count = 0
 
     def parse(self):
-        """解析bin文件"""
+        """解析bin文件，返回原始ADC值（非μV）"""
         file_size = os.path.getsize(self.bin_path)
         if file_size < HEADER_SIZE:
             raise ValueError(f"文件太小: {file_size} bytes")
@@ -101,7 +105,7 @@ class EMGBinParser:
             self.bit_depth = bit_depth
             self.timestamp_str = ts_bytes.decode('utf-8').strip('\x00')
 
-            # 计算LSB
+            # 计算LSB（保存供后续转换使用，但解析时不应用）
             self.lsb_uv = BASE_LSB_24BIT / (self.gain * HARDWARE_FRONTEND_GAIN)
             if bit_depth == 16:
                 self.lsb_uv *= (2 ** 4)
@@ -112,6 +116,7 @@ class EMGBinParser:
 
             log(f"EMG文件信息: 采样率={sample_rate}Hz, 增益={self.gain}, 位深={bit_depth}bit")
             log(f"时间戳: {self.timestamp_str}")
+            log(f"LSB系数: {self.lsb_uv:.6f} μV/LSB (用于转换)")
 
             # 读取所有帧
             while True:
@@ -122,12 +127,12 @@ class EMGBinParser:
                 frame_id = struct.unpack('<I', chunk[0:4])[0]
                 raw_data = chunk[4:]
 
-                # 解析16通道数据
+                # 解析16通道数据 - 保持原始ADC值，不转换为μV
                 channels = []
                 for i in range(16):
                     start = i * bytes_per_sample
                     val = int.from_bytes(raw_data[start:start + bytes_per_sample], 'big', signed=True)
-                    channels.append(val * self.lsb_uv)
+                    channels.append(val)  # 原始ADC值
 
                 self.frames[frame_id] = channels
                 self.frame_count += 1
@@ -244,8 +249,8 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
             log("警告: 文件已同步，跳过")
             return {'status': 'skipped', 'reason': 'already_synced'}
 
-        # 获取250Hz数据集
-        ds_250hz_name = f"emg{device_id}_250hz"
+        # 获取250Hz ADC数据集
+        ds_250hz_name = f"emg{device_id}_250hz_adc"
         if ds_250hz_name not in f:
             log(f"错误: 找不到数据集 {ds_250hz_name}")
             return {'status': 'error', 'reason': f'dataset {ds_250hz_name} not found'}
@@ -274,20 +279,32 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
 
         log(f"对应SD卡帧号范围: [{sd_frame_start}, {sd_frame_end}]")
 
-        # 校验（可选）- 只检查帧号是否存在于bin文件中
-        # 注意：h5中保存的是滤波后的数据，bin中是原始数据，数值会不同，所以不比较数值
+        # 校验（可选）- 比较h5中的250Hz数据与bin中对应帧的数值
         if verify:
-            log("正在校验帧号覆盖范围...")
+            log("正在校验数据一致性...")
             found_count = 0
             missing_count = 0
+            match_count = 0
+            mismatch_count = 0
 
-            # 检查h5中的SD帧号是否都能在bin中找到
-            for i, ble_frame_id in enumerate(frame_ids[:min(100, len(frame_ids))]):
+            # 检查h5中的SD帧号是否都能在bin中找到，并比较数值
+            sample_count = min(100, len(frame_ids))
+            for i in range(sample_count):
+                ble_frame_id = frame_ids[i]
                 sd_frame_id = int(ble_frame_id) * DOWNSAMPLE_RATIO + (DOWNSAMPLE_RATIO - 1)
                 bin_data = emg_parser.get_frame(sd_frame_id)
 
                 if bin_data is not None:
                     found_count += 1
+                    # 比较数值（都是原始ADC值）
+                    h5_channels = channels_250hz[i]
+                    # 检查第一个通道的值是否接近（允许小误差）
+                    if abs(h5_channels[0] - bin_data[0]) < 1:
+                        match_count += 1
+                    else:
+                        mismatch_count += 1
+                        if mismatch_count <= 3:
+                            log(f"  数值不匹配 @帧{sd_frame_id}: h5={h5_channels[0]:.0f}, bin={bin_data[0]}")
                 else:
                     missing_count += 1
 
@@ -302,6 +319,10 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
             coverage = found_count / (found_count + missing_count) * 100
             log(f"帧号校验: {found_count}/{found_count + missing_count} 帧在bin中找到 ({coverage:.1f}%)")
 
+            if match_count > 0:
+                match_rate = match_count / found_count * 100
+                log(f"数值校验: {match_count}/{found_count} 帧数值匹配 ({match_rate:.1f}%)")
+
             if coverage < 50:
                 log(f"警告: 帧号覆盖率过低，可能选错了bin文件")
                 return {'status': 'error', 'reason': 'low_coverage',
@@ -311,9 +332,10 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
         log("正在构建2kHz数据...")
 
         num_frames_2khz = num_frames_250hz * DOWNSAMPLE_RATIO
+        # 2kHz数据集类型：使用int32存储原始ADC值（与250Hz一致）
         emg_2khz_dtype = np.dtype([
-            ("channels", "<f4", (16,)),
-            ("frame_id", "<u4"),
+            ("channels", "<i4", (16,)),  # 原始ADC值（int32）
+            ("sd_frame_id", "<u4"),      # SD卡帧号
             ("time", "<f8")
         ])
 
@@ -333,20 +355,20 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
                 bin_data = emg_parser.get_frame(sd_frame_id)
 
                 if bin_data is not None:
-                    data_2khz[idx_2khz]['channels'] = np.array(bin_data, dtype=np.float32)
-                    data_2khz[idx_2khz]['frame_id'] = sd_frame_id
+                    data_2khz[idx_2khz]['channels'] = np.array(bin_data, dtype=np.int32)
+                    data_2khz[idx_2khz]['sd_frame_id'] = sd_frame_id
                     filled_frames += 1
                 else:
                     # 帧丢失，使用插值或最近邻填充
                     if j == DOWNSAMPLE_RATIO - 1:
                         # 最后一帧应该和250Hz数据一致
-                        data_2khz[idx_2khz]['channels'] = channels_250hz[i]
+                        data_2khz[idx_2khz]['channels'] = channels_250hz[i].astype(np.int32)
                     elif idx_2khz > 0:
                         # 使用前一帧数据
                         data_2khz[idx_2khz]['channels'] = data_2khz[idx_2khz - 1]['channels']
                     else:
-                        data_2khz[idx_2khz]['channels'] = np.zeros(16, dtype=np.float32)
-                    data_2khz[idx_2khz]['frame_id'] = sd_frame_id
+                        data_2khz[idx_2khz]['channels'] = np.zeros(16, dtype=np.int32)
+                    data_2khz[idx_2khz]['sd_frame_id'] = sd_frame_id
                     missing_frames += 1
 
                 # 插值时间戳
@@ -360,25 +382,36 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
 
         log(f"2kHz数据构建完成: {filled_frames} 帧来自bin, {missing_frames} 帧插值填充")
 
-        # 写入2kHz数据集
-        ds_2khz_name = f"emg{device_id}_2khz"
+        # 写入2kHz ADC数据集（写入已存在的空数据集，而非创建新的）
+        ds_2khz_name = f"emg{device_id}_2khz_adc"
 
-        # 如果已存在，先删除
         if ds_2khz_name in f:
-            del f[ds_2khz_name]
-
-        ds_2khz = f.create_dataset(
-            ds_2khz_name, data=data_2khz,
-            chunks=(1000,), compression="gzip"
-        )
-        ds_2khz.attrs["device"] = f"device_{device_id}"
-        ds_2khz.attrs["channels"] = 16
-        ds_2khz.attrs["sample_rate"] = 2000
-        ds_2khz.attrs["description"] = "2kHz EMG data synced from SD card bin"
-        ds_2khz.attrs["source_bin"] = os.path.basename(emg_bin_path)
-        ds_2khz.attrs["sync_time"] = datetime.now().isoformat()
-        ds_2khz.attrs["filled_frames"] = filled_frames
-        ds_2khz.attrs["missing_frames"] = missing_frames
+            ds_2khz = f[ds_2khz_name]
+            # 调整大小并写入数据
+            ds_2khz.resize(num_frames_2khz, axis=0)
+            ds_2khz[:] = data_2khz
+            # 更新属性
+            ds_2khz.attrs["lsb_uv"] = emg_parser.lsb_uv  # 保存LSB系数，用于转换为μV
+            ds_2khz.attrs["source_bin"] = os.path.basename(emg_bin_path)
+            ds_2khz.attrs["sync_time"] = datetime.now().isoformat()
+            ds_2khz.attrs["filled_frames"] = filled_frames
+            ds_2khz.attrs["missing_frames"] = missing_frames
+        else:
+            log(f"警告: 数据集 {ds_2khz_name} 不存在，创建新数据集")
+            ds_2khz = f.create_dataset(
+                ds_2khz_name, data=data_2khz,
+                chunks=(1000,), compression="gzip"
+            )
+            ds_2khz.attrs["device"] = f"device_{device_id}"
+            ds_2khz.attrs["channels"] = 16
+            ds_2khz.attrs["sample_rate"] = 2000
+            ds_2khz.attrs["data_type"] = "raw_adc"
+            ds_2khz.attrs["lsb_uv"] = emg_parser.lsb_uv
+            ds_2khz.attrs["description"] = "2kHz EMG raw ADC data synced from SD card bin (not uV, multiply by lsb_uv to convert)"
+            ds_2khz.attrs["source_bin"] = os.path.basename(emg_bin_path)
+            ds_2khz.attrs["sync_time"] = datetime.now().isoformat()
+            ds_2khz.attrs["filled_frames"] = filled_frames
+            ds_2khz.attrs["missing_frames"] = missing_frames
 
         # 更新sync_status
         f.attrs["sync_status"] = "synced"

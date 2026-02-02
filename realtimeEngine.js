@@ -557,7 +557,10 @@ class RealtimeEngine extends EventEmitter {
         try {
             if (!packet.dev1 && !packet.dev2) return;
 
+            // 用于前端显示的滤波后数据
             let emg1Data = null, emg2Data = null;
+            // 用于存储的原始数据
+            let emg1RawData = null, emg2RawData = null;
             let emg1Timestamps = null, emg2Timestamps = null;
             let emg1FrameIds = null, emg2FrameIds = null;  // 【新增】BLE帧号
             let imu1Data = null, imu2Data = null;
@@ -569,7 +572,10 @@ class RealtimeEngine extends EventEmitter {
             if (packet.dev1) {
                 const dev1 = Array.isArray(packet.dev1) ? packet.dev1[0] : packet.dev1;
                 if (dev1) {
+                    // uv: 滤波后数据，用于前端显示
                     if (dev1.uv?.length > 0) emg1Data = this.transposeEMG(dev1.uv);
+                    // raw: 原始ADC数据，用于存储
+                    if (dev1.raw?.length > 0) emg1RawData = this.transposeEMG(dev1.raw);
                     if (dev1.emg_t?.length > 0) emg1Timestamps = dev1.emg_t;
                     if (dev1.frame_ids?.length > 0) emg1FrameIds = dev1.frame_ids;  // 【新增】
                     if (dev1.imu?.[0]) imu1Data = { acc: dev1.imu[0][0], gyr: dev1.imu[0][1], mag: dev1.imu[0][2] };
@@ -583,7 +589,10 @@ class RealtimeEngine extends EventEmitter {
             if (packet.dev2) {
                 const dev2 = Array.isArray(packet.dev2) ? packet.dev2[0] : packet.dev2;
                 if (dev2) {
+                    // uv: 滤波后数据，用于前端显示
                     if (dev2.uv?.length > 0) emg2Data = this.transposeEMG(dev2.uv);
+                    // raw: 原始ADC数据，用于存储
+                    if (dev2.raw?.length > 0) emg2RawData = this.transposeEMG(dev2.raw);
                     if (dev2.emg_t?.length > 0) emg2Timestamps = dev2.emg_t;
                     if (dev2.frame_ids?.length > 0) emg2FrameIds = dev2.frame_ids;  // 【新增】
                     if (dev2.imu?.[0]) imu2Data = { acc: dev2.imu[0][0], gyr: dev2.imu[0][1], mag: dev2.imu[0][2] };
@@ -595,6 +604,7 @@ class RealtimeEngine extends EventEmitter {
 
             this.emg_packet_count += framesInPacket;
 
+            // 发送滤波后的 uv 数据给前端显示
             this.broadcastToClients({
                 type: 'realtime_data',
                 data: {
@@ -604,9 +614,10 @@ class RealtimeEngine extends EventEmitter {
                 }
             });
 
+            // 发送原始 raw 数据给 storage_server 存储
             if (this.isCollecting && !this.collectionPaused && this.stageFileOpen && !this.isClosingStageFile) {
                 this.saveDataToStorage({
-                    emg1: emg1Data, emg2: emg2Data, emg1_t: emg1Timestamps, emg2_t: emg2Timestamps,
+                    emg1: emg1RawData, emg2: emg2RawData, emg1_t: emg1Timestamps, emg2_t: emg2Timestamps,
                     emg1_frame_ids: emg1FrameIds, emg2_frame_ids: emg2FrameIds,  // 【新增】传递帧号
                     imu1: imu1Data, imu2: imu2Data, imu1_t: imu1Timestamps, imu2_t: imu2Timestamps
                 });

@@ -50,27 +50,23 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_bufferin
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', line_buffering=True)
 
 # ===================== 数据类型定义 =====================
-# EMG数据集类型：每帧16通道 + 时间戳
-EMG_DTYPE = np.dtype([
-    ("channels", "<f4", (16,)),  # 16通道EMG数据
-    ("time", "<f8")               # 时间戳
-])
 
-# 【新增】EMG 250Hz数据集类型：每帧16通道 + BLE帧号 + SD卡帧号 + 时间戳
-# 用于存储250Hz原始数据，后续与SD卡bin文件同步补全为2kHz
-EMG_250HZ_DTYPE = np.dtype([
-    ("channels", "<f4", (16,)),  # 16通道EMG数据
+# 【新增】EMG 250Hz ADC数据集类型：每帧16通道 + BLE帧号 + SD卡帧号 + 时间戳
+# 用于存储250Hz原始ADC数据，后续与SD卡bin文件同步补全为2kHz
+# 注意：channels存储的是原始ADC值（int32），不是μV值，需要乘以LSB系数才能转换为μV
+EMG_250HZ_ADC_DTYPE = np.dtype([
+    ("channels", "<i4", (16,)),   # 16通道EMG原始ADC值（非μV）
     ("frame_id", "<u4"),          # BLE帧号
     ("sd_frame_id", "<u4"),       # 对应的SD卡帧号 (= BLE帧号 * 8 + 7)
     ("time", "<f8")               # 时间戳
 ])
 
-# IMU数据集类型：acc(3) + gyr(3) + mag(3) + 时间戳
-IMU_DTYPE = np.dtype([
-    ("acc", "<f4", (3,)),   # 加速度计 [ax, ay, az]
-    ("gyr", "<f4", (3,)),   # 陀螺仪 [gx, gy, gz]
-    ("mag", "<f4", (3,)),   # 磁力计 [mx, my, mz]
-    ("time", "<f8")         # 时间戳
+# 【新增】EMG 2kHz ADC数据集类型：每帧16通道 + SD卡帧号 + 时间戳
+# 用于存储同步后的2kHz原始ADC数据
+EMG_2KHZ_ADC_DTYPE = np.dtype([
+    ("channels", "<i4", (16,)),   # 16通道EMG原始ADC值（非μV）
+    ("sd_frame_id", "<u4"),       # SD卡帧号
+    ("time", "<f8")               # 时间戳
 ])
 
 # 【新增】IMU 250Hz数据集类型：acc(3) + gyr(3) + mag(3) + BLE帧号 + SD卡帧号 + 时间戳
@@ -81,6 +77,16 @@ IMU_250HZ_DTYPE = np.dtype([
     ("mag", "<f4", (3,)),   # 磁力计 [mx, my, mz]
     ("frame_id", "<u4"),    # BLE帧号
     ("sd_frame_id", "<u4"), # 对应的SD卡帧号 (= BLE帧号 * 8 + 7)
+    ("time", "<f8")         # 时间戳
+])
+
+# 【新增】IMU 2kHz数据集类型：acc(3) + gyr(3) + mag(3) + SD卡帧号 + 时间戳
+# 用于存储同步后的2kHz数据
+IMU_2KHZ_DTYPE = np.dtype([
+    ("acc", "<f4", (3,)),   # 加速度计 [ax, ay, az]
+    ("gyr", "<f4", (3,)),   # 陀螺仪 [gx, gy, gz]
+    ("mag", "<f4", (3,)),   # 磁力计 [mx, my, mz]
+    ("sd_frame_id", "<u4"), # SD卡帧号
     ("time", "<f8")         # 时间戳
 ])
 
@@ -304,25 +310,48 @@ class HDF5StorageServer:
                         except Exception as e:
                             debug_log(f"保存subject属性失败 {key}: {e}")
 
-            # ===================== 创建EMG 250Hz数据集（采集时写入） =====================
-            # 这些数据集存储BLE传输的250Hz数据，包含帧号用于后续与SD卡bin文件同步
+            # ===================== 创建EMG 250Hz ADC数据集（采集时写入） =====================
+            # 这些数据集存储BLE传输的250Hz原始ADC数据，包含帧号用于后续与SD卡bin文件同步
             emg1_250hz_ds = self.f.create_dataset(
-                "emg1_250hz", shape=(0,), dtype=EMG_250HZ_DTYPE,
+                "emg1_250hz_adc", shape=(0,), dtype=EMG_250HZ_ADC_DTYPE,
                 chunks=(1000,), maxshape=(None,), compression="gzip"
             )
             emg1_250hz_ds.attrs["device"] = "device_1"
             emg1_250hz_ds.attrs["channels"] = 16
             emg1_250hz_ds.attrs["sample_rate"] = 250
-            emg1_250hz_ds.attrs["description"] = "250Hz EMG data from BLE for sync with SD card bin"
+            emg1_250hz_ds.attrs["data_type"] = "raw_adc"  # 原始ADC值，非μV
+            emg1_250hz_ds.attrs["description"] = "250Hz EMG raw ADC data from BLE (not uV, multiply by LSB to convert)"
 
             emg2_250hz_ds = self.f.create_dataset(
-                "emg2_250hz", shape=(0,), dtype=EMG_250HZ_DTYPE,
+                "emg2_250hz_adc", shape=(0,), dtype=EMG_250HZ_ADC_DTYPE,
                 chunks=(1000,), maxshape=(None,), compression="gzip"
             )
             emg2_250hz_ds.attrs["device"] = "device_2"
             emg2_250hz_ds.attrs["channels"] = 16
             emg2_250hz_ds.attrs["sample_rate"] = 250
-            emg2_250hz_ds.attrs["description"] = "250Hz EMG data from BLE for sync with SD card bin"
+            emg2_250hz_ds.attrs["data_type"] = "raw_adc"  # 原始ADC值，非μV
+            emg2_250hz_ds.attrs["description"] = "250Hz EMG raw ADC data from BLE (not uV, multiply by LSB to convert)"
+
+            # ===================== 创建EMG 2kHz ADC数据集（同步后写入，初始为空） =====================
+            emg1_2khz_ds = self.f.create_dataset(
+                "emg1_2khz_adc", shape=(0,), dtype=EMG_2KHZ_ADC_DTYPE,
+                chunks=(1000,), maxshape=(None,), compression="gzip"
+            )
+            emg1_2khz_ds.attrs["device"] = "device_1"
+            emg1_2khz_ds.attrs["channels"] = 16
+            emg1_2khz_ds.attrs["sample_rate"] = 2000
+            emg1_2khz_ds.attrs["data_type"] = "raw_adc"  # 原始ADC值，非μV
+            emg1_2khz_ds.attrs["description"] = "2kHz EMG raw ADC data (synced from SD card bin, empty until sync)"
+
+            emg2_2khz_ds = self.f.create_dataset(
+                "emg2_2khz_adc", shape=(0,), dtype=EMG_2KHZ_ADC_DTYPE,
+                chunks=(1000,), maxshape=(None,), compression="gzip"
+            )
+            emg2_2khz_ds.attrs["device"] = "device_2"
+            emg2_2khz_ds.attrs["channels"] = 16
+            emg2_2khz_ds.attrs["sample_rate"] = 2000
+            emg2_2khz_ds.attrs["data_type"] = "raw_adc"  # 原始ADC值，非μV
+            emg2_2khz_ds.attrs["description"] = "2kHz EMG raw ADC data (synced from SD card bin, empty until sync)"
 
             # ===================== 创建IMU 250Hz数据集（采集时写入） =====================
             imu1_250hz_ds = self.f.create_dataset(
@@ -341,41 +370,22 @@ class HDF5StorageServer:
             imu2_250hz_ds.attrs["sample_rate"] = 250
             imu2_250hz_ds.attrs["description"] = "250Hz IMU data from BLE for sync with SD card bin"
 
-            # ===================== 创建EMG 2kHz数据集（同步后写入，初始为空） =====================
-            emg1_ds = self.f.create_dataset(
-                "emg1", shape=(0,), dtype=EMG_DTYPE,
-                chunks=(1000,), maxshape=(None,), compression="gzip"
-            )
-            emg1_ds.attrs["device"] = "device_1"
-            emg1_ds.attrs["channels"] = 16
-            emg1_ds.attrs["sample_rate"] = 2000
-            emg1_ds.attrs["description"] = "2kHz EMG data (synced from SD card bin, empty until sync)"
-
-            emg2_ds = self.f.create_dataset(
-                "emg2", shape=(0,), dtype=EMG_DTYPE,
-                chunks=(1000,), maxshape=(None,), compression="gzip"
-            )
-            emg2_ds.attrs["device"] = "device_2"
-            emg2_ds.attrs["channels"] = 16
-            emg2_ds.attrs["sample_rate"] = 2000
-            emg2_ds.attrs["description"] = "2kHz EMG data (synced from SD card bin, empty until sync)"
-
             # ===================== 创建IMU 2kHz数据集（同步后写入，初始为空） =====================
-            imu1_ds = self.f.create_dataset(
-                "imu1", shape=(0,), dtype=IMU_DTYPE,
+            imu1_2khz_ds = self.f.create_dataset(
+                "imu1_2khz", shape=(0,), dtype=IMU_2KHZ_DTYPE,
                 chunks=(500,), maxshape=(None,), compression="gzip"
             )
-            imu1_ds.attrs["device"] = "device_1"
-            imu1_ds.attrs["sample_rate"] = 2000
-            imu1_ds.attrs["description"] = "2kHz IMU data (synced from SD card bin, empty until sync)"
+            imu1_2khz_ds.attrs["device"] = "device_1"
+            imu1_2khz_ds.attrs["sample_rate"] = 2000
+            imu1_2khz_ds.attrs["description"] = "2kHz IMU data (synced from SD card bin, empty until sync)"
 
-            imu2_ds = self.f.create_dataset(
-                "imu2", shape=(0,), dtype=IMU_DTYPE,
+            imu2_2khz_ds = self.f.create_dataset(
+                "imu2_2khz", shape=(0,), dtype=IMU_2KHZ_DTYPE,
                 chunks=(500,), maxshape=(None,), compression="gzip"
             )
-            imu2_ds.attrs["device"] = "device_2"
-            imu2_ds.attrs["sample_rate"] = 2000
-            imu2_ds.attrs["description"] = "2kHz IMU data (synced from SD card bin, empty until sync)"
+            imu2_2khz_ds.attrs["device"] = "device_2"
+            imu2_2khz_ds.attrs["sample_rate"] = 2000
+            imu2_2khz_ds.attrs["description"] = "2kHz IMU data (synced from SD card bin, empty until sync)"
 
             # ===================== 同步状态标记 =====================
             # pending: 待同步（250Hz数据，需要与SD卡bin同步补全为2kHz）
@@ -487,10 +497,10 @@ class HDF5StorageServer:
             return {"status": "error", "msg": f"追加数据失败：{str(e)}"}
     
     def _append_emg(self, dataset_name, emg_data, timestamps, frame_ids=None):
-        """追加EMG数据到250Hz数据集
+        """追加EMG数据到250Hz ADC数据集
 
-        采集时只保存到250Hz数据集（emg1_250hz/emg2_250hz），
-        emg1/emg2数据集在同步后由bin_sync_tool填充2kHz数据。
+        采集时只保存到250Hz ADC数据集（emg1_250hz_adc/emg2_250hz_adc），
+        emg1_2khz_adc/emg2_2khz_adc数据集在同步后由bin_sync_tool填充2kHz数据。
 
         Args:
             dataset_name: 数据集名称 (emg1 或 emg2)
@@ -519,20 +529,20 @@ class HDF5StorageServer:
                 else:
                     frame_ids = frame_ids[:num_frames]
 
-            # 保存到250Hz数据集
-            ds_250hz_name = f"{dataset_name}_250hz"
+            # 保存到250Hz ADC数据集
+            ds_250hz_name = f"{dataset_name}_250hz_adc"
             if ds_250hz_name in self.f:
                 ds_250hz = self.f[ds_250hz_name]
 
                 # 构造250Hz结构化数组
-                data_250hz = np.empty(num_frames, dtype=EMG_250HZ_DTYPE)
+                data_250hz = np.empty(num_frames, dtype=EMG_250HZ_ADC_DTYPE)
                 for i in range(num_frames):
                     channels = [emg_data[ch][i] for ch in range(16)]
                     ble_frame_id = frame_ids[i]
                     # 计算对应的SD卡帧号: SD帧号 = BLE帧号 * 8 + 7
                     sd_frame_id = ble_frame_id * 8 + 7
 
-                    data_250hz[i]["channels"] = np.array(channels, dtype=np.float32)
+                    data_250hz[i]["channels"] = np.array(channels, dtype=np.int32)
                     data_250hz[i]["frame_id"] = ble_frame_id
                     data_250hz[i]["sd_frame_id"] = sd_frame_id
                     data_250hz[i]["time"] = timestamps[i]
