@@ -762,24 +762,56 @@ class HDF5StageViewer(QMainWindow):
             f'精度: {precision}位小数',
             '═' * 100
         ]
-        
+
         # 表格设置
         self.table.clear()
         self.table.setRowCount(len(data))
-        
-        # EMG有channels和time字段
+
+        # EMG有channels和time字段，可能还有frame_id和sd_frame_id
         if 'channels' in dtype.names:
             n_channels = data['channels'].shape[1] if len(data['channels'].shape) > 1 else 16
-            headers = ['帧序号'] + [f'Ch{i}' for i in range(n_channels)] + ['时间戳']
+
+            # 构建表头：帧序号 + frame_id + sd_frame_id + 通道数据 + 时间戳
+            headers = ['帧序号']
+            has_frame_id = 'frame_id' in dtype.names
+            has_sd_frame_id = 'sd_frame_id' in dtype.names
+
+            if has_frame_id:
+                headers.append('BLE帧号')
+            if has_sd_frame_id:
+                headers.append('SD卡帧号')
+
+            headers += [f'Ch{i}' for i in range(n_channels)]
+            headers.append('时间戳')
+
             self.table.setColumnCount(len(headers))
             self.table.setHorizontalHeaderLabels(headers)
-            
+
             for i, row in enumerate(data):
+                col = 0
+
                 # 帧序号
                 item = QTableWidgetItem(str(i))
                 item.setTextAlignment(Qt.AlignCenter)
-                self.table.setItem(i, 0, item)
-                
+                self.table.setItem(i, col, item)
+                col += 1
+
+                # BLE帧号
+                if has_frame_id:
+                    item = QTableWidgetItem(str(row['frame_id']))
+                    item.setTextAlignment(Qt.AlignCenter)
+                    item.setBackground(QColor(230, 245, 255))  # 浅蓝色背景
+                    self.table.setItem(i, col, item)
+                    col += 1
+
+                # SD卡帧号
+                if has_sd_frame_id:
+                    item = QTableWidgetItem(str(row['sd_frame_id']))
+                    item.setTextAlignment(Qt.AlignCenter)
+                    item.setBackground(QColor(255, 245, 230))  # 浅橙色背景
+                    self.table.setItem(i, col, item)
+                    col += 1
+
                 # 通道数据（使用指定精度）
                 channels = row['channels']
                 for j, val in enumerate(channels):
@@ -788,22 +820,29 @@ class HDF5StageViewer(QMainWindow):
                     # 根据值设置背景色
                     if abs(val) > 100:
                         item.setBackground(QColor(255, 230, 230))  # 浅红
-                    self.table.setItem(i, j + 1, item)
-                
+                    self.table.setItem(i, col + j, item)
+
                 # 时间戳
                 item = QTableWidgetItem(f'{row["time"]:.9f}')
                 item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                self.table.setItem(i, n_channels + 1, item)
-                
+                self.table.setItem(i, col + n_channels, item)
+
                 # 文本预览（显示前8个通道）
                 ch_str = ', '.join([f'{v:.{precision}f}' for v in channels[:8]])
                 if n_channels > 8:
                     ch_str += ', ...'
-                text_lines.append(f'帧{i:5d}: [{ch_str}] t={row["time"]:.9f}')
-        
+
+                frame_info = ''
+                if has_frame_id:
+                    frame_info += f' BLE={row["frame_id"]}'
+                if has_sd_frame_id:
+                    frame_info += f' SD={row["sd_frame_id"]}'
+
+                text_lines.append(f'帧{i:5d}:{frame_info} [{ch_str}] t={row["time"]:.9f}')
+
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.text_preview.setText('\n'.join(text_lines))
-        
+
         # 绘制波形图
         if HAS_MATPLOTLIB and full_dataset.shape[0] > 0:
             # 取更多数据用于波形图
@@ -816,19 +855,52 @@ class HDF5StageViewer(QMainWindow):
     def show_imu_data(self, path, data, dtype, full_dataset):
         """显示IMU数据"""
         text_lines = [f'【{path} - IMU数据预览 (前{len(data)}帧)】', '═' * 100]
-        
+
         # 表格设置
         self.table.clear()
         self.table.setRowCount(len(data))
-        
-        headers = ['帧序号', 'Acc_X', 'Acc_Y', 'Acc_Z', 'Gyr_X', 'Gyr_Y', 'Gyr_Z', 'Mag_X', 'Mag_Y', 'Mag_Z', '时间戳']
+
+        # 检查是否有帧号字段
+        has_frame_id = 'frame_id' in dtype.names
+        has_sd_frame_id = 'sd_frame_id' in dtype.names
+
+        # 构建表头
+        headers = ['帧序号']
+        if has_frame_id:
+            headers.append('BLE帧号')
+        if has_sd_frame_id:
+            headers.append('SD卡帧号')
+        headers += ['Acc_X', 'Acc_Y', 'Acc_Z', 'Gyr_X', 'Gyr_Y', 'Gyr_Z', 'Mag_X', 'Mag_Y', 'Mag_Z', '时间戳']
+
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
-        
+
         for i, row in enumerate(data):
-            self.table.setItem(i, 0, QTableWidgetItem(str(i)))
-            
-            col = 1
+            col = 0
+
+            # 帧序号
+            item = QTableWidgetItem(str(i))
+            item.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(i, col, item)
+            col += 1
+
+            # BLE帧号
+            if has_frame_id:
+                item = QTableWidgetItem(str(row['frame_id']))
+                item.setTextAlignment(Qt.AlignCenter)
+                item.setBackground(QColor(230, 245, 255))  # 浅蓝色背景
+                self.table.setItem(i, col, item)
+                col += 1
+
+            # SD卡帧号
+            if has_sd_frame_id:
+                item = QTableWidgetItem(str(row['sd_frame_id']))
+                item.setTextAlignment(Qt.AlignCenter)
+                item.setBackground(QColor(255, 245, 230))  # 浅橙色背景
+                self.table.setItem(i, col, item)
+                col += 1
+
+            # 传感器数据
             for sensor in ['acc', 'gyr', 'mag']:
                 if sensor in dtype.names:
                     for j, val in enumerate(row[sensor]):
@@ -836,14 +908,19 @@ class HDF5StageViewer(QMainWindow):
                         item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                         self.table.setItem(i, col, item)
                         col += 1
-            
+
+            # 时间戳
             if 'time' in dtype.names:
                 item = QTableWidgetItem(f'{row["time"]:.9f}')
                 item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 self.table.setItem(i, col, item)
-            
+
             # 文本预览
             parts = []
+            if has_frame_id:
+                parts.append(f'BLE={row["frame_id"]}')
+            if has_sd_frame_id:
+                parts.append(f'SD={row["sd_frame_id"]}')
             if 'acc' in dtype.names:
                 parts.append(f'Acc=[{row["acc"][0]:8.4f}, {row["acc"][1]:8.4f}, {row["acc"][2]:8.4f}]')
             if 'gyr' in dtype.names:
@@ -851,10 +928,10 @@ class HDF5StageViewer(QMainWindow):
             if 'time' in dtype.names:
                 parts.append(f't={row["time"]:.9f}')
             text_lines.append(f'帧{i:5d}: {" ".join(parts)}')
-        
+
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.text_preview.setText('\n'.join(text_lines))
-        
+
         # 绘制波形图
         if HAS_MATPLOTLIB and full_dataset.shape[0] > 0:
             plot_n = min(2000, full_dataset.shape[0])

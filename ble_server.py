@@ -74,14 +74,16 @@ CMD_MAP = {
     '2kHz': 0x12,
     'START': 0xA0,
     'STOP': 0xA1,
+    'CONFIG': 0xC0,  # 【新增】复合配置命令
 }
 
 # ================= 默认配置 =================
+# 【修改】默认使用2kHz采样率，与SD卡存储一致
 DEFAULT_CONFIG = {
-    'sample_rate': 1000,
+    'sample_rate': 2000,      # 【修改】2kHz采样率
     'gain': 12,
-    'gain_index': 6,
-    'is_16bit': False,
+    'gain_index': 6,          # 增益索引：6 对应增益12
+    'is_16bit': False,        # 24-bit模式
     'shift': 4,
     'imu_enabled': True,
     'frames_per_packet': 9,
@@ -524,7 +526,12 @@ def parse_packet(data: bytearray, dev: DeviceState) -> Optional[dict]:
                 dev.lost_frames += start_frame - expected
         
         dev.last_frame_index = start_frame + fpkt - 1
-        
+
+        # ===== 生成每帧的BLE帧号 =====
+        # 用于后续与SD卡bin文件同步
+        # 映射关系: SD卡帧号 = BLE帧号 * 8 + 7 (2kHz采样时)
+        frame_ids = [start_frame + i for i in range(fpkt)]
+
         # ===== 应用滤波 =====
         emg_uv_filtered = emg_uv  # 默认使用原始数据
         
@@ -542,6 +549,7 @@ def parse_packet(data: bytearray, dev: DeviceState) -> Optional[dict]:
         return {
             'f': start_frame,
             'n': fpkt,
+            'frame_ids': frame_ids,  # 每帧的BLE帧号，用于同步
             'raw': emg_raw,
             'uv': emg_uv_filtered,  # 使用滤波后的数据
             'imu': imu,
@@ -563,11 +571,12 @@ def create_notification_handler(dev: DeviceState):
             if parsed:
                 parsed['t'] = ts
                 
-                # 生成每帧EMG的时间戳 (假设1kHz采样率，9帧/包)
+                # 生成每帧EMG的时间戳
+                # 注意：BLE传输的是250Hz数据（2kHz降采样8倍），所以时间间隔是1/250=0.004秒
                 fpkt = parsed.get('n', 9)
-                sample_rate = dev.config.get('sample_rate', 1000)
-                frame_interval = 1.0 / sample_rate
-                
+                ble_sample_rate = 250  # BLE传输频率固定为250Hz
+                frame_interval = 1.0 / ble_sample_rate  # 0.004秒
+
                 # 为每帧生成时间戳（从当前时间向前推算）
                 emg_timestamps = []
                 for i in range(fpkt):
@@ -575,10 +584,11 @@ def create_notification_handler(dev: DeviceState):
                     frame_ts = ts - (fpkt - 1 - i) * frame_interval
                     emg_timestamps.append(frame_ts)
                 parsed['emg_t'] = emg_timestamps
-                
-                # IMU时间戳（每包2帧IMU）
+
+                # IMU时间戳（每包1帧IMU，与EMG同步）
+                # IMU也是250Hz，使用最后一帧的时间戳
                 if parsed.get('imu'):
-                    imu_timestamps = [ts - 0.005, ts]  # 假设IMU 200Hz，间隔5ms
+                    imu_timestamps = [ts]
                     parsed['imu_t'] = imu_timestamps
                 
                 dev.data_buffer.append(parsed)
@@ -929,7 +939,7 @@ async def start_stream(ws, device_id: int):
     """开始采集"""
     dev = state.get_device(device_id)
     action = f'start{device_id}'
-    
+
     if not dev.is_connected():
         await send_to_control(ws, action, {
             'success': False,
@@ -937,7 +947,7 @@ async def start_stream(ws, device_id: int):
             'error': "设备未连接",
         })
         return
-    
+
     if dev.is_streaming:
         await send_to_control(ws, action, {
             'success': False,
@@ -945,34 +955,68 @@ async def start_stream(ws, device_id: int):
             'error': "已在采集中",
         })
         return
-    
+
     try:
         dev.reset_stats()
-        
+
+        # ===================== 【新增】发送配置命令 =====================
+        # 配置ESP32工作在2kHz采样率，确保SD卡存储的是2kHz数据
+        config = dev.config
+
+        # 1. 发送采样率命令 (0x12 = 2kHz)
+        sample_rate_cmd = CMD_MAP['2kHz']
+        await dev.client.write_gatt_char(
+            CONTROL_CHAR_UUID,
+            bytes([sample_rate_cmd]),
+            response=False
+        )
+        log(f"[Dev{device_id}] 已发送采样率配置: 2kHz (0x{sample_rate_cmd:02X})")
+        await asyncio.sleep(0.1)  # 等待ESP32处理
+
+        # 2. 发送复合配置命令 [0xC0, GainIdx, Mode, Shift, IMU_En]
+        # GainIdx: 6 (增益12)
+        # Mode: 0 (24-bit), 1 (16-bit)
+        # Shift: 4 (默认)
+        # IMU_En: 1 (启用IMU)
+        gain_idx = config.get('gain_index', 6)
+        mode = 1 if config.get('is_16bit', False) else 0
+        shift = config.get('shift', 4)
+        imu_en = 1 if config.get('imu_enabled', True) else 0
+
+        config_cmd = bytes([CMD_MAP['CONFIG'], gain_idx, mode, shift, imu_en])
+        await dev.client.write_gatt_char(
+            CONTROL_CHAR_UUID,
+            config_cmd,
+            response=False
+        )
+        log(f"[Dev{device_id}] 已发送复合配置: Gain={gain_idx}, Mode={mode}, Shift={shift}, IMU={imu_en}")
+        await asyncio.sleep(0.1)  # 等待ESP32处理
+        # ===================== 配置命令结束 =====================
+
         handler = create_notification_handler(dev)
         await dev.client.start_notify(EMG_DATA_CHAR_UUID, handler)
         log(f"[Dev{device_id}] 已订阅")
-        
+
         await dev.client.write_gatt_char(
             CONTROL_CHAR_UUID,
             bytes([CMD_MAP['START']]),
             response=False
         )
         log(f"[Dev{device_id}] 已发送 START")
-        
+
         dev.is_streaming = True
-        
+
         await send_to_control(ws, action, {
             'success': True,
             'device_id': device_id,
             'active': state.get_active_devices(),
         })
-        
+
         await broadcast_event('stream_started', {
             'device_id': device_id,
             'active': state.get_active_devices(),
         })
-        
+
     except Exception as e:
         log(f"[Dev{device_id}] 启动失败: {e}")
         await send_to_control(ws, action, {

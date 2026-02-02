@@ -56,11 +56,31 @@ EMG_DTYPE = np.dtype([
     ("time", "<f8")               # 时间戳
 ])
 
+# 【新增】EMG 250Hz数据集类型：每帧16通道 + BLE帧号 + SD卡帧号 + 时间戳
+# 用于存储250Hz原始数据，后续与SD卡bin文件同步补全为2kHz
+EMG_250HZ_DTYPE = np.dtype([
+    ("channels", "<f4", (16,)),  # 16通道EMG数据
+    ("frame_id", "<u4"),          # BLE帧号
+    ("sd_frame_id", "<u4"),       # 对应的SD卡帧号 (= BLE帧号 * 8 + 7)
+    ("time", "<f8")               # 时间戳
+])
+
 # IMU数据集类型：acc(3) + gyr(3) + mag(3) + 时间戳
 IMU_DTYPE = np.dtype([
     ("acc", "<f4", (3,)),   # 加速度计 [ax, ay, az]
     ("gyr", "<f4", (3,)),   # 陀螺仪 [gx, gy, gz]
     ("mag", "<f4", (3,)),   # 磁力计 [mx, my, mz]
+    ("time", "<f8")         # 时间戳
+])
+
+# 【新增】IMU 250Hz数据集类型：acc(3) + gyr(3) + mag(3) + BLE帧号 + SD卡帧号 + 时间戳
+# 用于存储250Hz原始数据，后续与SD卡bin文件同步补全为2kHz
+IMU_250HZ_DTYPE = np.dtype([
+    ("acc", "<f4", (3,)),   # 加速度计 [ax, ay, az]
+    ("gyr", "<f4", (3,)),   # 陀螺仪 [gx, gy, gz]
+    ("mag", "<f4", (3,)),   # 磁力计 [mx, my, mz]
+    ("frame_id", "<u4"),    # BLE帧号
+    ("sd_frame_id", "<u4"), # 对应的SD卡帧号 (= BLE帧号 * 8 + 7)
     ("time", "<f8")         # 时间戳
 ])
 
@@ -283,38 +303,86 @@ class HDF5StorageServer:
                             subject_grp.attrs[str(key)] = str(value) if not isinstance(value, (int, float)) else value
                         except Exception as e:
                             debug_log(f"保存subject属性失败 {key}: {e}")
-            
-            # ===================== 创建EMG数据集 =====================
+
+            # ===================== 创建EMG 250Hz数据集（采集时写入） =====================
+            # 这些数据集存储BLE传输的250Hz数据，包含帧号用于后续与SD卡bin文件同步
+            emg1_250hz_ds = self.f.create_dataset(
+                "emg1_250hz", shape=(0,), dtype=EMG_250HZ_DTYPE,
+                chunks=(1000,), maxshape=(None,), compression="gzip"
+            )
+            emg1_250hz_ds.attrs["device"] = "device_1"
+            emg1_250hz_ds.attrs["channels"] = 16
+            emg1_250hz_ds.attrs["sample_rate"] = 250
+            emg1_250hz_ds.attrs["description"] = "250Hz EMG data from BLE for sync with SD card bin"
+
+            emg2_250hz_ds = self.f.create_dataset(
+                "emg2_250hz", shape=(0,), dtype=EMG_250HZ_DTYPE,
+                chunks=(1000,), maxshape=(None,), compression="gzip"
+            )
+            emg2_250hz_ds.attrs["device"] = "device_2"
+            emg2_250hz_ds.attrs["channels"] = 16
+            emg2_250hz_ds.attrs["sample_rate"] = 250
+            emg2_250hz_ds.attrs["description"] = "250Hz EMG data from BLE for sync with SD card bin"
+
+            # ===================== 创建IMU 250Hz数据集（采集时写入） =====================
+            imu1_250hz_ds = self.f.create_dataset(
+                "imu1_250hz", shape=(0,), dtype=IMU_250HZ_DTYPE,
+                chunks=(500,), maxshape=(None,), compression="gzip"
+            )
+            imu1_250hz_ds.attrs["device"] = "device_1"
+            imu1_250hz_ds.attrs["sample_rate"] = 250
+            imu1_250hz_ds.attrs["description"] = "250Hz IMU data from BLE for sync with SD card bin"
+
+            imu2_250hz_ds = self.f.create_dataset(
+                "imu2_250hz", shape=(0,), dtype=IMU_250HZ_DTYPE,
+                chunks=(500,), maxshape=(None,), compression="gzip"
+            )
+            imu2_250hz_ds.attrs["device"] = "device_2"
+            imu2_250hz_ds.attrs["sample_rate"] = 250
+            imu2_250hz_ds.attrs["description"] = "250Hz IMU data from BLE for sync with SD card bin"
+
+            # ===================== 创建EMG 2kHz数据集（同步后写入，初始为空） =====================
             emg1_ds = self.f.create_dataset(
                 "emg1", shape=(0,), dtype=EMG_DTYPE,
                 chunks=(1000,), maxshape=(None,), compression="gzip"
             )
             emg1_ds.attrs["device"] = "device_1"
             emg1_ds.attrs["channels"] = 16
-            emg1_ds.attrs["description"] = "EMG data from device 1"
-            
+            emg1_ds.attrs["sample_rate"] = 2000
+            emg1_ds.attrs["description"] = "2kHz EMG data (synced from SD card bin, empty until sync)"
+
             emg2_ds = self.f.create_dataset(
                 "emg2", shape=(0,), dtype=EMG_DTYPE,
                 chunks=(1000,), maxshape=(None,), compression="gzip"
             )
             emg2_ds.attrs["device"] = "device_2"
             emg2_ds.attrs["channels"] = 16
-            emg2_ds.attrs["description"] = "EMG data from device 2"
-            
-            # ===================== 创建IMU数据集 =====================
+            emg2_ds.attrs["sample_rate"] = 2000
+            emg2_ds.attrs["description"] = "2kHz EMG data (synced from SD card bin, empty until sync)"
+
+            # ===================== 创建IMU 2kHz数据集（同步后写入，初始为空） =====================
             imu1_ds = self.f.create_dataset(
                 "imu1", shape=(0,), dtype=IMU_DTYPE,
                 chunks=(500,), maxshape=(None,), compression="gzip"
             )
             imu1_ds.attrs["device"] = "device_1"
-            imu1_ds.attrs["description"] = "IMU data from device 1 (acc, gyr, mag)"
-            
+            imu1_ds.attrs["sample_rate"] = 2000
+            imu1_ds.attrs["description"] = "2kHz IMU data (synced from SD card bin, empty until sync)"
+
             imu2_ds = self.f.create_dataset(
                 "imu2", shape=(0,), dtype=IMU_DTYPE,
                 chunks=(500,), maxshape=(None,), compression="gzip"
             )
             imu2_ds.attrs["device"] = "device_2"
-            imu2_ds.attrs["description"] = "IMU data from device 2 (acc, gyr, mag)"
+            imu2_ds.attrs["sample_rate"] = 2000
+            imu2_ds.attrs["description"] = "2kHz IMU data (synced from SD card bin, empty until sync)"
+
+            # ===================== 同步状态标记 =====================
+            # pending: 待同步（250Hz数据，需要与SD卡bin同步补全为2kHz）
+            # synced: 已同步（已补全为2kHz数据）
+            self.f.attrs["sync_status"] = "pending"
+            self.f.attrs["ble_sample_rate"] = 250  # BLE传输采样率
+            self.f.attrs["target_sample_rate"] = 2000  # 目标采样率（SD卡存储）
 
             # ===================== 【新增】创建MOCAP数据集 =====================
             mocap_ds = self.f.create_dataset(
@@ -377,21 +445,26 @@ class HDF5StorageServer:
             data = params.get("data", {})
 
             with self.lock:
-                # 追加EMG1
+                # 追加EMG1到250Hz数据集
                 if data.get("emg1") and data.get("emg1_t"):
-                    self._append_emg("emg1", data["emg1"], data["emg1_t"])
+                    frame_ids = data.get("emg1_frame_ids")
+                    self._append_emg("emg1", data["emg1"], data["emg1_t"], frame_ids)
 
-                # 追加EMG2
+                # 追加EMG2到250Hz数据集
                 if data.get("emg2") and data.get("emg2_t"):
-                    self._append_emg("emg2", data["emg2"], data["emg2_t"])
+                    frame_ids = data.get("emg2_frame_ids")
+                    self._append_emg("emg2", data["emg2"], data["emg2_t"], frame_ids)
 
-                # 追加IMU1
+                # 追加IMU1到250Hz数据集
                 if data.get("imu1") and data.get("imu1_t"):
-                    self._append_imu("imu1", data["imu1"], data["imu1_t"])
+                    # IMU帧号使用EMG帧号的第一个（同一个BLE包）
+                    frame_id = data.get("emg1_frame_ids", [0])[0] if data.get("emg1_frame_ids") else None
+                    self._append_imu("imu1", data["imu1"], data["imu1_t"], frame_id)
 
-                # 追加IMU2
+                # 追加IMU2到250Hz数据集
                 if data.get("imu2") and data.get("imu2_t"):
-                    self._append_imu("imu2", data["imu2"], data["imu2_t"])
+                    frame_id = data.get("emg2_frame_ids", [0])[0] if data.get("emg2_frame_ids") else None
+                    self._append_imu("imu2", data["imu2"], data["imu2_t"], frame_id)
 
                 # 【修改】批量追加MOCAP
                 if data.get("mocap_frames"):
@@ -413,69 +486,117 @@ class HDF5StorageServer:
             debug_log(f"❌ 追加数据失败: {e}")
             return {"status": "error", "msg": f"追加数据失败：{str(e)}"}
     
-    def _append_emg(self, dataset_name, emg_data, timestamps):
-        """追加EMG数据"""
+    def _append_emg(self, dataset_name, emg_data, timestamps, frame_ids=None):
+        """追加EMG数据到250Hz数据集
+
+        采集时只保存到250Hz数据集（emg1_250hz/emg2_250hz），
+        emg1/emg2数据集在同步后由bin_sync_tool填充2kHz数据。
+
+        Args:
+            dataset_name: 数据集名称 (emg1 或 emg2)
+            emg_data: EMG数据 (16通道 x N帧)
+            timestamps: 时间戳列表
+            frame_ids: BLE帧号列表（用于与SD卡bin文件同步）
+        """
         try:
-            ds = self.f[dataset_name]
-            
             if not emg_data or len(emg_data) != 16:
                 return 0
-            
+
             num_frames = len(emg_data[0])
             if len(timestamps) != num_frames:
                 if len(timestamps) < num_frames:
                     timestamps = list(timestamps) + [timestamps[-1]] * (num_frames - len(timestamps))
                 else:
                     timestamps = timestamps[:num_frames]
-            
-            # 构造结构化数组
-            data_struct = np.empty(num_frames, dtype=EMG_DTYPE)
-            
-            for i in range(num_frames):
-                channels = [emg_data[ch][i] for ch in range(16)]
-                data_struct[i]["channels"] = np.array(channels, dtype=np.float32)
-                data_struct[i]["time"] = timestamps[i]
-            
-            # 追加到数据集
-            current_len = ds.shape[0]
-            new_len = current_len + num_frames
-            ds.resize(new_len, axis=0)
-            ds[current_len:new_len] = data_struct
-            
+
+            # 确保frame_ids存在且长度匹配
+            if frame_ids is None:
+                frame_ids = list(range(num_frames))  # 默认从0开始
+            elif len(frame_ids) != num_frames:
+                if len(frame_ids) < num_frames:
+                    last_id = frame_ids[-1] if frame_ids else 0
+                    frame_ids = list(frame_ids) + [last_id + j + 1 for j in range(num_frames - len(frame_ids))]
+                else:
+                    frame_ids = frame_ids[:num_frames]
+
+            # 保存到250Hz数据集
+            ds_250hz_name = f"{dataset_name}_250hz"
+            if ds_250hz_name in self.f:
+                ds_250hz = self.f[ds_250hz_name]
+
+                # 构造250Hz结构化数组
+                data_250hz = np.empty(num_frames, dtype=EMG_250HZ_DTYPE)
+                for i in range(num_frames):
+                    channels = [emg_data[ch][i] for ch in range(16)]
+                    ble_frame_id = frame_ids[i]
+                    # 计算对应的SD卡帧号: SD帧号 = BLE帧号 * 8 + 7
+                    sd_frame_id = ble_frame_id * 8 + 7
+
+                    data_250hz[i]["channels"] = np.array(channels, dtype=np.float32)
+                    data_250hz[i]["frame_id"] = ble_frame_id
+                    data_250hz[i]["sd_frame_id"] = sd_frame_id
+                    data_250hz[i]["time"] = timestamps[i]
+
+                # 追加到250Hz数据集
+                current_len = ds_250hz.shape[0]
+                new_len = current_len + num_frames
+                ds_250hz.resize(new_len, axis=0)
+                ds_250hz[current_len:new_len] = data_250hz
+
             # 更新统计
             self.stats[f"{dataset_name}_frames"] += num_frames
-            
+
             return num_frames
-            
+
         except Exception as e:
             debug_log(f"❌ 追加{dataset_name}失败: {e}")
             return 0
-    
-    def _append_imu(self, dataset_name, imu_data, timestamps):
-        """追加IMU数据"""
+
+    def _append_imu(self, dataset_name, imu_data, timestamps, frame_id=None):
+        """追加IMU数据到250Hz数据集
+
+        采集时只保存到250Hz数据集（imu1_250hz/imu2_250hz），
+        imu1/imu2数据集在同步后由bin_sync_tool填充2kHz数据。
+
+        Args:
+            dataset_name: 数据集名称 (imu1 或 imu2)
+            imu_data: IMU数据 {acc, gyr, mag}
+            timestamps: 时间戳列表
+            frame_id: BLE帧号（用于与SD卡bin文件同步）
+        """
         try:
-            ds = self.f[dataset_name]
-            
             if not imu_data or "acc" not in imu_data:
                 return 0
-            
-            # 构造结构化数组（每次一帧）
-            data_struct = np.empty(1, dtype=IMU_DTYPE)
-            data_struct[0]["acc"] = np.array(imu_data.get("acc", [0,0,0])[:3], dtype=np.float32)
-            data_struct[0]["gyr"] = np.array(imu_data.get("gyr", [0,0,0])[:3], dtype=np.float32)
-            data_struct[0]["mag"] = np.array(imu_data.get("mag", [0,0,0])[:3], dtype=np.float32)
-            data_struct[0]["time"] = timestamps[0] if timestamps else 0
-            
-            # 追加到数据集
-            current_len = ds.shape[0]
-            ds.resize(current_len + 1, axis=0)
-            ds[current_len] = data_struct[0]
-            
+
+            # 保存到250Hz数据集
+            ds_250hz_name = f"{dataset_name}_250hz"
+            if ds_250hz_name in self.f:
+                ds_250hz = self.f[ds_250hz_name]
+
+                # 计算BLE帧号和SD卡帧号
+                ble_frame_id = frame_id if frame_id is not None else 0
+                # SD帧号 = BLE帧号 * 8 + 7
+                sd_frame_id = ble_frame_id * 8 + 7
+
+                # 构造250Hz结构化数组（每次一帧）
+                data_250hz = np.empty(1, dtype=IMU_250HZ_DTYPE)
+                data_250hz[0]["acc"] = np.array(imu_data.get("acc", [0, 0, 0])[:3], dtype=np.float32)
+                data_250hz[0]["gyr"] = np.array(imu_data.get("gyr", [0, 0, 0])[:3], dtype=np.float32)
+                data_250hz[0]["mag"] = np.array(imu_data.get("mag", [0, 0, 0])[:3], dtype=np.float32)
+                data_250hz[0]["frame_id"] = ble_frame_id
+                data_250hz[0]["sd_frame_id"] = sd_frame_id
+                data_250hz[0]["time"] = timestamps[0] if timestamps else 0
+
+                # 追加到250Hz数据集
+                current_len = ds_250hz.shape[0]
+                ds_250hz.resize(current_len + 1, axis=0)
+                ds_250hz[current_len] = data_250hz[0]
+
             # 更新统计
             self.stats[f"{dataset_name}_frames"] += 1
-            
+
             return 1
-            
+
         except Exception as e:
             debug_log(f"❌ 追加{dataset_name}失败: {e}")
             return 0

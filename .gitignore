@@ -7,4 +7,5 @@ build/
 .claude/
 mocap_sdk/
 motion_marker_data/
+band/
 

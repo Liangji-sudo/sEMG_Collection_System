@@ -559,6 +559,7 @@ class RealtimeEngine extends EventEmitter {
 
             let emg1Data = null, emg2Data = null;
             let emg1Timestamps = null, emg2Timestamps = null;
+            let emg1FrameIds = null, emg2FrameIds = null;  // 【新增】BLE帧号
             let imu1Data = null, imu2Data = null;
             let imu1Timestamps = null, imu2Timestamps = null;
             let timestamp = packet.ts;
@@ -570,6 +571,7 @@ class RealtimeEngine extends EventEmitter {
                 if (dev1) {
                     if (dev1.uv?.length > 0) emg1Data = this.transposeEMG(dev1.uv);
                     if (dev1.emg_t?.length > 0) emg1Timestamps = dev1.emg_t;
+                    if (dev1.frame_ids?.length > 0) emg1FrameIds = dev1.frame_ids;  // 【新增】
                     if (dev1.imu?.[0]) imu1Data = { acc: dev1.imu[0][0], gyr: dev1.imu[0][1], mag: dev1.imu[0][2] };
                     if (dev1.imu_t?.length > 0) imu1Timestamps = dev1.imu_t;
                     stats1 = dev1.s ? { total: dev1.s[0], lost: dev1.s[1] } : null;
@@ -583,6 +585,7 @@ class RealtimeEngine extends EventEmitter {
                 if (dev2) {
                     if (dev2.uv?.length > 0) emg2Data = this.transposeEMG(dev2.uv);
                     if (dev2.emg_t?.length > 0) emg2Timestamps = dev2.emg_t;
+                    if (dev2.frame_ids?.length > 0) emg2FrameIds = dev2.frame_ids;  // 【新增】
                     if (dev2.imu?.[0]) imu2Data = { acc: dev2.imu[0][0], gyr: dev2.imu[0][1], mag: dev2.imu[0][2] };
                     if (dev2.imu_t?.length > 0) imu2Timestamps = dev2.imu_t;
                     stats2 = dev2.s ? { total: dev2.s[0], lost: dev2.s[1] } : null;
@@ -604,6 +607,7 @@ class RealtimeEngine extends EventEmitter {
             if (this.isCollecting && !this.collectionPaused && this.stageFileOpen && !this.isClosingStageFile) {
                 this.saveDataToStorage({
                     emg1: emg1Data, emg2: emg2Data, emg1_t: emg1Timestamps, emg2_t: emg2Timestamps,
+                    emg1_frame_ids: emg1FrameIds, emg2_frame_ids: emg2FrameIds,  // 【新增】传递帧号
                     imu1: imu1Data, imu2: imu2Data, imu1_t: imu1Timestamps, imu2_t: imu2Timestamps
                 });
             }
