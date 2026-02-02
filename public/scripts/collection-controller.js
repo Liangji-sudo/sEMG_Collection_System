@@ -946,7 +946,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
          * 显示简单的标定倒计时（当没有guideAnimation时使用）
          */
         showSimpleCalibrationCountdown(label, callback) {
-            const duration = 5;
+            const duration = 10;
 
             this.updateGestureDisplay({
                 name: `${label}中`,

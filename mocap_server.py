@@ -136,7 +136,7 @@ def calculate_palm_rotation_angle(markers):
     cos_angle = np.clip(cos_angle, -1, 1)
     angle = math.degrees(math.acos(cos_angle))
 
-    return angle
+    return 180 - angle
 
 
 # ==================== 数据接收器基类 ====================
