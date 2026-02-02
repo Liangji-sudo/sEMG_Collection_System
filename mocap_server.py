@@ -122,21 +122,39 @@ def calculate_thumb_index_distance(markers):
 def calculate_palm_rotation_angle(markers):
     """计算手掌翻转角度（连续手势3）
 
-    使用拇指指尖(rt1)、拇指第一关节(rt2)、食指第一关节(ri2)
-    三个marker点构成的平面，计算其向下法线与(0,0,-1)的夹角
+    坐标系：
+    - Z轴：向上（掌背方向）
+    - Y轴：指尖方向（前臂方向）
+    - X轴：向右
+
+    手掌翻转是绕Y轴旋转，将法向量投影到XZ平面后用atan2计算角度。
+
+    返回值范围：0-180°
+    - 0° = 掌心向下（法向量指向-Z）
+    - 180° = 掌心向上（法向量指向+Z）
     """
     rt1 = np.array(markers.get("rt1", [0, 0, 0]))
     rt2 = np.array(markers.get("rt2", [0, 0, 0]))
     ri2 = np.array(markers.get("ri2", [0, 0, 0]))
 
     palm_normal = fit_plane_normal(rt1, rt2, ri2)
-    downward = np.array([0, 0, -1])
 
-    cos_angle = np.dot(palm_normal, downward)
-    cos_angle = np.clip(cos_angle, -1, 1)
-    angle = math.degrees(math.acos(cos_angle))
+    # 投影到XZ平面（Y是前臂/指尖方向，手掌翻转绕Y轴）
+    x_component = palm_normal[0]
+    z_component = palm_normal[2]
 
-    return 180 - angle
+    # atan2(x, -z):
+    # 掌心向下时，法向量指向-Z（掌心方向），角度接近0°
+    # 掌心向上时，法向量指向+Z（掌背变成向下），角度接近180°
+    angle = math.degrees(math.atan2(x_component, -z_component))
+
+    # 将 -180° ~ 180° 映射到 0° ~ 180°
+    # 手掌翻转是对称的，所以折叠到 0-180° 范围
+    angle = (angle + 180) % 360
+    if angle > 180:
+        angle = 360 - angle
+
+    return angle
 
 
 # ==================== 数据接收器基类 ====================
