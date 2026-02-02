@@ -22,6 +22,14 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QColor, QPalette
 
+# 导入bin_sync_tool中的同步功能
+try:
+    from bin_sync_tool import EMGBinParser, IMUBinParser, sync_h5_with_bin
+    HAS_SYNC_TOOL = True
+except ImportError:
+    HAS_SYNC_TOOL = False
+    print("[警告] 无法导入bin_sync_tool，同步功能不可用")
+
 # 尝试导入matplotlib
 try:
     import matplotlib
@@ -39,68 +47,61 @@ class SyncWorker(QThread):
     log = pyqtSignal(str)
     finished_signal = pyqtSignal(bool, str)
 
-    def __init__(self, h5_files, emg_bin_dir, imu_bin_dir, devices, validate_data):
+    def __init__(self, h5_files, emg_bin_path, imu_bin_path, devices, validate_data):
         super().__init__()
         self.h5_files = h5_files
-        self.emg_bin_dir = emg_bin_dir
-        self.imu_bin_dir = imu_bin_dir
+        self.emg_bin_path = emg_bin_path  # 现在是文件路径
+        self.imu_bin_path = imu_bin_path  # 现在是文件路径
         self.devices = devices
         self.validate_data = validate_data
 
     def run(self):
+        if not HAS_SYNC_TOOL:
+            self.finished_signal.emit(False, "同步功能不可用：无法导入bin_sync_tool")
+            return
+
         try:
             total = len(self.h5_files)
             success_count = 0
+
             for i, h5_file in enumerate(self.h5_files):
                 self.progress.emit(i + 1, total, os.path.basename(h5_file))
                 self.log.emit(f"\n处理文件: {os.path.basename(h5_file)}")
-                if self.sync_file(h5_file):
-                    success_count += 1
-                    self.log.emit(f"  ✓ 同步成功")
-                else:
-                    self.log.emit(f"  ✗ 同步失败或跳过")
+
+                try:
+                    # 确定设备ID（根据选择的设备）
+                    device_id = 1
+                    if 'emg2' in self.devices or 'imu2' in self.devices:
+                        device_id = 2
+
+                    # 调用bin_sync_tool的同步函数
+                    result = sync_h5_with_bin(
+                        h5_path=h5_file,
+                        emg_bin_path=self.emg_bin_path,
+                        imu_bin_path=self.imu_bin_path,
+                        device_id=device_id,
+                        verify=self.validate_data
+                    )
+
+                    if result.get('status') == 'success':
+                        success_count += 1
+                        self.log.emit(f"  ✓ 同步成功")
+                        if 'emg_frames' in result:
+                            self.log.emit(f"    EMG: {result['emg_frames']} 帧")
+                        if 'imu_frames' in result:
+                            self.log.emit(f"    IMU: {result['imu_frames']} 帧")
+                    elif result.get('status') == 'skipped':
+                        self.log.emit(f"  - 跳过: {result.get('reason', '已同步')}")
+                    else:
+                        self.log.emit(f"  ✗ 失败: {result.get('reason', '未知错误')}")
+
+                except Exception as e:
+                    self.log.emit(f"  ✗ 错误: {str(e)}")
+
             self.finished_signal.emit(True, f"完成: {success_count}/{total} 个文件同步成功")
+
         except Exception as e:
             self.finished_signal.emit(False, f"同步出错: {str(e)}")
-
-    def sync_file(self, h5_file):
-        try:
-            with h5py.File(h5_file, 'r+') as f:
-                synced = False
-                if self.emg_bin_dir and ('emg1' in self.devices or 'emg2' in self.devices):
-                    if self.sync_emg(f, h5_file):
-                        synced = True
-                if self.imu_bin_dir and ('imu1' in self.devices or 'imu2' in self.devices):
-                    if self.sync_imu(f, h5_file):
-                        synced = True
-                return synced
-        except Exception as e:
-            self.log.emit(f"  错误: {str(e)}")
-            return False
-
-    def sync_emg(self, f, h5_file):
-        try:
-            bin_files = list(Path(self.emg_bin_dir).glob("*.bin"))
-            if not bin_files:
-                self.log.emit("  未找到EMG bin文件")
-                return False
-            self.log.emit(f"  找到 {len(bin_files)} 个EMG bin文件")
-            return True
-        except Exception as e:
-            self.log.emit(f"  EMG同步错误: {str(e)}")
-            return False
-
-    def sync_imu(self, f, h5_file):
-        try:
-            bin_files = list(Path(self.imu_bin_dir).glob("*.bin"))
-            if not bin_files:
-                self.log.emit("  未找到IMU bin文件")
-                return False
-            self.log.emit(f"  找到 {len(bin_files)} 个IMU bin文件")
-            return True
-        except Exception as e:
-            self.log.emit(f"  IMU同步错误: {str(e)}")
-            return False
 
 
 class WaveformWidget(QWidget):
@@ -906,13 +907,13 @@ class SyncTab(QWidget):
         h5_layout.addWidget(self.h5_count_label)
         left_layout.addWidget(h5_group)
 
-        # Bin文件目录
-        bin_group = QGroupBox("SD卡Bin文件目录")
+        # Bin文件选择
+        bin_group = QGroupBox("SD卡Bin文件")
         bin_layout = QVBoxLayout(bin_group)
 
-        # EMG bin目录
+        # EMG bin文件
         emg_bin_layout = QHBoxLayout()
-        emg_label = QLabel("EMG目录:")
+        emg_label = QLabel("EMG文件:")
         emg_label.setFixedWidth(70)
         emg_bin_layout.addWidget(emg_label)
         self.emg_bin_label = QLabel("未选择")
@@ -942,9 +943,9 @@ class SyncTab(QWidget):
         emg_bin_layout.addWidget(self.emg_bin_btn)
         bin_layout.addLayout(emg_bin_layout)
 
-        # IMU bin目录
+        # IMU bin文件
         imu_bin_layout = QHBoxLayout()
-        imu_label = QLabel("IMU目录:")
+        imu_label = QLabel("IMU文件:")
         imu_label.setFixedWidth(70)
         imu_bin_layout.addWidget(imu_label)
         self.imu_bin_label = QLabel("未选择")
@@ -1122,27 +1123,31 @@ class SyncTab(QWidget):
         self.h5_count_label.setText("共 0 个文件")
 
     def select_emg_bin_dir(self):
-        dir_path = QFileDialog.getExistingDirectory(self, "选择EMG Bin文件目录")
-        if dir_path:
-            self.emg_bin_dir = dir_path
-            self.emg_bin_label.setText(os.path.basename(dir_path))
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "选择EMG Bin文件", "", "Binary Files (*emg*.bin *.bin);;All Files (*)"
+        )
+        if file_path:
+            self.emg_bin_dir = file_path
+            self.emg_bin_label.setText(os.path.basename(file_path))
             self.emg_bin_label.setStyleSheet("color: #009900; padding: 5px; background: #f0fff0; border: 1px solid #90EE90;")
-            self.emg_bin_label.setToolTip(dir_path)
+            self.emg_bin_label.setToolTip(file_path)
 
     def select_imu_bin_dir(self):
-        dir_path = QFileDialog.getExistingDirectory(self, "选择IMU Bin文件目录")
-        if dir_path:
-            self.imu_bin_dir = dir_path
-            self.imu_bin_label.setText(os.path.basename(dir_path))
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "选择IMU Bin文件", "", "Binary Files (*imu*.bin *.bin);;All Files (*)"
+        )
+        if file_path:
+            self.imu_bin_dir = file_path
+            self.imu_bin_label.setText(os.path.basename(file_path))
             self.imu_bin_label.setStyleSheet("color: #cc6600; padding: 5px; background: #fff8f0; border: 1px solid #ffcc99;")
-            self.imu_bin_label.setToolTip(dir_path)
+            self.imu_bin_label.setToolTip(file_path)
 
     def start_sync(self):
         if not self.h5_files:
             QMessageBox.warning(self, "警告", "请先添加H5文件")
             return
         if not self.emg_bin_dir and not self.imu_bin_dir:
-            QMessageBox.warning(self, "警告", "请至少选择一个Bin文件目录")
+            QMessageBox.warning(self, "警告", "请至少选择一个Bin文件")
             return
 
         devices = []

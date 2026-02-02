@@ -561,8 +561,22 @@ async function decodeData(buffer) {
         },
         
         // 同时开始/停止
-        startAll: () => send({ action: 'start_all' }),
+        startAll: () => {
+            // 【新增】在开始采集前，先发送会话ID
+            const sessionIdInput = document.getElementById('sessionIdInput');
+            if (sessionIdInput && sessionIdInput.value.trim()) {
+                const sessionId = sessionIdInput.value.trim();
+                send({ action: 'set_session_id', session_id: sessionId });
+                console.log('[BLE] 已发送会话ID:', sessionId);
+            }
+            return send({ action: 'start_all' });
+        },
         stopAll: () => send({ action: 'stop_all' }),
+
+        // 【新增】设置会话ID
+        setSessionId: (sessionId) => {
+            return send({ action: 'set_session_id', session_id: sessionId || '' });
+        },
         
         // 获取状态
         getStatus: () => send({ action: 'status' }),

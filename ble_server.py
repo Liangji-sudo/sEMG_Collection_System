@@ -36,6 +36,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List, Set
 from queue import PriorityQueue
+from datetime import datetime
 import threading
 import itertools
 
@@ -75,6 +76,7 @@ CMD_MAP = {
     'START': 0xA0,
     'STOP': 0xA1,
     'CONFIG': 0xC0,  # 【新增】复合配置命令
+    'SET_FILENAME': 0xD0,  # 【新增】设置SD卡文件名命令
 }
 
 # ================= 默认配置 =================
@@ -379,23 +381,26 @@ class ServerState:
         # WebSocket 客户端
         self.control_clients: Set = set()  # 控制端（可能多个）
         self.data_clients: Set = set()     # 数据端（可能多个）
-        
+
         # 双设备
         self.dev1 = DeviceState(device_id=1)
         self.dev2 = DeviceState(device_id=2)
-        
+
         # 扫描结果
         self.devices_found: Dict[str, Any] = {}
         self.scan_results: List[dict] = []
-        
+
         # 消息队列
         self.msg_queue = PriorityQueue()
         self.queue_seq = itertools.count()
         self.main_loop = None
-        
+
         # 数据发送线程
         self.data_thread = None
         self.stop_thread = False
+
+        # 【新增】会话ID，用于SD卡文件命名
+        self.session_id: str = ""  # 例如 "S001"
     
     def get_device(self, device_id: int) -> DeviceState:
         return self.dev1 if device_id == 1 else self.dev2
@@ -945,7 +950,32 @@ async def start_stream(ws, device_id: int):
     try:
         dev.reset_stats()
 
-        # ===================== 【新增】发送配置命令 =====================
+        # ===================== 【新增】发送SD卡文件名命令 =====================
+        # 格式: 0xD0 + "S001_260202_143025" (最大31字节)
+        # 生成文件名字符串: 会话ID + 时间戳
+        now_str = datetime.now().strftime("%y%m%d_%H%M%S")  # 例如 "260202_143025"
+        if state.session_id:
+            # 有会话ID: "S001_260202_143025"
+            filename_str = f"{state.session_id}_{now_str}"
+        else:
+            # 无会话ID: "260202_143025"
+            filename_str = now_str
+
+        # 确保不超过31字节
+        if len(filename_str) > 31:
+            filename_str = filename_str[:31]
+
+        filename_cmd = bytes([CMD_MAP['SET_FILENAME']]) + filename_str.encode('ascii')
+        await dev.client.write_gatt_char(
+            CONTROL_CHAR_UUID,
+            filename_cmd,
+            response=False
+        )
+        log(f"[Dev{device_id}] 已发送SD卡文件名: {filename_str}")
+        await asyncio.sleep(0.1)  # 等待ESP32处理
+        # ===================== SD卡文件名命令结束 =====================
+
+        # ===================== 发送配置命令 =====================
         # 配置ESP32工作在2kHz采样率，确保SD卡存储的是2kHz数据
         config = dev.config
 
@@ -1217,7 +1247,30 @@ async def handle_control_client(websocket):
                 
                 elif action == 'status':
                     await get_status(websocket)
-                
+
+                # 【新增】设置会话ID
+                elif action == 'set_session_id':
+                    session_id = data.get('session_id', '')
+                    # 验证会话ID格式（只允许字母、数字、下划线，最大10字符）
+                    if session_id:
+                        # 清理非法字符
+                        clean_id = ''.join(c for c in session_id if c.isalnum() or c == '_')
+                        if len(clean_id) > 10:
+                            clean_id = clean_id[:10]
+                        state.session_id = clean_id
+                        log(f"[控制端] 会话ID已设置: {state.session_id}")
+                        await send_to_control(websocket, 'set_session_id', {
+                            'success': True,
+                            'session_id': state.session_id,
+                        })
+                    else:
+                        state.session_id = ""
+                        log(f"[控制端] 会话ID已清空")
+                        await send_to_control(websocket, 'set_session_id', {
+                            'success': True,
+                            'session_id': "",
+                        })
+
                 else:
                     await send_to_control(websocket, 'error', {
                         'error': f"未知命令: {action}"

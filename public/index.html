@@ -568,6 +568,56 @@
         }
 
         /* ==================== 采集界面样式 ==================== */
+
+        /* 会话ID输入框样式 */
+        .session-id-input-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            padding: 20px 25px;
+            background: white;
+            border-radius: 16px;
+            border: 2px solid #e0e0e0;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+            transition: all 0.3s ease;
+        }
+        .session-id-input-container:hover {
+            border-color: #4CAF50;
+            box-shadow: 0 6px 20px rgba(76, 175, 80, 0.15);
+        }
+        .session-id-input-container label {
+            font-size: 14px;
+            color: #666;
+            font-weight: 500;
+        }
+        #sessionIdInput {
+            width: 120px;
+            padding: 12px 16px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: 700;
+            color: #333;
+            background: #f8f9fa;
+            transition: all 0.3s ease;
+            text-align: center;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        #sessionIdInput:focus {
+            outline: none;
+            border-color: #4CAF50;
+            background: white;
+            box-shadow: 0 0 0 4px rgba(76, 175, 80, 0.15);
+        }
+        #sessionIdInput::placeholder {
+            color: #adb5bd;
+            font-weight: normal;
+            font-size: 14px;
+        }
+
         .container {
             width: 100vw;
             height: 100vh;
@@ -4471,6 +4521,11 @@
             <p class="welcome-subtitle">高精度肌电信号与惯性数据同步采集平台</p>
             
             <div class="action-buttons">
+                <!-- 受试者编号输入框 -->
+                <div class="session-id-input-container" id="welcomeSessionIdContainer">
+                    <label for="sessionIdInput">受试者编号:</label>
+                    <input type="text" id="sessionIdInput" placeholder="如 S001" maxlength="10">
+                </div>
                 <button class="action-btn primary" id="startCollectionBtn">
                     <i class="fas fa-play-circle"></i>
                     <div class="btn-title">采集</div>
