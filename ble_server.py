@@ -97,11 +97,12 @@ BASE_LSB_24BIT = 0.476837
 HARDWARE_FRONTEND_GAIN = 5.9
 
 # ================= 滤波器配置 =================
+# 【重要】参考供应商滤波参数，优化实时显示效果
 FILTER_ENABLED = True          # 总开关：是否启用滤波
-FILTER_LOWCUT = 10             # 带通下限 (Hz) - 降低到10Hz保留更多低频信号
-FILTER_HIGHCUT = 450           # 带通上限 (Hz)
+FILTER_LOWCUT = 20             # 带通下限 (Hz) - 与供应商一致，去除运动伪迹
+FILTER_HIGHCUT = 100           # 带通上限 (Hz) - 与供应商一致，EMG主要能量在20-100Hz
 FILTER_NOTCH_FREQ = 50         # 工频频率 (Hz)
-FILTER_NOTCH_Q = 30            # 陷波器Q值（越大越窄）
+FILTER_NOTCH_Q = 15            # 陷波器Q值 - 与供应商一致，较低Q值更稳定
 FILTER_BANDPASS_ENABLED = True # 启用带通滤波
 FILTER_NOTCH_ENABLED = True    # 启用工频陷波
 
@@ -113,30 +114,31 @@ FILTER_NOTCH_ENABLED = True    # 启用工频陷波
 # ================= EMG实时滤波器类 =================
 class EMGRealtimeFilter:
     """
-    EMG实时滤波器
-    
+    EMG实时滤波器（参考供应商实现优化）
+
     功能：
-    - 带通滤波 (默认20-450Hz)：去除直流分量和高频噪声
+    - 带通滤波 (默认20-100Hz)：去除直流分量和高频噪声，聚焦EMG主要频率
     - 工频陷波 (50Hz及谐波)：去除电源干扰
-    
+
+    使用单一带通滤波器（而非分离的高通+低通），保持相位响应一致性
     使用IIR滤波器，保持状态实现流式处理
     """
-    
-    def __init__(self, fs=1000, num_channels=16, 
+
+    def __init__(self, fs=1000, num_channels=16,
                  lowcut=FILTER_LOWCUT, highcut=FILTER_HIGHCUT,
                  notch_freq=FILTER_NOTCH_FREQ, notch_q=FILTER_NOTCH_Q,
                  enable_bandpass=FILTER_BANDPASS_ENABLED,
                  enable_notch=FILTER_NOTCH_ENABLED):
         """
         初始化滤波器
-        
+
         参数:
             fs: 采样率 (Hz)
             num_channels: 通道数
             lowcut: 带通下限 (Hz)
             highcut: 带通上限 (Hz)
             notch_freq: 工频频率 (Hz)
-            notch_q: 陷波器Q值
+            notch_q: 陷波器Q值（较低值更稳定，推荐15）
             enable_bandpass: 是否启用带通滤波
             enable_notch: 是否启用工频陷波
         """
@@ -144,143 +146,127 @@ class EMGRealtimeFilter:
             log("[滤波器] scipy未安装，滤波功能不可用")
             self.enabled = False
             return
-        
+
         self.enabled = True
         self.fs = fs
         self.num_channels = num_channels
         self.lowcut = lowcut
-        self.highcut = min(highcut, fs / 2 - 1)  # 不能超过奈奎斯特频率
+        self.highcut = min(highcut, fs / 2 * 0.9)  # 不能超过奈奎斯特频率的90%
         self.notch_freq = notch_freq
         self.notch_q = notch_q
         self.enable_bandpass = enable_bandpass
         self.enable_notch = enable_notch
-        
-        # 滤波器系数
-        self.b_hp = None  # 高通滤波器
-        self.a_hp = None
-        self.b_lp = None  # 低通滤波器
-        self.a_lp = None
-        self.notch_filters = []  # 陷波滤波器列表 [(b, a), ...]
-        
-        # 滤波器状态 (每个通道独立)
-        self.zi_hp = None
-        self.zi_lp = None
+
+        # 带通滤波器系数（单一带通，而非分离的高通+低通）
+        self.b_bandpass = None
+        self.a_bandpass = None
+        self.zi_bandpass = None
+
+        # 陷波滤波器列表
+        self.notch_filters = []  # [(b, a), ...]
         self.zi_notch = None
-        
+
         # 初始化滤波器
         self._init_filters()
-        
-        log(f"[滤波器] 初始化完成: fs={fs}Hz, 带通={lowcut}-{highcut}Hz, 陷波={notch_freq}Hz")
-    
+
+        log(f"[滤波器] 初始化完成: fs={fs}Hz, 带通={self.lowcut}-{self.highcut}Hz, 陷波Q={notch_q}")
+
     def _init_filters(self):
-        """初始化滤波器系数和状态"""
+        """初始化滤波器系数和状态（参考供应商实现）"""
         if not self.enabled:
             return
-        
-        # 1. 高通滤波器 (去除直流)
+
+        # 1. 带通滤波器 - 使用单一4阶Butterworth带通（与供应商一致）
         if self.enable_bandpass:
-            self.b_hp, self.a_hp = scipy_signal.butter(
-                2, self.lowcut, btype='highpass', fs=self.fs
-            )
+            # 计算归一化频率
+            wn = [self.lowcut * 2 / self.fs, self.highcut * 2 / self.fs]
+            # 4阶带通滤波器
+            self.b_bandpass, self.a_bandpass = scipy_signal.butter(4, wn, btype='bandpass')
             # 初始化状态
-            zi = scipy_signal.lfilter_zi(self.b_hp, self.a_hp)
-            self.zi_hp = np.tile(zi[:, np.newaxis], (1, self.num_channels))
-            
-            # 低通滤波器 (去除高频噪声)
-            self.b_lp, self.a_lp = scipy_signal.butter(
-                2, self.highcut, btype='lowpass', fs=self.fs
-            )
-            zi = scipy_signal.lfilter_zi(self.b_lp, self.a_lp)
-            self.zi_lp = np.tile(zi[:, np.newaxis], (1, self.num_channels))
-        
+            zi = scipy_signal.lfilter_zi(self.b_bandpass, self.a_bandpass)
+            self.zi_bandpass = np.tile(zi[:, np.newaxis], (1, self.num_channels))
+
         # 2. 工频陷波滤波器 (50Hz及谐波)
         if self.enable_notch:
             self.notch_filters = []
             self.zi_notch = []
-            
-            # 陷波50Hz及其谐波 (100Hz, 150Hz, ...)
+
+            # 陷波50Hz及其谐波 (100Hz, 150Hz, ...)，直到接近奈奎斯特频率
             for freq in range(self.notch_freq, int(self.fs / 2), self.notch_freq):
-                b, a = scipy_signal.iirnotch(freq, self.notch_q, self.fs)
+                w0 = freq / (self.fs / 2)  # 归一化频率
+                b, a = scipy_signal.iirnotch(w0, self.notch_q)
                 self.notch_filters.append((b, a))
-                
+
                 zi = scipy_signal.lfilter_zi(b, a)
                 self.zi_notch.append(np.tile(zi[:, np.newaxis], (1, self.num_channels)))
-    
+
     def reset(self):
         """重置滤波器状态"""
         if not self.enabled:
             return
         self._init_filters()
         log("[滤波器] 状态已重置")
-    
+
     def filter_frame(self, uv_data: list) -> list:
         """
         滤波单帧数据 (16通道)
-        
+
         参数:
             uv_data: 16通道的μV数据列表 [ch0, ch1, ..., ch15]
-        
+
         返回:
             滤波后的数据列表
         """
         if not self.enabled or not HAS_SCIPY:
             return uv_data
-        
+
         # 转换为numpy数组 (1, num_channels)
         data = np.array(uv_data, dtype=np.float64).reshape(1, -1)
-        
-        # 应用高通滤波 (去除直流)
-        if self.enable_bandpass and self.b_hp is not None:
-            data, self.zi_hp = scipy_signal.lfilter(
-                self.b_hp, self.a_hp, data, axis=0, zi=self.zi_hp
+
+        # 应用带通滤波（单一带通滤波器）
+        if self.enable_bandpass and self.b_bandpass is not None:
+            data, self.zi_bandpass = scipy_signal.lfilter(
+                self.b_bandpass, self.a_bandpass, data, axis=0, zi=self.zi_bandpass
             )
-            # 应用低通滤波
-            data, self.zi_lp = scipy_signal.lfilter(
-                self.b_lp, self.a_lp, data, axis=0, zi=self.zi_lp
-            )
-        
+
         # 应用工频陷波
         if self.enable_notch and self.notch_filters:
             for i, (b, a) in enumerate(self.notch_filters):
                 data, self.zi_notch[i] = scipy_signal.lfilter(
                     b, a, data, axis=0, zi=self.zi_notch[i]
                 )
-        
+
         return data.flatten().tolist()
-    
+
     def filter_batch(self, uv_data_batch: list) -> list:
         """
         滤波批量数据 (多帧)
-        
+
         参数:
             uv_data_batch: 多帧数据 [[ch0, ch1, ...], [ch0, ch1, ...], ...]
-        
+
         返回:
             滤波后的数据列表
         """
         if not self.enabled or not HAS_SCIPY:
             return uv_data_batch
-        
+
         # 转换为numpy数组 (num_frames, num_channels)
         data = np.array(uv_data_batch, dtype=np.float64)
-        
-        # 应用高通滤波 (去除直流)
-        if self.enable_bandpass and self.b_hp is not None:
-            data, self.zi_hp = scipy_signal.lfilter(
-                self.b_hp, self.a_hp, data, axis=0, zi=self.zi_hp
+
+        # 应用带通滤波（单一带通滤波器）
+        if self.enable_bandpass and self.b_bandpass is not None:
+            data, self.zi_bandpass = scipy_signal.lfilter(
+                self.b_bandpass, self.a_bandpass, data, axis=0, zi=self.zi_bandpass
             )
-            # 应用低通滤波
-            data, self.zi_lp = scipy_signal.lfilter(
-                self.b_lp, self.a_lp, data, axis=0, zi=self.zi_lp
-            )
-        
+
         # 应用工频陷波
         if self.enable_notch and self.notch_filters:
             for i, (b, a) in enumerate(self.notch_filters):
                 data, self.zi_notch[i] = scipy_signal.lfilter(
                     b, a, data, axis=0, zi=self.zi_notch[i]
                 )
-        
+
         return data.tolist()
 
 
@@ -1162,7 +1148,9 @@ async def handle_control_client(websocket):
                     data = json.loads(message)
                 
                 action = data.get('action', '')
-                log(f"[控制端] 命令: {action}")
+                # 不打印 status 命令，减少日志噪音
+                if action != 'status':
+                    log(f"[控制端] 命令: {action}")
                 
                 # 扫描
                 if action == 'scan':
@@ -1312,6 +1300,15 @@ async def warmup_ble_adapter():
         log(f"蓝牙适配器预热警告: {e} (可忽略)")
 
 
+async def heartbeat_task():
+    """每30秒打印一次心跳，证明服务还活着"""
+    while True:
+        await asyncio.sleep(30)
+        dev1_status = "采集中" if state.dev1.is_streaming else ("已连接" if state.dev1.client and state.dev1.client.is_connected else "未连接")
+        dev2_status = "采集中" if state.dev2.is_streaming else ("已连接" if state.dev2.client and state.dev2.client.is_connected else "未连接")
+        log(f"[心跳] 服务运行中 | 设备1: {dev1_status} | 设备2: {dev2_status}")
+
+
 async def main():
     state.main_loop = asyncio.get_running_loop()
 
@@ -1360,7 +1357,10 @@ async def main():
         )
         
         log("服务器启动完成，等待连接...")
-        
+
+        # 启动心跳任务
+        asyncio.create_task(heartbeat_task())
+
         await asyncio.Future()  # 永久运行
         
     finally:
