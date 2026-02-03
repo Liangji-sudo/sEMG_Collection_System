@@ -122,39 +122,49 @@ def calculate_thumb_index_distance(markers):
 def calculate_palm_rotation_angle(markers):
     """计算手掌翻转角度（连续手势3）
 
+    使用 rt2（拇指第一关节）到 ri2（食指第一关节）的向量，
+    投影到 XZ 平面后，计算与 Z 轴正方向的夹角。
+
     坐标系：
     - Z轴：向上（掌背方向）
     - Y轴：指尖方向（前臂方向）
     - X轴：向右
 
-    手掌翻转是绕Y轴旋转，将法向量投影到XZ平面后用atan2计算角度。
-
     返回值范围：0-180°
-    - 0° = 掌心向下（法向量指向-Z）
-    - 180° = 掌心向上（法向量指向+Z）
     """
-    rt1 = np.array(markers.get("rt1", [0, 0, 0]))
-    rt2 = np.array(markers.get("rt2", [0, 0, 0]))
-    ri2 = np.array(markers.get("ri2", [0, 0, 0]))
+    global _last_valid_palm_angle
 
-    palm_normal = fit_plane_normal(rt1, rt2, ri2)
+    rt2 = np.array(markers.get("rt2", [0, 0, 0]))  # 拇指第一关节
+    ri2 = np.array(markers.get("ri2", [0, 0, 0]))  # 食指第一关节
 
-    # 投影到XZ平面（Y是前臂/指尖方向，手掌翻转绕Y轴）
-    x_component = palm_normal[0]
-    z_component = palm_normal[2]
+    # 检查坐标是否有效（超过100000认为是无效坐标，如9999999）
+    if any(abs(v) > 100000 for v in rt2) or any(abs(v) > 100000 for v in ri2):
+        return _last_valid_palm_angle
 
-    # atan2(x, -z):
-    # 掌心向下时，法向量指向-Z（掌心方向），角度接近0°
-    # 掌心向上时，法向量指向+Z（掌背变成向下），角度接近180°
-    angle = math.degrees(math.atan2(x_component, -z_component))
+    # 从 rt2 到 ri2 的向量
+    vec = ri2 - rt2
 
-    # 将 -180° ~ 180° 映射到 0° ~ 180°
-    # 手掌翻转是对称的，所以折叠到 0-180° 范围
-    angle = (angle + 180) % 360
+    # 投影到 XZ 平面
+    x_component = vec[0]
+    z_component = vec[2]
+
+    # atan2(x, z): 计算向量与 Z 轴正方向的夹角
+    # 返回 -180° ~ 180°
+    raw_angle = math.degrees(math.atan2(x_component, z_component))
+
+    # 映射到 0° ~ 180°
+    angle = (raw_angle + 360) % 360  # 先映射到 0-360°
     if angle > 180:
-        angle = 360 - angle
+        angle = 360 - angle  # 折叠到 0-180°
+
+    # 保存有效值
+    _last_valid_palm_angle = angle
 
     return angle
+
+
+# 用于保存上一次有效的手掌翻转角度
+_last_valid_palm_angle = 90.0
 
 
 # ==================== 数据接收器基类 ====================
