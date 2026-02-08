@@ -80,13 +80,13 @@ IMU_250HZ_DTYPE = np.dtype([
     ("time", "<f8")         # 时间戳
 ])
 
-# 【新增】IMU 2kHz数据集类型：acc(3) + gyr(3) + mag(3) + SD卡帧号 + 时间戳
-# 用于存储同步后的2kHz数据
-IMU_2KHZ_DTYPE = np.dtype([
+# 【新增】IMU 100Hz数据集类型：acc(3) + gyr(3) + mag(3) + SD卡帧号 + 时间戳
+# 用于存储同步后的100Hz数据（IMU实际采样率为100Hz，非2kHz）
+IMU_100HZ_DTYPE = np.dtype([
     ("acc", "<f4", (3,)),   # 加速度计 [ax, ay, az]
     ("gyr", "<f4", (3,)),   # 陀螺仪 [gx, gy, gz]
     ("mag", "<f4", (3,)),   # 磁力计 [mx, my, mz]
-    ("sd_frame_id", "<u4"), # SD卡帧号
+    ("sd_frame_id", "<u4"), # IMU SD卡帧号
     ("time", "<f8")         # 时间戳
 ])
 
@@ -370,22 +370,22 @@ class HDF5StorageServer:
             imu2_250hz_ds.attrs["sample_rate"] = 250
             imu2_250hz_ds.attrs["description"] = "250Hz IMU data from BLE for sync with SD card bin"
 
-            # ===================== 创建IMU 2kHz数据集（同步后写入，初始为空） =====================
-            imu1_2khz_ds = self.f.create_dataset(
-                "imu1_2khz", shape=(0,), dtype=IMU_2KHZ_DTYPE,
+            # ===================== 创建IMU 100Hz数据集（同步后写入，初始为空） =====================
+            imu1_100hz_ds = self.f.create_dataset(
+                "imu1_100hz", shape=(0,), dtype=IMU_100HZ_DTYPE,
                 chunks=(500,), maxshape=(None,), compression="gzip"
             )
-            imu1_2khz_ds.attrs["device"] = "device_1"
-            imu1_2khz_ds.attrs["sample_rate"] = 2000
-            imu1_2khz_ds.attrs["description"] = "2kHz IMU data (synced from SD card bin, empty until sync)"
+            imu1_100hz_ds.attrs["device"] = "device_1"
+            imu1_100hz_ds.attrs["sample_rate"] = 100
+            imu1_100hz_ds.attrs["description"] = "100Hz IMU data (synced from SD card bin, empty until sync)"
 
-            imu2_2khz_ds = self.f.create_dataset(
-                "imu2_2khz", shape=(0,), dtype=IMU_2KHZ_DTYPE,
+            imu2_100hz_ds = self.f.create_dataset(
+                "imu2_100hz", shape=(0,), dtype=IMU_100HZ_DTYPE,
                 chunks=(500,), maxshape=(None,), compression="gzip"
             )
-            imu2_2khz_ds.attrs["device"] = "device_2"
-            imu2_2khz_ds.attrs["sample_rate"] = 2000
-            imu2_2khz_ds.attrs["description"] = "2kHz IMU data (synced from SD card bin, empty until sync)"
+            imu2_100hz_ds.attrs["device"] = "device_2"
+            imu2_100hz_ds.attrs["sample_rate"] = 100
+            imu2_100hz_ds.attrs["description"] = "100Hz IMU data (synced from SD card bin, empty until sync)"
 
             # ===================== 同步状态标记 =====================
             # pending: 待同步（250Hz数据，需要与SD卡bin同步补全为2kHz）
@@ -566,7 +566,7 @@ class HDF5StorageServer:
         """追加IMU数据到250Hz数据集
 
         采集时只保存到250Hz数据集（imu1_250hz/imu2_250hz），
-        imu1/imu2数据集在同步后由bin_sync_tool填充2kHz数据。
+        imu1/imu2数据集在同步后由bin_sync_tool填充100Hz数据。
 
         Args:
             dataset_name: 数据集名称 (imu1 或 imu2)

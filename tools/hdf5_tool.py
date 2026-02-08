@@ -24,6 +24,10 @@ from PyQt5.QtGui import QFont, QColor, QPalette
 
 # 导入bin_sync_tool中的同步功能
 try:
+    # 确保 tools/ 目录在 sys.path 中（无论从哪里启动）
+    _tools_dir = os.path.dirname(os.path.abspath(__file__))
+    if _tools_dir not in sys.path:
+        sys.path.insert(0, _tools_dir)
     from bin_sync_tool import EMGBinParser, IMUBinParser, sync_h5_with_bin
     HAS_SYNC_TOOL = True
 except ImportError:
@@ -64,39 +68,59 @@ class SyncWorker(QThread):
             total = len(self.h5_files)
             success_count = 0
 
+            # 根据勾选的设备确定需要处理的device_id列表
+            device_ids = set()
+            if 'emg1' in self.devices or 'imu1' in self.devices:
+                device_ids.add(1)
+            if 'emg2' in self.devices or 'imu2' in self.devices:
+                device_ids.add(2)
+
             for i, h5_file in enumerate(self.h5_files):
                 self.progress.emit(i + 1, total, os.path.basename(h5_file))
                 self.log.emit(f"\n处理文件: {os.path.basename(h5_file)}")
 
-                try:
-                    # 确定设备ID（根据选择的设备）
-                    device_id = 1
-                    if 'emg2' in self.devices or 'imu2' in self.devices:
-                        device_id = 2
+                file_success = False
+                for device_id in sorted(device_ids):
+                    try:
+                        self.log.emit(f"  设备{device_id}:")
 
-                    # 调用bin_sync_tool的同步函数
-                    result = sync_h5_with_bin(
-                        h5_path=h5_file,
-                        emg_bin_path=self.emg_bin_path,
-                        imu_bin_path=self.imu_bin_path,
-                        device_id=device_id,
-                        verify=self.validate_data
-                    )
+                        # 只在对应设备被勾选时传入bin路径
+                        emg_bin = self.emg_bin_path if (f'emg{device_id}' in self.devices) else None
+                        imu_bin = self.imu_bin_path if (f'imu{device_id}' in self.devices) else None
 
-                    if result.get('status') == 'success':
-                        success_count += 1
-                        self.log.emit(f"  ✓ 同步成功")
-                        if 'emg_frames' in result:
-                            self.log.emit(f"    EMG: {result['emg_frames']} 帧")
-                        if 'imu_frames' in result:
-                            self.log.emit(f"    IMU: {result['imu_frames']} 帧")
-                    elif result.get('status') == 'skipped':
-                        self.log.emit(f"  - 跳过: {result.get('reason', '已同步')}")
-                    else:
-                        self.log.emit(f"  ✗ 失败: {result.get('reason', '未知错误')}")
+                        if not emg_bin:
+                            self.log.emit(f"    - EMG bin未提供，跳过设备{device_id}")
+                            continue
 
-                except Exception as e:
-                    self.log.emit(f"  ✗ 错误: {str(e)}")
+                        result = sync_h5_with_bin(
+                            h5_path=h5_file,
+                            emg_bin_path=emg_bin,
+                            imu_bin_path=imu_bin,
+                            device_id=device_id,
+                            verify=self.validate_data
+                        )
+
+                        if result.get('status') == 'success':
+                            file_success = True
+                            self.log.emit(f"    ✓ EMG: {result['frames_2khz']}帧 "
+                                          f"(来自bin:{result['filled_frames']}, "
+                                          f"插值:{result['missing_frames']})")
+                            if result.get('imu_status') == 'success':
+                                self.log.emit(f"    ✓ IMU: {result['imu_frames']}帧 "
+                                              f"(来自bin:{result['imu_filled']}, "
+                                              f"缺失:{result['imu_missing']})")
+                            elif result.get('imu_status') == 'skipped':
+                                self.log.emit(f"    - IMU: 未提供bin文件，跳过")
+                        elif result.get('status') == 'skipped':
+                            self.log.emit(f"    - 跳过: {result.get('reason', '已同步')}")
+                        else:
+                            self.log.emit(f"    ✗ 失败: {result.get('reason', '未知错误')}")
+
+                    except Exception as e:
+                        self.log.emit(f"    ✗ 错误: {str(e)}")
+
+                if file_success:
+                    success_count += 1
 
             self.finished_signal.emit(True, f"完成: {success_count}/{total} 个文件同步成功")
 
@@ -162,8 +186,8 @@ class StatisticsPanel(QFrame):
             ('文件名', '文件名'), ('文件大小', '文件大小'), ('创建时间', '创建时间'),
             ('emg1_250hz', 'EMG1 250Hz'), ('emg1_2khz', 'EMG1 2kHz'),
             ('emg2_250hz', 'EMG2 250Hz'), ('emg2_2khz', 'EMG2 2kHz'),
-            ('imu1_250hz', 'IMU1 250Hz'), ('imu1_2khz', 'IMU1 2kHz'),
-            ('imu2_250hz', 'IMU2 250Hz'), ('imu2_2khz', 'IMU2 2kHz'),
+            ('imu1_250hz', 'IMU1 250Hz'), ('imu1_100hz', 'IMU1 100Hz'),
+            ('imu2_250hz', 'IMU2 250Hz'), ('imu2_100hz', 'IMU2 100Hz'),
             ('mocap', 'Mocap'),
         ]
 
@@ -189,7 +213,7 @@ class StatisticsPanel(QFrame):
 
             with h5py.File(file_path, 'r') as f:
                 for key in ['emg1_250hz', 'emg1_2khz', 'emg2_250hz', 'emg2_2khz',
-                           'imu1_250hz', 'imu1_2khz', 'imu2_250hz', 'imu2_2khz']:
+                           'imu1_250hz', 'imu1_100hz', 'imu2_250hz', 'imu2_100hz']:
                     adc_key = key.replace('hz', 'hz_adc')
                     if adc_key in f:
                         self.labels[key].setText(str(f[adc_key].shape))
@@ -985,9 +1009,9 @@ class SyncTab(QWidget):
         self.emg1_check.setChecked(True)
         self.emg2_check = QCheckBox("EMG2 (emg2_250hz → emg2_2khz)")
         self.emg2_check.setChecked(True)
-        self.imu1_check = QCheckBox("IMU1 (imu1_250hz → imu1_2khz)")
+        self.imu1_check = QCheckBox("IMU1 (imu1_250hz → imu1_100hz)")
         self.imu1_check.setChecked(True)
-        self.imu2_check = QCheckBox("IMU2 (imu2_250hz → imu2_2khz)")
+        self.imu2_check = QCheckBox("IMU2 (imu2_250hz → imu2_100hz)")
         self.imu2_check.setChecked(True)
         self.validate_check = QCheckBox("数据校验")
         self.validate_check.setChecked(True)
@@ -1146,8 +1170,8 @@ class SyncTab(QWidget):
         if not self.h5_files:
             QMessageBox.warning(self, "警告", "请先添加H5文件")
             return
-        if not self.emg_bin_dir and not self.imu_bin_dir:
-            QMessageBox.warning(self, "警告", "请至少选择一个Bin文件")
+        if not self.emg_bin_dir:
+            QMessageBox.warning(self, "警告", "请选择EMG Bin文件（同步必须）")
             return
 
         devices = []

@@ -1,9 +1,10 @@
 """
-bin_sync_tool.py - EMG数据同步工具
-===================================
+bin_sync_tool.py - EMG/IMU数据同步工具
+======================================
 
 功能：
   将h5文件中的250Hz EMG数据与SD卡bin文件同步，补全为2kHz完整数据。
+  同时利用EMG 2kHz的SD卡帧号作为锚点，从IMU bin中补全100Hz IMU数据。
 
 使用方法：
   python bin_sync_tool.py
@@ -14,11 +15,18 @@ bin_sync_tool.py - EMG数据同步工具
   3. 从bin文件中提取完整的2kHz数据
   4. 可选：比对250Hz数据与bin中对应帧，校验一致性
   5. 将2kHz数据写入h5文件
-  6. 更新sync_status为"synced"
+  6. 利用EMG 2kHz的SD帧号映射IMU帧号（IMU帧号 = EMG帧号 // 20）
+  7. 从IMU bin中提取100Hz数据写入h5文件
+  8. 更新sync_status为"synced"
 
 bin文件格式（来自ESP32固件）：
   EMG: 文件头126字节 + 每帧52字节（4字节帧号 + 48字节数据）
   IMU: 文件头126字节 + 每帧40字节（4字节帧号 + 36字节数据）
+
+采样率关系：
+  EMG: SD卡2000Hz, BLE 250Hz (降采样比8:1)
+  IMU: SD卡100Hz, BLE ~28Hz (每9帧EMG附带1个IMU)
+  EMG与IMU的SD帧号比: 2000/100 = 20:1
 """
 
 import os
@@ -46,6 +54,9 @@ IMU_FRAME_SIZE = 4 + 36
 
 # 降采样比例（2kHz -> 250Hz）
 DOWNSAMPLE_RATIO = 8
+
+# EMG与IMU的SD帧号比（EMG 2000Hz / IMU 100Hz = 20）
+EMG_IMU_RATIO = 20
 
 # 增益映射表
 GAIN_MAP = [1, 2, 3, 4, 6, 8, 12]
@@ -413,19 +424,129 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
             ds_2khz.attrs["filled_frames"] = filled_frames
             ds_2khz.attrs["missing_frames"] = missing_frames
 
+        log(f"同步完成！2kHz数据已写入 {ds_2khz_name}")
+
+        # ============================================================
+        # == IMU 100Hz 同步：利用 EMG 2kHz SD帧号作为锚点 ==
+        # ============================================================
+        imu_result = {'imu_status': 'skipped'}
+
+        if imu_parser is not None:
+            log("正在同步IMU 100Hz数据...")
+
+            # 从EMG 2kHz数据中提取所有SD帧号，映射到IMU帧号
+            emg_sd_frame_ids = data_2khz['sd_frame_id']
+            imu_frame_ids_all = emg_sd_frame_ids // EMG_IMU_RATIO  # EMG帧号/20 = IMU帧号
+
+            # 去重并排序，得到需要的IMU帧号列表
+            imu_frame_ids_unique = np.unique(imu_frame_ids_all)
+            num_imu_frames = len(imu_frame_ids_unique)
+
+            log(f"EMG SD帧号范围: [{emg_sd_frame_ids[0]}, {emg_sd_frame_ids[-1]}]")
+            log(f"对应IMU帧号范围: [{imu_frame_ids_unique[0]}, {imu_frame_ids_unique[-1]}], 共 {num_imu_frames} 帧")
+
+            # 构建IMU 100Hz数据
+            imu_100hz_dtype = np.dtype([
+                ("acc", "<f4", (3,)),
+                ("gyr", "<f4", (3,)),
+                ("mag", "<f4", (3,)),
+                ("sd_frame_id", "<u4"),
+                ("time", "<f8")
+            ])
+
+            data_imu_100hz = np.empty(num_imu_frames, dtype=imu_100hz_dtype)
+            imu_filled = 0
+            imu_missing = 0
+
+            for idx, imu_fid in enumerate(imu_frame_ids_unique):
+                imu_fid = int(imu_fid)
+                imu_data = imu_parser.frames.get(imu_fid)
+
+                if imu_data is not None:
+                    imu1, imu2 = imu_data
+                    # 使用第一个IMU芯片的数据（与BLE上报一致）
+                    data_imu_100hz[idx]['acc'] = np.array(imu1['acc'], dtype=np.float32)
+                    data_imu_100hz[idx]['gyr'] = np.array(imu1['gyr'], dtype=np.float32)
+                    data_imu_100hz[idx]['mag'] = np.array(imu1['mag'], dtype=np.float32)
+                    imu_filled += 1
+                else:
+                    # IMU帧丢失，用零填充
+                    data_imu_100hz[idx]['acc'] = np.zeros(3, dtype=np.float32)
+                    data_imu_100hz[idx]['gyr'] = np.zeros(3, dtype=np.float32)
+                    data_imu_100hz[idx]['mag'] = np.zeros(3, dtype=np.float32)
+                    imu_missing += 1
+
+                data_imu_100hz[idx]['sd_frame_id'] = imu_fid
+
+                # 插值时间戳：根据EMG时间戳推算
+                # 找到对应EMG帧的时间戳（该IMU帧对应的第一个EMG帧）
+                emg_idx = idx * EMG_IMU_RATIO
+                if emg_idx < len(data_2khz):
+                    data_imu_100hz[idx]['time'] = data_2khz[emg_idx]['time']
+                elif len(data_2khz) > 0:
+                    data_imu_100hz[idx]['time'] = data_2khz[-1]['time'] + (idx - num_imu_frames + 1) * 0.01
+                else:
+                    data_imu_100hz[idx]['time'] = idx * 0.01
+
+            log(f"IMU 100Hz数据构建完成: {imu_filled} 帧来自bin, {imu_missing} 帧缺失填零")
+
+            # 写入 imu_100hz 数据集（兼容旧版 imu_2khz 和新版 imu_100hz）
+            ds_imu_name = f"imu{device_id}_100hz"
+            ds_imu_name_legacy = f"imu{device_id}_2khz"
+
+            target_ds_name = None
+            if ds_imu_name in f:
+                target_ds_name = ds_imu_name
+            elif ds_imu_name_legacy in f:
+                target_ds_name = ds_imu_name_legacy
+                log(f"使用旧版数据集名 {ds_imu_name_legacy}")
+
+            if target_ds_name is not None:
+                ds_imu = f[target_ds_name]
+                ds_imu.resize(num_imu_frames, axis=0)
+                ds_imu[:] = data_imu_100hz
+                ds_imu.attrs["sample_rate"] = 100
+                ds_imu.attrs["source_bin"] = os.path.basename(imu_bin_path)
+                ds_imu.attrs["sync_time"] = datetime.now().isoformat()
+                ds_imu.attrs["filled_frames"] = imu_filled
+                ds_imu.attrs["missing_frames"] = imu_missing
+            else:
+                log(f"数据集 {ds_imu_name} 不存在，创建新数据集")
+                ds_imu = f.create_dataset(
+                    ds_imu_name, data=data_imu_100hz,
+                    chunks=(500,), compression="gzip"
+                )
+                ds_imu.attrs["device"] = f"device_{device_id}"
+                ds_imu.attrs["sample_rate"] = 100
+                ds_imu.attrs["description"] = "100Hz IMU data synced from SD card bin"
+                ds_imu.attrs["source_bin"] = os.path.basename(imu_bin_path)
+                ds_imu.attrs["sync_time"] = datetime.now().isoformat()
+                ds_imu.attrs["filled_frames"] = imu_filled
+                ds_imu.attrs["missing_frames"] = imu_missing
+
+            log(f"IMU同步完成！100Hz数据已写入 {target_ds_name or ds_imu_name}")
+            imu_result = {
+                'imu_status': 'success',
+                'imu_frames': num_imu_frames,
+                'imu_filled': imu_filled,
+                'imu_missing': imu_missing
+            }
+
         # 更新sync_status
         f.attrs["sync_status"] = "synced"
         f.attrs["sync_time"] = datetime.now().isoformat()
 
-        log(f"同步完成！2kHz数据已写入 {ds_2khz_name}")
+        log(f"同步完成！EMG 2kHz: {ds_2khz_name}, IMU: {imu_result.get('imu_status', 'skipped')}")
 
-        return {
+        result = {
             'status': 'success',
             'frames_250hz': num_frames_250hz,
             'frames_2khz': num_frames_2khz,
             'filled_frames': filled_frames,
             'missing_frames': missing_frames
         }
+        result.update(imu_result)
+        return result
 
 
 # ===================== GUI界面 =====================
@@ -454,7 +575,7 @@ def run_gui():
             self.init_ui()
 
         def init_ui(self):
-            self.setWindowTitle("EMG数据同步工具 - bin_sync_tool (批量模式)")
+            self.setWindowTitle("EMG/IMU数据同步工具 - bin_sync_tool (批量模式)")
             self.setMinimumSize(700, 600)
 
             central = QWidget()
@@ -673,7 +794,11 @@ def run_gui():
                     )
 
                     if result['status'] == 'success':
-                        self.log(f"  ✅ 成功: {result['frames_2khz']}帧 (来自bin:{result['filled_frames']}, 插值:{result['missing_frames']})")
+                        self.log(f"  ✅ EMG: {result['frames_2khz']}帧 (来自bin:{result['filled_frames']}, 插值:{result['missing_frames']})")
+                        if result.get('imu_status') == 'success':
+                            self.log(f"  ✅ IMU: {result['imu_frames']}帧 (来自bin:{result['imu_filled']}, 缺失:{result['imu_missing']})")
+                        elif result.get('imu_status') == 'skipped':
+                            self.log(f"  ⏭ IMU: 未提供IMU bin文件，跳过")
                         success_count += 1
                     else:
                         self.log(f"  ❌ 失败: {result.get('reason', 'unknown')}")
