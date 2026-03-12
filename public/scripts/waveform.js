@@ -27,13 +27,23 @@
          * 连接到 realtimeEngine.js 的 WebSocket 服务
          */
         connect() {
-            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                console.log('[Waveform] WebSocket已连接');
+            // 【修复】检查是否已连接或正在连接
+            if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+                console.log('[Waveform] WebSocket已连接或正在连接，跳过');
                 return;
             }
 
+            // 【修复】清理旧连接
+            if (this.ws) {
+                this.ws.onopen = null;
+                this.ws.onclose = null;
+                this.ws.onerror = null;
+                this.ws.onmessage = null;
+                this.ws = null;
+            }
+
             try {
-                console.log(`[Waveform] 正在连接 ${this.wsUrl}...`);
+                console.log(`[Waveform] 正在连接 ${this.wsUrl}... (尝试 ${this.reconnectAttempts + 1})`);
                 this.ws = new WebSocket(this.wsUrl);
 
                 this.ws.onopen = () => {
@@ -57,10 +67,11 @@
                 this.ws.onclose = (event) => {
                     console.log(`[Waveform] WebSocket连接关闭 (code: ${event.code})`);
                     this.isConnected = false;
+                    this.ws = null;  // 【修复】清理引用
                     this.updateConnectionStatus(false);
-                    
-                    // 自动重连
-                    if (this.reconnectAttempts < this.maxReconnectAttempts) {
+
+                    // 【修复】只在非主动关闭时重连
+                    if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
                         this.scheduleReconnect();
                     }
                 };

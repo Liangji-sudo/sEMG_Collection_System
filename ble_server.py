@@ -336,6 +336,7 @@ class DeviceState:
     total_frames: int = 0
     lost_frames: int = 0
     last_frame_index: int = -1
+    sd_filename: Optional[str] = None  # 【新增】当前采集的SD卡bin文件名前缀
     
     config: Dict = field(default_factory=lambda: DEFAULT_CONFIG.copy())
     data_buffer: deque = field(default_factory=lambda: deque(maxlen=500))
@@ -346,6 +347,7 @@ class DeviceState:
         self.lost_frames = 0
         self.last_frame_index = -1
         self.data_buffer.clear()
+        self.sd_filename = None  # 【新增】重置SD卡文件名
         
         # 重置对应设备的滤波器状态
         if FILTER_ENABLED and HAS_SCIPY:
@@ -1013,6 +1015,10 @@ async def start_stream(ws, device_id: int):
             response=False
         )
         log(f"[Dev{device_id}] 已发送SD卡文件名: {filename_str} ({'左手' if device_id == 1 else '右手'})")
+
+        # 【新增】保存文件名到设备状态，用于后续传递给storage_server
+        dev.sd_filename = filename_str
+
         await asyncio.sleep(0.1)  # 等待ESP32处理
         # ===================== SD卡文件名命令结束 =====================
 
@@ -1112,22 +1118,36 @@ async def stop_stream(ws, device_id: int, silent=False):
 async def start_all(ws):
     """同时开始"""
     started = []
-    
+
     if state.dev1.is_connected() and not state.dev1.is_streaming:
         await start_stream(ws, 1)
         if state.dev1.is_streaming:
             started.append(1)
-    
+
     if state.dev2.is_connected() and not state.dev2.is_streaming:
         await start_stream(ws, 2)
         if state.dev2.is_streaming:
             started.append(2)
-    
+
+    # 【新增】收集当前采集的SD卡bin文件名
+    sd_filenames = {}
+    if state.dev1.sd_filename:
+        sd_filenames['dev1'] = state.dev1.sd_filename  # 例如 "S001_L_260312_143025"
+    if state.dev2.sd_filename:
+        sd_filenames['dev2'] = state.dev2.sd_filename  # 例如 "S001_R_260312_143025"
+
     await send_to_control(ws, 'start_all', {
         'success': True,
         'started': started,
         'active': state.get_active_devices(),
+        'sd_filenames': sd_filenames,  # 【新增】返回bin文件名
     })
+
+    # 【新增】广播bin文件名事件给数据端（realtimeEngine）
+    if sd_filenames:
+        await broadcast_event('sd_filenames_updated', {
+            'sd_filenames': sd_filenames,
+        })
 
 
 async def stop_all(ws):

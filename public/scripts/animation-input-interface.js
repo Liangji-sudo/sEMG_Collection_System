@@ -89,19 +89,43 @@
          * 连接到 realtimeEngine.js 的 WebSocket 服务（独立连接）
          */
         _connectWebSocket() {
-            this.ws = null;
+            // 【修复】防止重复连接
+            if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+                console.log('[AnimationInputInterface] WebSocket已连接或正在连接，跳过');
+                return;
+            }
+
+            // 【修复】清理旧连接
+            if (this.ws) {
+                this.ws.onopen = null;
+                this.ws.onclose = null;
+                this.ws.onerror = null;
+                this.ws.onmessage = null;
+                if (this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.close();
+                }
+                this.ws = null;
+            }
+
             this.wsUrl = 'ws://localhost:8080';
             this.reconnectInterval = 3000;
-            this.reconnectTimer = null;
-            this.isConnected = false;
+            this.maxReconnectAttempts = 10;
+            this._reconnectAttempts = this._reconnectAttempts || 0;
+
+            // 【修复】限制重连次数
+            if (this._reconnectAttempts >= this.maxReconnectAttempts) {
+                console.warn('[AnimationInputInterface] 达到最大重连次数，停止重连');
+                return;
+            }
 
             try {
-                console.log(`[AnimationInputInterface] 正在连接 ${this.wsUrl}...`);
+                console.log(`[AnimationInputInterface] 正在连接 ${this.wsUrl}... (尝试 ${this._reconnectAttempts + 1})`);
                 this.ws = new WebSocket(this.wsUrl);
 
                 this.ws.onopen = () => {
                     console.log('[AnimationInputInterface] ✓ WebSocket连接成功');
                     this.isConnected = true;
+                    this._reconnectAttempts = 0;  // 重置重连计数
                     clearTimeout(this.reconnectTimer);
                 };
 
@@ -124,24 +148,35 @@
                 };
 
                 this.ws.onerror = (error) => {
-                    console.error('[AnimationInputInterface] WebSocket错误:', error);
+                    console.error('[AnimationInputInterface] WebSocket错误');
                 };
 
                 this.ws.onclose = (event) => {
                     console.log(`[AnimationInputInterface] WebSocket连接关闭 (code: ${event.code})`);
                     this.isConnected = false;
+                    this.ws = null;
 
-                    // 自动重连
-                    this.reconnectTimer = setTimeout(() => {
-                        this._connectWebSocket();
-                    }, this.reconnectInterval);
+                    // 【修复】只在非主动关闭时重连
+                    if (event.code !== 1000) {
+                        this._reconnectAttempts++;
+                        if (this._reconnectAttempts < this.maxReconnectAttempts) {
+                            clearTimeout(this.reconnectTimer);
+                            this.reconnectTimer = setTimeout(() => {
+                                this._connectWebSocket();
+                            }, this.reconnectInterval);
+                        }
+                    }
                 };
 
             } catch (error) {
                 console.error('[AnimationInputInterface] 创建WebSocket失败:', error);
-                this.reconnectTimer = setTimeout(() => {
-                    this._connectWebSocket();
-                }, this.reconnectInterval);
+                this._reconnectAttempts++;
+                if (this._reconnectAttempts < this.maxReconnectAttempts) {
+                    clearTimeout(this.reconnectTimer);
+                    this.reconnectTimer = setTimeout(() => {
+                        this._connectWebSocket();
+                    }, this.reconnectInterval);
+                }
             }
         }
         

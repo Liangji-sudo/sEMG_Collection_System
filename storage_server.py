@@ -245,6 +245,10 @@ class HDF5StorageServer:
             session_index = params.get("session_index", 0)
             session_number = params.get("session_number", 1)
             session_count = params.get("session_count", 3)
+
+            # 【新增】提取SD卡bin文件名（用于数据溯源）
+            sd_bin_dev1 = params.get("sd_bin_dev1")  # 例如 "S001_L_260312_143025"
+            sd_bin_dev2 = params.get("sd_bin_dev2")  # 例如 "S001_R_260312_143025"
             
             # 保存当前信息
             self.current_task_id = task_id
@@ -299,6 +303,15 @@ class HDF5StorageServer:
             self.f.attrs["session_index"] = session_index
             self.f.attrs["session_number"] = session_number
             self.f.attrs["session_count"] = session_count
+
+            # 【新增】保存SD卡bin文件名到HDF5属性（用于数据溯源）
+            # 格式: "S001_L_260312_143025" -> 对应SD卡文件 S001_L_260312_143025_emg.bin 和 S001_L_260312_143025_imu.bin
+            if sd_bin_dev1:
+                self.f.attrs["sd_bin_dev1"] = sd_bin_dev1
+                debug_log(f"   SD卡源文件(设备1/左手): {sd_bin_dev1}_emg.bin, {sd_bin_dev1}_imu.bin")
+            if sd_bin_dev2:
+                self.f.attrs["sd_bin_dev2"] = sd_bin_dev2
+                debug_log(f"   SD卡源文件(设备2/右手): {sd_bin_dev2}_emg.bin, {sd_bin_dev2}_imu.bin")
             
             # ===================== 创建受试者信息组 =====================
             if subject_info:

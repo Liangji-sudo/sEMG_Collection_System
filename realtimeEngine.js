@@ -81,6 +81,9 @@ class RealtimeEngine extends EventEmitter {
 
         // 动捕数据存储
         this.saveMocapData = false;
+
+        // 【新增】SD卡bin文件名（用于HDF5溯源）
+        this.sd_filenames = { dev1: null, dev2: null };
     }
 
     start(port = 8080) {
@@ -228,6 +231,17 @@ class RealtimeEngine extends EventEmitter {
         }
         this.isCollecting = false;
         this.collectionPaused = false;
+        // 【新增】采集停止时清空SD卡文件名
+        this.sd_filenames = { dev1: null, dev2: null };
+    }
+
+    // 【新增】处理SD卡文件名更新事件
+    onSdFilenamesUpdated(sd_filenames) {
+        if (sd_filenames) {
+            if (sd_filenames.dev1) this.sd_filenames.dev1 = sd_filenames.dev1;
+            if (sd_filenames.dev2) this.sd_filenames.dev2 = sd_filenames.dev2;
+            console.log(`[realtimeEngine] SD卡文件名已更新: dev1=${this.sd_filenames.dev1}, dev2=${this.sd_filenames.dev2}`);
+        }
     }
 
     onStageChange(stageIndex, stageName) { this.currentStageName = stageName; }
@@ -387,7 +401,10 @@ class RealtimeEngine extends EventEmitter {
                 category4: category4,
                 template_name: config.templateName || 'default',
                 subject_info: this.currentUser,
-                start_time: this.stage_start_time
+                start_time: this.stage_start_time,
+                // 【新增】传递SD卡bin文件名，用于HDF5溯源
+                sd_bin_dev1: this.sd_filenames.dev1,  // 例如 "S001_L_260312_143025"
+                sd_bin_dev2: this.sd_filenames.dev2   // 例如 "S001_R_260312_143025"
             });
 
             if (response.status === 'success') {
@@ -447,6 +464,11 @@ class RealtimeEngine extends EventEmitter {
                     const packet = JSON.parse(event.data);
                     if (packet.type === 'data') { this.handleBleDataPacket(packet); return; }
                     if (packet.type === 'emg_packet') { this.attributeEMGData(packet); return; }
+                    // 【新增】监听sd_filenames_updated事件
+                    if (packet.type === 'event' && packet.event === 'sd_filenames_updated') {
+                        this.onSdFilenamesUpdated(packet.sd_filenames);
+                        return;
+                    }
                 } catch (error) {}
             };
 

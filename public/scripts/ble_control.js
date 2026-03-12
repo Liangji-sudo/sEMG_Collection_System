@@ -17,12 +17,14 @@
     const WS_URL = 'ws://localhost:8764';  // 控制端口
     const RECONNECT_DELAY = 1000;  // 1秒重连，加快连接速度
     const HEARTBEAT_INTERVAL = 30000;
+    const MAX_RECONNECT_ATTEMPTS = 10;  // 【新增】最大重连次数
 
     // ================= 状态 =================
     const BleState = {
         ws: null,
         connected: false,
         reconnecting: false,
+        reconnectAttempts: 0,  // 【新增】重连次数计数
         heartbeatTimer: null,
         
         // 设备状态
@@ -44,9 +46,15 @@
     // ================= WebSocket 连接 =================
 
     function connect() {
-        // 如果已经连接，直接返回
-        if (BleState.ws && BleState.ws.readyState === WebSocket.OPEN) {
-            console.log('[BLE] 已经连接，跳过');
+        // 如果已经连接或正在连接，直接返回
+        if (BleState.ws && (BleState.ws.readyState === WebSocket.OPEN || BleState.ws.readyState === WebSocket.CONNECTING)) {
+            console.log('[BLE] 已经连接或正在连接，跳过');
+            return;
+        }
+
+        // 【修复】如果正在重连中，跳过
+        if (BleState.reconnecting) {
+            console.log('[BLE] 正在重连中，跳过');
             return;
         }
 
@@ -57,9 +65,6 @@
             BleState.ws.onclose = null;
             BleState.ws.onerror = null;
             BleState.ws.onmessage = null;
-            if (BleState.ws.readyState === WebSocket.OPEN || BleState.ws.readyState === WebSocket.CONNECTING) {
-                BleState.ws.close();
-            }
             BleState.ws = null;
         }
 
@@ -73,6 +78,7 @@
                 console.log('[BLE] ✅ 已连接到BLE服务器');
                 BleState.connected = true;
                 BleState.reconnecting = false;
+                BleState.reconnectAttempts = 0;  // 【修复】重置重连计数
                 updateServerStatus('connected');
                 startHeartbeat();
             };
@@ -83,7 +89,10 @@
                 BleState.ws = null;
                 updateServerStatus('disconnected');
                 stopHeartbeat();
-                scheduleReconnect();
+                // 【修复】只在非主动关闭时重连
+                if (event.code !== 1000) {
+                    scheduleReconnect();
+                }
             };
 
             BleState.ws.onerror = (err) => {
@@ -120,8 +129,16 @@
             console.log('[BLE] 已在重连队列中，跳过');
             return;
         }
+
+        // 【修复】检查重连次数
+        if (BleState.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+            console.warn('[BLE] 达到最大重连次数，停止重连');
+            return;
+        }
+
         BleState.reconnecting = true;
-        console.log(`[BLE] ${RECONNECT_DELAY/1000}秒后重连...`);
+        BleState.reconnectAttempts++;
+        console.log(`[BLE] ${RECONNECT_DELAY/1000}秒后重连... (尝试 ${BleState.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
         setTimeout(() => {
             BleState.reconnecting = false; // 重置标志，允许下次重连
             connect();
