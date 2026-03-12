@@ -840,9 +840,46 @@ async def connect_device(ws, device_id: int, mac_or_name: str):
                 dev.name = device.name
                 dev.rssi = rssi
                 dev.reset_stats()
-                
+
                 log(f"[Dev{device_id}] 连接成功: {mac}")
-                
+
+                # ===================== 连接成功后发送配置命令 =====================
+                # 在连接成功后立即配置ESP32，而不是在start_stream时配置
+                # 这样可以避免配置命令和START命令之间的时序问题
+                try:
+                    # 1. 发送采样率配置 (2kHz = 0x12)
+                    sample_rate_cmd = bytes([CMD_MAP['2kHz']])
+                    await dev.client.write_gatt_char(
+                        CONTROL_CHAR_UUID,
+                        sample_rate_cmd,
+                        response=False
+                    )
+                    log(f"[Dev{device_id}] 已发送采样率配置: 2kHz (0x12)")
+                    await asyncio.sleep(0.1)  # 等待ESP32处理
+
+                    # 2. 发送复合配置命令 (0xC0 + [gain_index, mode, shift, imu_en])
+                    # gain_index=6 (增益12), mode=0 (24-bit), shift=4, imu_enabled=1
+                    config = dev.config
+                    config_cmd = bytes([
+                        CMD_MAP['CONFIG'],
+                        config['gain_index'],      # 6 = 增益12
+                        0 if not config['is_16bit'] else 1,  # 0 = 24-bit模式
+                        config['shift'],           # 4
+                        1 if config['imu_enabled'] else 0,   # 1 = IMU启用
+                    ])
+                    await dev.client.write_gatt_char(
+                        CONTROL_CHAR_UUID,
+                        config_cmd,
+                        response=False
+                    )
+                    log(f"[Dev{device_id}] 已发送复合配置: Gain={config['gain_index']}, Mode={'16bit' if config['is_16bit'] else '24bit'}, Shift={config['shift']}, IMU={config['imu_enabled']}")
+                    await asyncio.sleep(0.1)  # 等待ESP32处理
+
+                except Exception as e:
+                    log(f"[Dev{device_id}] 配置命令发送失败: {e}")
+                    # 配置失败不影响连接状态，继续执行
+                # ===================== 配置命令结束 =====================
+
                 await send_to_control(ws, action, {
                     'success': True,
                     'device_id': device_id,
@@ -851,7 +888,7 @@ async def connect_device(ws, device_id: int, mac_or_name: str):
                     'rssi': rssi,
                     'connected': state.get_connected_devices(),
                 })
-                
+
                 # 广播连接事件
                 await broadcast_event('device_connected', {
                     'device_id': device_id,
@@ -950,15 +987,15 @@ async def start_stream(ws, device_id: int):
     try:
         dev.reset_stats()
 
-        # ===================== 【新增】发送SD卡文件名命令 =====================
+        # ===================== 发送SD卡文件名命令 =====================
         # 格式: 0xD0 + "S001_260202_143025" (最大31字节)
         # 生成文件名字符串: 会话ID + 时间戳
-        now_str = datetime.now().strftime("%y%m%d_%H%M%S")  # 例如 "260202_143025"
+        now_str = datetime.now().strftime("%Y%m%d_%H%M%S")  # 例如 "20260312_143025" (与供应商一致)
         if state.session_id:
-            # 有会话ID: "S001_260202_143025"
+            # 有会话ID: "S001_20260312_143025"
             filename_str = f"{state.session_id}_{now_str}"
         else:
-            # 无会话ID: "260202_143025"
+            # 无会话ID: "20260312_143025"
             filename_str = now_str
 
         # 确保不超过31字节
@@ -975,50 +1012,20 @@ async def start_stream(ws, device_id: int):
         await asyncio.sleep(0.1)  # 等待ESP32处理
         # ===================== SD卡文件名命令结束 =====================
 
-        # ===================== 发送配置命令 =====================
-        # 配置ESP32工作在2kHz采样率，确保SD卡存储的是2kHz数据
-        config = dev.config
-
-        # 1. 发送采样率命令 (0x12 = 2kHz)
-        sample_rate_cmd = CMD_MAP['2kHz']
-        await dev.client.write_gatt_char(
-            CONTROL_CHAR_UUID,
-            bytes([sample_rate_cmd]),
-            response=False
-        )
-        log(f"[Dev{device_id}] 已发送采样率配置: 2kHz (0x{sample_rate_cmd:02X})")
-        await asyncio.sleep(0.1)  # 等待ESP32处理
-
-        # 2. 发送复合配置命令 [0xC0, GainIdx, Mode, Shift, IMU_En]
-        # GainIdx: 6 (增益12)
-        # Mode: 0 (24-bit), 1 (16-bit)
-        # Shift: 4 (默认)
-        # IMU_En: 1 (启用IMU)
-        gain_idx = config.get('gain_index', 6)
-        mode = 1 if config.get('is_16bit', False) else 0
-        shift = config.get('shift', 4)
-        imu_en = 1 if config.get('imu_enabled', True) else 0
-
-        config_cmd = bytes([CMD_MAP['CONFIG'], gain_idx, mode, shift, imu_en])
-        await dev.client.write_gatt_char(
-            CONTROL_CHAR_UUID,
-            config_cmd,
-            response=False
-        )
-        log(f"[Dev{device_id}] 已发送复合配置: Gain={gain_idx}, Mode={mode}, Shift={shift}, IMU={imu_en}")
-        await asyncio.sleep(0.1)  # 等待ESP32处理
-        # ===================== 配置命令结束 =====================
+        # 【重要】不再发送额外的配置命令，使用ESP32的默认配置
+        # 供应商代码也是这样做的：只在用户点击"应用配置"时才发送配置命令
+        # ESP32默认配置: 24-bit, 9帧/包, IMU启用, 增益12
 
         handler = create_notification_handler(dev)
         await dev.client.start_notify(EMG_DATA_CHAR_UUID, handler)
-        log(f"[Dev{device_id}] 已订阅")
+        log(f"[Dev{device_id}] 已订阅数据通知")
 
         await dev.client.write_gatt_char(
             CONTROL_CHAR_UUID,
             bytes([CMD_MAP['START']]),
             response=False
         )
-        log(f"[Dev{device_id}] 已发送 START")
+        log(f"[Dev{device_id}] 已发送 START 命令")
 
         dev.is_streaming = True
 
@@ -1035,6 +1042,8 @@ async def start_stream(ws, device_id: int):
 
     except Exception as e:
         log(f"[Dev{device_id}] 启动失败: {e}")
+        import traceback
+        traceback.print_exc()
         await send_to_control(ws, action, {
             'success': False,
             'device_id': device_id,
