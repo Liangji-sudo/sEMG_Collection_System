@@ -563,7 +563,11 @@ def create_notification_handler(dev: DeviceState):
             parsed = parse_packet(data, dev)
             if parsed:
                 parsed['t'] = ts
-                
+
+                # 【调试】每100个包打印一次日志
+                if dev.total_frames % 100 == 0:
+                    log(f"[Dev{dev.device_id}] 已收到 {dev.total_frames} 包, 丢包: {dev.lost_frames}, 缓冲区: {len(dev.data_buffer)}")
+
                 # 生成每帧EMG的时间戳
                 # 注意：BLE传输的是250Hz数据（2kHz降采样8倍），所以时间间隔是1/250=0.004秒
                 fpkt = parsed.get('n', 9)
@@ -922,24 +926,25 @@ async def disconnect_device(ws, device_id: int, silent=False):
     dev = state.get_device(device_id)
     action = f'disconnect{device_id}'
     mac = dev.mac
-    
+
     try:
         if dev.is_streaming:
             await stop_stream(ws, device_id, silent=True)
-        
+
         if dev.client:
             try:
                 await dev.client.disconnect()
             except:
                 pass
             dev.client = None
-        
+
         dev.device = None
         dev.mac = None
         dev.name = None
         dev.rssi = None
         dev.connect_task = None
-        
+        dev.sd_filename = None  # 【修复】断开连接时清除SD卡文件名
+
         log(f"[Dev{device_id}] 已断开: {mac}")
         
         if not silent:

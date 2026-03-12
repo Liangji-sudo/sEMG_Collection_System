@@ -210,7 +210,7 @@ class RealtimeEngine extends EventEmitter {
     async onCollectionStart(data) {
         console.log(`[realtimeEngine] ========== 开始采集会话 ==========`);
         const { taskId, stageName, userId, config, sessionIndex, sessionNumber, sessionCount } = data;
-        
+
         this.currentTaskId = taskId;
         this.currentUser = { id: userId, ...config?.subject };
         this.collectionConfig = config;
@@ -220,6 +220,9 @@ class RealtimeEngine extends EventEmitter {
         this.currentSessionIndex = sessionIndex ?? 0;
         this.currentSessionNumber = sessionNumber ?? 1;
         this.sessionCount = sessionCount ?? 3;
+
+        // 注意：不在这里重置sd_filenames，因为sd_filenames_updated事件会在start_all之后到达
+        // sd_filenames的管理完全由onSdFilenamesUpdated负责
     }
 
     onCollectionPause() { this.collectionPaused = true; }
@@ -236,12 +239,14 @@ class RealtimeEngine extends EventEmitter {
     }
 
     // 【新增】处理SD卡文件名更新事件
+    // 此事件由ble_server.py在start_all成功后发送，包含当前实际连接设备的文件名
     onSdFilenamesUpdated(sd_filenames) {
-        if (sd_filenames) {
-            if (sd_filenames.dev1) this.sd_filenames.dev1 = sd_filenames.dev1;
-            if (sd_filenames.dev2) this.sd_filenames.dev2 = sd_filenames.dev2;
-            console.log(`[realtimeEngine] SD卡文件名已更新: dev1=${this.sd_filenames.dev1}, dev2=${this.sd_filenames.dev2}`);
-        }
+        // 完全替换，只保存当前实际连接设备的文件名
+        this.sd_filenames = {
+            dev1: sd_filenames?.dev1 || null,
+            dev2: sd_filenames?.dev2 || null
+        };
+        console.log(`[realtimeEngine] SD卡文件名已更新: dev1=${this.sd_filenames.dev1 || '无'}, dev2=${this.sd_filenames.dev2 || '无'}`);
     }
 
     onStageChange(stageIndex, stageName) { this.currentStageName = stageName; }
@@ -361,6 +366,15 @@ class RealtimeEngine extends EventEmitter {
         if (!this.storage_connected) {
             console.warn('[realtimeEngine] ⚠️ Storage未连接，无法打开文件');
             return;
+        }
+
+        // 【修复】等待sd_filenames_updated事件到达（最多等待500ms）
+        // 因为sd_filenames_updated事件是从ble_server.py的start_all发送的，
+        // 可能在stage_start命令之后才到达
+        if (!this.sd_filenames.dev1 && !this.sd_filenames.dev2) {
+            console.log('[realtimeEngine] 等待SD卡文件名...');
+            await new Promise(resolve => setTimeout(resolve, 300));
+            console.log(`[realtimeEngine] SD卡文件名: dev1=${this.sd_filenames.dev1 || '无'}, dev2=${this.sd_filenames.dev2 || '无'}`);
         }
 
         try {
