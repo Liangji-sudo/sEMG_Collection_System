@@ -988,15 +988,19 @@ async def start_stream(ws, device_id: int):
         dev.reset_stats()
 
         # ===================== 发送SD卡文件名命令 =====================
-        # 格式: 0xD0 + "S001_260202_143025" (最大31字节)
-        # 生成文件名字符串: 会话ID + 时间戳
-        now_str = datetime.now().strftime("%Y%m%d_%H%M%S")  # 例如 "20260312_143025" (与供应商一致)
+        # 格式: 0xD0 + "S001_L_20260312_143025" (最大31字节)
+        # 生成文件名字符串: 会话ID + 左右手标识 + 时间戳
+        now_str = datetime.now().strftime("%y%m%d_%H%M%S")  # 例如 "260312_143025" (6位年份节省空间)
+
+        # 根据设备ID确定左右手标识: 设备1=左手(L), 设备2=右手(R)
+        hand_label = "L" if device_id == 1 else "R"
+
         if state.session_id:
-            # 有会话ID: "S001_20260312_143025"
-            filename_str = f"{state.session_id}_{now_str}"
+            # 有会话ID: "S001_L_260312_143025"
+            filename_str = f"{state.session_id}_{hand_label}_{now_str}"
         else:
-            # 无会话ID: "20260312_143025"
-            filename_str = now_str
+            # 无会话ID: "L_260312_143025"
+            filename_str = f"{hand_label}_{now_str}"
 
         # 确保不超过31字节
         if len(filename_str) > 31:
@@ -1008,7 +1012,7 @@ async def start_stream(ws, device_id: int):
             filename_cmd,
             response=False
         )
-        log(f"[Dev{device_id}] 已发送SD卡文件名: {filename_str}")
+        log(f"[Dev{device_id}] 已发送SD卡文件名: {filename_str} ({'左手' if device_id == 1 else '右手'})")
         await asyncio.sleep(0.1)  # 等待ESP32处理
         # ===================== SD卡文件名命令结束 =====================
 
