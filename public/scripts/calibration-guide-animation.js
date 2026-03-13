@@ -145,31 +145,21 @@
             const hasGif = gifUrl && gifUrl.length > 0;
 
             this.container.innerHTML = `
-                <!-- 半透明遮罩层 -->
-                <div id="calibrationOverlay" style="
-                    position: fixed;
-                    top: 0;
-                    left: 0;
-                    right: 0;
-                    bottom: 0;
-                    background: ${this.styles.overlayColor};
-                    z-index: 9998;
-                "></div>
-
-                <!-- 中央提示面板 -->
+                <!-- 中央提示面板（无遮罩，位置偏右上避免遮挡左下角GIF） -->
                 <div id="calibrationPanel" style="
                     position: fixed;
-                    top: 50%;
-                    left: 50%;
+                    top: 45%;
+                    left: 55%;
                     transform: translate(-50%, -50%);
                     background: ${this.styles.bgColor};
                     border-radius: 24px;
-                    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+                    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+                    border: 2px solid ${this.styles.primaryColor};
                     z-index: 9999;
-                    padding: 40px 50px;
+                    padding: 30px 40px;
                     text-align: center;
-                    min-width: 400px;
-                    max-width: 600px;
+                    min-width: 380px;
+                    max-width: 500px;
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                 ">
                     <!-- 图标 -->
@@ -315,16 +305,51 @@
             if (window.collectionController && typeof window.collectionController.showGestureGif === 'function') {
                 // 构造一个临时的gesture对象
                 const taskConfig = this.contentConfig[taskId];
-                const gifUrl = taskConfig?.gifUrl || this._getGestureGifUrl(taskId);
+                const gifFile = this._getGestureGifFile(taskId);
 
-                if (gifUrl) {
+                if (gifFile) {
                     const gesture = {
                         name: taskConfig?.name || '手势示范',
-                        gif: gifUrl
+                        gifFile: gifFile  // 使用 gifFile 字段，与 showGestureGif 方法匹配
                     };
+                    console.log('[CalibrationGuideAnimation] 显示手势GIF:', gifFile);
                     window.collectionController.showGestureGif(gesture);
+                } else {
+                    console.warn('[CalibrationGuideAnimation] 未找到手势GIF配置:', taskId);
                 }
             }
+        }
+
+        /**
+         * 【新增】获取手势GIF文件名（仅文件名，不含路径）
+         */
+        _getGestureGifFile(taskId) {
+            try {
+                // 从 collectionController 的 collectionConfig 中获取
+                if (window.collectionController) {
+                    const gestureKeyMap = {
+                        'continual_gesture_1': 'continual_1',
+                        'continual_gesture_2': 'continual_2',
+                        'continual_gesture_3': 'continual_3'
+                    };
+                    const gestureKey = gestureKeyMap[taskId];
+                    const gestureConfig = window.collectionController.collectionConfig?.gestures?.[gestureKey];
+
+                    if (gestureConfig && gestureConfig.length > 0 && gestureConfig[0].gifFile) {
+                        return gestureConfig[0].gifFile;
+                    }
+
+                    // 尝试从 template 获取
+                    const template = window.collectionController.getLatestTemplate?.();
+                    const templateGesture = template?.gestures?.[gestureKey];
+                    if (templateGesture && templateGesture.length > 0 && templateGesture[0].gifFile) {
+                        return templateGesture[0].gifFile;
+                    }
+                }
+            } catch (e) {
+                console.warn('[CalibrationGuideAnimation] 获取GIF文件名失败:', e);
+            }
+            return null;
         }
 
         /**
