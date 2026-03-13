@@ -560,10 +560,28 @@ def parse_packet(data: bytearray, dev: DeviceState) -> Optional[dict]:
 
 # ================= BLE 回调 =================
 
+# 【诊断】用于跟踪notification回调的调用情况
+_last_callback_time = {}
+_callback_interval_warning_printed = {}
+
 def create_notification_handler(dev: DeviceState):
     def handler(sender: int, data: bytearray):
         try:
             ts = time.time()
+
+            # 【诊断】检测回调间隔异常
+            device_key = dev.device_id
+            if device_key in _last_callback_time:
+                interval = ts - _last_callback_time[device_key]
+                # 正常情况下，250Hz的数据应该每4ms收到一包，9帧/包约36ms
+                # 如果间隔超过100ms，说明有问题
+                if interval > 0.1 and not _callback_interval_warning_printed.get(device_key):
+                    log(f"[Dev{dev.device_id}] ⚠️ 回调间隔异常: {interval*1000:.1f}ms (正常应<40ms)")
+                    _callback_interval_warning_printed[device_key] = True
+                elif interval < 0.1:
+                    _callback_interval_warning_printed[device_key] = False
+            _last_callback_time[device_key] = ts
+
             dev.last_data_time = ts  # 【新增】记录最后收到数据的时间
             parsed = parse_packet(data, dev)
             if parsed:
@@ -610,6 +628,9 @@ def data_sender_thread():
     # 【新增】超时警告标记，避免重复打印
     dev1_timeout_warned = False
     dev2_timeout_warned = False
+    # 【新增】超时状态，用于发送空包
+    dev1_timeout = False
+    dev2_timeout = False
 
     while not state.stop_thread:
         try:
@@ -618,19 +639,29 @@ def data_sender_thread():
             # 【新增】检测数据超时
             if state.dev1.is_streaming and state.dev1.last_data_time > 0:
                 if now - state.dev1.last_data_time > DATA_TIMEOUT:
+                    dev1_timeout = True
                     if not dev1_timeout_warned:
-                        log(f"[Dev1] ⚠️ 数据超时！已 {now - state.dev1.last_data_time:.1f} 秒未收到数据")
+                        log(f"[Dev1] ⚠️ 数据超时！已 {now - state.dev1.last_data_time:.1f} 秒未收到数据，将发送空包保持连接")
                         dev1_timeout_warned = True
                 else:
+                    dev1_timeout = False
                     dev1_timeout_warned = False
+            else:
+                dev1_timeout = False
+                dev1_timeout_warned = False
 
             if state.dev2.is_streaming and state.dev2.last_data_time > 0:
                 if now - state.dev2.last_data_time > DATA_TIMEOUT:
+                    dev2_timeout = True
                     if not dev2_timeout_warned:
-                        log(f"[Dev2] ⚠️ 数据超时！已 {now - state.dev2.last_data_time:.1f} 秒未收到数据")
+                        log(f"[Dev2] ⚠️ 数据超时！已 {now - state.dev2.last_data_time:.1f} 秒未收到数据，将发送空包保持连接")
                         dev2_timeout_warned = True
                 else:
+                    dev2_timeout = False
                     dev2_timeout_warned = False
+            else:
+                dev2_timeout = False
+                dev2_timeout_warned = False
 
             active = state.get_active_devices()
 
@@ -652,13 +683,21 @@ def data_sender_thread():
                     if batch2:
                         dev2_data = batch2 if len(batch2) > 1 else batch2[0]
 
-                if dev1_data is not None or dev2_data is not None:
+                # 【修改】即使没有数据，如果设备处于超时状态也发送空包
+                has_data = dev1_data is not None or dev2_data is not None
+                has_timeout = dev1_timeout or dev2_timeout
+
+                if has_data or has_timeout:
                     msg = {
                         'type': 'data',
                         'ts': time.time(),
                         'dev1': dev1_data,
                         'dev2': dev2_data,
                         'active': active,
+                        'timeout': {  # 【新增】超时状态信息
+                            'dev1': dev1_timeout,
+                            'dev2': dev2_timeout
+                        }
                     }
                     add_to_queue(PRIORITY_LOW, 'data', msg)
                     send_count += 1
@@ -667,7 +706,15 @@ def data_sender_thread():
             now = time.time()
             if now - last_log_time >= 5.0:
                 if send_count > 0 or active:
-                    log(f"[数据发送] 已发送 {send_count} 批数据, 数据端客户端: {len(state.data_clients)}, 活跃设备: {active}")
+                    timeout_info = ""
+                    if dev1_timeout or dev2_timeout:
+                        timeout_devs = []
+                        if dev1_timeout:
+                            timeout_devs.append("Dev1")
+                        if dev2_timeout:
+                            timeout_devs.append("Dev2")
+                        timeout_info = f", 超时: {timeout_devs}"
+                    log(f"[数据发送] 已发送 {send_count} 批数据, 数据端客户端: {len(state.data_clients)}, 活跃设备: {active}{timeout_info}")
                 last_log_time = now
                 send_count = 0
 
