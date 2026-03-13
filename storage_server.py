@@ -69,9 +69,9 @@ EMG_2KHZ_ADC_DTYPE = np.dtype([
     ("time", "<f8")               # 时间戳
 ])
 
-# 【新增】IMU 250Hz数据集类型：acc(3) + gyr(3) + mag(3) + BLE帧号 + SD卡帧号 + 时间戳
-# 用于存储250Hz原始数据，后续与SD卡bin文件同步补全为2kHz
-IMU_250HZ_DTYPE = np.dtype([
+# 【新增】IMU BLE数据集类型：acc(3) + gyr(3) + mag(3) + BLE帧号 + SD卡帧号 + 时间戳
+# 用于存储随BLE包接收的IMU数据（约27.8Hz，每个BLE包一帧），后续与SD卡bin文件同步补全为100Hz
+IMU_BLE_DTYPE = np.dtype([
     ("acc", "<f4", (3,)),   # 加速度计 [ax, ay, az]
     ("gyr", "<f4", (3,)),   # 陀螺仪 [gx, gy, gz]
     ("mag", "<f4", (3,)),   # 磁力计 [mx, my, mz]
@@ -374,22 +374,22 @@ class HDF5StorageServer:
             emg2_2khz_ds.attrs["data_type"] = "raw_adc"  # 原始ADC值，非μV
             emg2_2khz_ds.attrs["description"] = "2kHz EMG raw ADC data (synced from SD card bin, empty until sync)"
 
-            # ===================== 创建IMU 250Hz数据集（采集时写入） =====================
-            imu1_250hz_ds = self.f.create_dataset(
-                "imu1_250hz", shape=(0,), dtype=IMU_250HZ_DTYPE,
+            # ===================== 创建IMU BLE数据集（采集时写入，随BLE包接收，约27.8Hz） =====================
+            imu1_ble_ds = self.f.create_dataset(
+                "imu1_ble", shape=(0,), dtype=IMU_BLE_DTYPE,
                 chunks=(500,), maxshape=(None,), compression="gzip"
             )
-            imu1_250hz_ds.attrs["device"] = "device_1"
-            imu1_250hz_ds.attrs["sample_rate"] = 250
-            imu1_250hz_ds.attrs["description"] = "250Hz IMU data from BLE for sync with SD card bin"
+            imu1_ble_ds.attrs["device"] = "device_1"
+            imu1_ble_ds.attrs["sample_rate"] = "~27.8Hz (one per BLE packet)"
+            imu1_ble_ds.attrs["description"] = "IMU data from BLE packets for sync with SD card bin"
 
-            imu2_250hz_ds = self.f.create_dataset(
-                "imu2_250hz", shape=(0,), dtype=IMU_250HZ_DTYPE,
+            imu2_ble_ds = self.f.create_dataset(
+                "imu2_ble", shape=(0,), dtype=IMU_BLE_DTYPE,
                 chunks=(500,), maxshape=(None,), compression="gzip"
             )
-            imu2_250hz_ds.attrs["device"] = "device_2"
-            imu2_250hz_ds.attrs["sample_rate"] = 250
-            imu2_250hz_ds.attrs["description"] = "250Hz IMU data from BLE for sync with SD card bin"
+            imu2_ble_ds.attrs["device"] = "device_2"
+            imu2_ble_ds.attrs["sample_rate"] = "~27.8Hz (one per BLE packet)"
+            imu2_ble_ds.attrs["description"] = "IMU data from BLE packets for sync with SD card bin"
 
             # ===================== 创建IMU 100Hz数据集（同步后写入，初始为空） =====================
             imu1_100hz_ds = self.f.create_dataset(
@@ -486,13 +486,13 @@ class HDF5StorageServer:
                     frame_ids = data.get("emg2_frame_ids")
                     self._append_emg("emg2", data["emg2"], data["emg2_t"], frame_ids)
 
-                # 追加IMU1到250Hz数据集
+                # 追加IMU1到BLE数据集
                 if data.get("imu1") and data.get("imu1_t"):
                     # IMU帧号使用EMG帧号的第一个（同一个BLE包）
                     frame_id = data.get("emg1_frame_ids", [0])[0] if data.get("emg1_frame_ids") else None
                     self._append_imu("imu1", data["imu1"], data["imu1_t"], frame_id)
 
-                # 追加IMU2到250Hz数据集
+                # 追加IMU2到BLE数据集
                 if data.get("imu2") and data.get("imu2_t"):
                     frame_id = data.get("emg2_frame_ids", [0])[0] if data.get("emg2_frame_ids") else None
                     self._append_imu("imu2", data["imu2"], data["imu2_t"], frame_id)
@@ -584,9 +584,9 @@ class HDF5StorageServer:
             return 0
 
     def _append_imu(self, dataset_name, imu_data, timestamps, frame_id=None):
-        """追加IMU数据到250Hz数据集
+        """追加IMU数据到BLE数据集
 
-        采集时只保存到250Hz数据集（imu1_250hz/imu2_250hz），
+        采集时只保存到BLE数据集（imu1_ble/imu2_ble），
         imu1/imu2数据集在同步后由bin_sync_tool填充100Hz数据。
 
         Args:
@@ -599,29 +599,29 @@ class HDF5StorageServer:
             if not imu_data or "acc" not in imu_data:
                 return 0
 
-            # 保存到250Hz数据集
-            ds_250hz_name = f"{dataset_name}_250hz"
-            if ds_250hz_name in self.f:
-                ds_250hz = self.f[ds_250hz_name]
+            # 保存到BLE数据集
+            ds_ble_name = f"{dataset_name}_ble"
+            if ds_ble_name in self.f:
+                ds_ble = self.f[ds_ble_name]
 
                 # 计算BLE帧号和SD卡帧号
                 ble_frame_id = frame_id if frame_id is not None else 0
                 # SD帧号 = BLE帧号 * 8 + 7
                 sd_frame_id = ble_frame_id * 8 + 7
 
-                # 构造250Hz结构化数组（每次一帧）
-                data_250hz = np.empty(1, dtype=IMU_250HZ_DTYPE)
-                data_250hz[0]["acc"] = np.array(imu_data.get("acc", [0, 0, 0])[:3], dtype=np.float32)
-                data_250hz[0]["gyr"] = np.array(imu_data.get("gyr", [0, 0, 0])[:3], dtype=np.float32)
-                data_250hz[0]["mag"] = np.array(imu_data.get("mag", [0, 0, 0])[:3], dtype=np.float32)
-                data_250hz[0]["frame_id"] = ble_frame_id
-                data_250hz[0]["sd_frame_id"] = sd_frame_id
-                data_250hz[0]["time"] = timestamps[0] if timestamps else 0
+                # 构造BLE数据结构化数组（每次一帧）
+                data_ble = np.empty(1, dtype=IMU_BLE_DTYPE)
+                data_ble[0]["acc"] = np.array(imu_data.get("acc", [0, 0, 0])[:3], dtype=np.float32)
+                data_ble[0]["gyr"] = np.array(imu_data.get("gyr", [0, 0, 0])[:3], dtype=np.float32)
+                data_ble[0]["mag"] = np.array(imu_data.get("mag", [0, 0, 0])[:3], dtype=np.float32)
+                data_ble[0]["frame_id"] = ble_frame_id
+                data_ble[0]["sd_frame_id"] = sd_frame_id
+                data_ble[0]["time"] = timestamps[0] if timestamps else 0
 
-                # 追加到250Hz数据集
-                current_len = ds_250hz.shape[0]
-                ds_250hz.resize(current_len + 1, axis=0)
-                ds_250hz[current_len] = data_250hz[0]
+                # 追加到BLE数据集
+                current_len = ds_ble.shape[0]
+                ds_ble.resize(current_len + 1, axis=0)
+                ds_ble[current_len] = data_ble[0]
 
             # 更新统计
             self.stats[f"{dataset_name}_frames"] += 1

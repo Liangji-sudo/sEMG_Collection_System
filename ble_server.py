@@ -605,8 +605,8 @@ def create_notification_handler(dev: DeviceState):
                     emg_timestamps.append(frame_ts)
                 parsed['emg_t'] = emg_timestamps
 
-                # IMU时间戳（每包1帧IMU，与EMG同步）
-                # IMU也是250Hz，使用最后一帧的时间戳
+                # IMU时间戳（每包1帧IMU，随BLE包接收，约27.8Hz）
+                # IMU使用BLE包的时间戳
                 if parsed.get('imu'):
                     imu_timestamps = [ts]
                     parsed['imu_t'] = imu_timestamps
