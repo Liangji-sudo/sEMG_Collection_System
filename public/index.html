@@ -3334,6 +3334,101 @@
             color: #9ca3af;
         }
 
+        /* 【新增】手势类型选择下拉框 */
+        .gesture-type-select {
+            width: 70px;
+            padding: 6px 8px;
+            border: 1px solid #e5e7eb;
+            border-radius: 4px;
+            font-size: 11px;
+            background: white;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+
+        .gesture-type-select:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+
+        /* 【新增】手势类型徽章 */
+        .gesture-type-badge {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 22px;
+            border-radius: 4px;
+            font-size: 10px;
+            flex-shrink: 0;
+        }
+
+        .gesture-instant .gesture-type-badge {
+            background: rgba(59, 130, 246, 0.15);
+            color: #3b82f6;
+        }
+
+        .gesture-sustained .gesture-type-badge {
+            background: rgba(249, 115, 22, 0.15);
+            color: #f97316;
+        }
+
+        /* 【新增】持续手势项的特殊样式 */
+        .config-gesture-item.gesture-sustained.enabled {
+            background: rgba(249, 115, 22, 0.1);
+            border-color: rgba(249, 115, 22, 0.3);
+        }
+
+        /* 【新增】添加手势按钮组 */
+        .gesture-add-btns {
+            display: flex;
+            gap: 8px;
+        }
+
+        .config-add-btn-sustained {
+            background: linear-gradient(135deg, #f97316, #ea580c) !important;
+        }
+
+        .config-add-btn-sustained:hover {
+            background: linear-gradient(135deg, #ea580c, #c2410c) !important;
+        }
+
+        /* 【新增】手势类型图例 */
+        .gesture-type-legend {
+            display: inline-flex;
+            gap: 16px;
+            margin-right: 12px;
+            padding: 4px 10px;
+            background: #f3f4f6;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .gesture-type-legend .type-instant {
+            color: #3b82f6;
+        }
+
+        .gesture-type-legend .type-sustained {
+            color: #f97316;
+        }
+
+        .gesture-type-legend i {
+            margin-right: 4px;
+        }
+
+        /* 【新增】执行参数中的持续手势参数样式 */
+        .config-param-sustained {
+            background: rgba(249, 115, 22, 0.05);
+            border-left: 3px solid #f97316;
+            padding-left: 12px;
+            margin-left: -15px;
+        }
+
+        .config-param-sustained label i {
+            color: #f97316;
+            margin-right: 6px;
+        }
+
         /* 连续手势 GIF 配置 */
         .continual-gif-config {
             display: flex;

@@ -75,25 +75,27 @@
         ],
 
         // 手势库
+        // gestureType: 'instant' 瞬时手势（原有模式）, 'sustained' 持续手势（长方形动画）
         gestures: {
             discrete: [
-                { id: 'thumb_up', name: '拇指上滑', icon: '👆', gifFile: 'thumb_up.gif', enabled: true },
-                { id: 'thumb_down', name: '拇指下滑', icon: '👇', gifFile: 'thumb_down.gif', enabled: true },
-                { id: 'thumb_left', name: '拇指左滑', icon: '👈', gifFile: 'thumb_left.gif', enabled: true },
-                { id: 'thumb_right', name: '拇指右滑', icon: '👉', gifFile: 'thumb_right.gif', enabled: true },
-                { id: 'thumb_press', name: '拇指按压', icon: '👍', gifFile: 'thumb_press.gif', enabled: true },
-                { id: 'index_tap', name: '食指点击', icon: '☝️', gifFile: 'index_tap.gif', enabled: true },
-                { id: 'index_double_tap', name: '食指双击', icon: '✌️', gifFile: 'index_double_tap.gif', enabled: true },
-                { id: 'middle_tap', name: '中指点击', icon: '🖕', gifFile: 'middle_tap.gif', enabled: true },
-                { id: 'pinch', name: '捏合', icon: '🤏', gifFile: 'pinch.gif', enabled: true },
-                { id: 'spread', name: '张开', icon: '🖐️', gifFile: 'spread.gif', enabled: true },
-                { id: 'fist', name: '握拳', icon: '✊', gifFile: 'fist.gif', enabled: true },
-                { id: 'release', name: '松开', icon: '✋', gifFile: 'release.gif', enabled: true },
-                { id: 'wrist_up', name: '手腕上抬', icon: '⬆️', gifFile: 'wrist_up.gif', enabled: true },
-                { id: 'wrist_down', name: '手腕下压', icon: '⬇️', gifFile: 'wrist_down.gif', enabled: true },
-                { id: 'wrist_rotate_cw', name: '手腕顺时针', icon: '🔃', gifFile: 'wrist_rotate_cw.gif', enabled: true },
-                { id: 'wrist_rotate_ccw', name: '手腕逆时针', icon: '🔄', gifFile: 'wrist_rotate_ccw.gif', enabled: true },
-                { id: 'rest', name: '保持/休息', icon: '⏸️', gifFile: 'rest.gif', enabled: true }
+                { id: 'thumb_up', name: '拇指上滑', icon: '👆', gifFile: 'thumb_up.gif', enabled: true, gestureType: 'instant' },
+                { id: 'thumb_down', name: '拇指下滑', icon: '👇', gifFile: 'thumb_down.gif', enabled: true, gestureType: 'instant' },
+                { id: 'thumb_left', name: '拇指左滑', icon: '👈', gifFile: 'thumb_left.gif', enabled: true, gestureType: 'instant' },
+                { id: 'thumb_right', name: '拇指右滑', icon: '👉', gifFile: 'thumb_right.gif', enabled: true, gestureType: 'instant' },
+                { id: 'thumb_press', name: '拇指按压', icon: '👍', gifFile: 'thumb_press.gif', enabled: true, gestureType: 'instant' },
+                { id: 'index_tap', name: '食指点击', icon: '☝️', gifFile: 'index_tap.gif', enabled: true, gestureType: 'instant' },
+                { id: 'index_double_tap', name: '食指双击', icon: '✌️', gifFile: 'index_double_tap.gif', enabled: true, gestureType: 'instant' },
+                { id: 'middle_tap', name: '中指点击', icon: '🖕', gifFile: 'middle_tap.gif', enabled: true, gestureType: 'instant' },
+                { id: 'pinch', name: '捏合', icon: '🤏', gifFile: 'pinch.gif', enabled: true, gestureType: 'instant' },
+                { id: 'spread', name: '张开', icon: '🖐️', gifFile: 'spread.gif', enabled: true, gestureType: 'instant' },
+                { id: 'fist', name: '握拳', icon: '✊', gifFile: 'fist.gif', enabled: true, gestureType: 'instant' },
+                { id: 'release', name: '松开', icon: '✋', gifFile: 'release.gif', enabled: true, gestureType: 'instant' },
+                { id: 'wrist_up', name: '手腕上抬', icon: '⬆️', gifFile: 'wrist_up.gif', enabled: true, gestureType: 'instant' },
+                { id: 'wrist_down', name: '手腕下压', icon: '⬇️', gifFile: 'wrist_down.gif', enabled: true, gestureType: 'instant' },
+                { id: 'wrist_rotate_cw', name: '手腕顺时针', icon: '🔃', gifFile: 'wrist_rotate_cw.gif', enabled: true, gestureType: 'instant' },
+                { id: 'wrist_rotate_ccw', name: '手腕逆时针', icon: '🔄', gifFile: 'wrist_rotate_ccw.gif', enabled: true, gestureType: 'instant' },
+                { id: 'rest', name: '保持/休息', icon: '⏸️', gifFile: 'rest.gif', enabled: true, gestureType: 'instant' },
+                { id: 'pinch_hold', name: '捏住并保持', icon: '🤏', gifFile: 'pinch_hold.gif', enabled: false, gestureType: 'sustained' }
             ],
             continual_1: [],
             continual_2: [],
@@ -108,7 +110,8 @@
                 intervalBetweenRepeat: 1.0,    // 重复间隔（秒）
                 restBetweenGestures: 30.0,     // 手势间休息时间（秒）
                 preparationTime: 3.0,          // Stage开始前准备时间（秒）
-                gestureDisplayTime: 2.0        // 手势提示显示时间（秒）
+                gestureDisplayTime: 2.0,       // 手势提示显示时间（秒）
+                sustainedDuration: 2.0         // 【新增】持续性手势的持续时间（秒）
             },
             // 连续手势1采集参数（同心圆引导动画）
             continual_gesture_1: {
@@ -1184,20 +1187,38 @@
                 <div class="config-section">
                     <div class="config-section-header">
                         <h3><i class="fa fa-hand-paper"></i> 离散手势库</h3>
-                        <button class="config-add-btn" id="addGestureBtn">
-                            <i class="fa fa-plus"></i> 添加手势
-                        </button>
+                        <div class="gesture-add-btns">
+                            <button class="config-add-btn" id="addInstantGestureBtn">
+                                <i class="fa fa-bolt"></i> 添加瞬时手势
+                            </button>
+                            <button class="config-add-btn config-add-btn-sustained" id="addSustainedGestureBtn">
+                                <i class="fa fa-arrows-alt-h"></i> 添加持续手势
+                            </button>
+                        </div>
                     </div>
-                    <p class="config-hint">勾选启用的手势，每个手势将按顺序采集。GIF文件放在 tutorial/gestures/discrete/ 目录下</p>
+                    <p class="config-hint">
+                        <span class="gesture-type-legend">
+                            <span class="type-instant"><i class="fa fa-bolt"></i> 瞬时</span>
+                            <span class="type-sustained"><i class="fa fa-arrows-alt-h"></i> 持续</span>
+                        </span>
+                        勾选启用的手势。持续手势会显示横向长方形，触发 _start 和 _end 两个标签。
+                    </p>
                     <div class="config-gestures-grid">
                         ${gestures.map((gesture, index) => `
-                            <div class="config-gesture-item ${gesture.enabled ? 'enabled' : 'disabled'}">
+                            <div class="config-gesture-item ${gesture.enabled ? 'enabled' : 'disabled'} ${gesture.gestureType === 'sustained' ? 'gesture-sustained' : 'gesture-instant'}">
                                 <label class="gesture-checkbox">
                                     <input type="checkbox" data-index="${index}" ${gesture.enabled ? 'checked' : ''}>
                                     <span class="gesture-icon">${gesture.icon}</span>
                                 </label>
+                                <div class="gesture-type-badge" title="${gesture.gestureType === 'sustained' ? '持续手势' : '瞬时手势'}">
+                                    <i class="fa ${gesture.gestureType === 'sustained' ? 'fa-arrows-alt-h' : 'fa-bolt'}"></i>
+                                </div>
                                 <input type="text" class="gesture-name-input" data-index="${index}"
                                        value="${gesture.name}" placeholder="手势名称" title="手势名称">
+                                <select class="gesture-type-select" data-index="${index}" title="手势类型">
+                                    <option value="instant" ${gesture.gestureType !== 'sustained' ? 'selected' : ''}>瞬时</option>
+                                    <option value="sustained" ${gesture.gestureType === 'sustained' ? 'selected' : ''}>持续</option>
+                                </select>
                                 <input type="text" class="gesture-gif-input" data-index="${index}"
                                        value="${gesture.gifFile || ''}" placeholder="GIF文件名" title="GIF文件名（如 thumb_up.gif）">
                                 <button class="gesture-delete-btn" data-index="${index}">
@@ -1290,6 +1311,16 @@
                 });
             });
 
+            // 【新增】手势类型选择
+            container.querySelectorAll('.gesture-type-select').forEach(select => {
+                select.addEventListener('change', (e) => {
+                    const index = parseInt(e.target.dataset.index);
+                    this.currentTemplate.gestures.discrete[index].gestureType = e.target.value;
+                    this.isDirty = true;
+                    this.renderGesturesTab();
+                });
+            });
+
             // GIF文件名输入
             container.querySelectorAll('.gesture-gif-input').forEach(input => {
                 input.addEventListener('change', (e) => {
@@ -1313,26 +1344,52 @@
                 });
             });
 
-            // 添加手势
-            const addBtn = document.getElementById('addGestureBtn');
-            if (addBtn) {
-                addBtn.addEventListener('click', async () => {
-                    const name = await this.showPrompt('请输入手势名称：');
+            // 【修改】添加瞬时手势按钮
+            const addInstantBtn = document.getElementById('addInstantGestureBtn');
+            if (addInstantBtn) {
+                addInstantBtn.addEventListener('click', async () => {
+                    const name = await this.showPrompt('请输入瞬时手势名称：');
                     if (name && name.trim()) {
                         const trimmedName = name.trim();
                         const icon = await this.showPrompt('请输入手势图标（emoji）：', '✋');
                         const gifFile = await this.showPrompt('请输入GIF文件名（如 gesture.gif）：', '');
 
                         this.currentTemplate.gestures.discrete.push({
-                            id: trimmedName,  // 使用名称作为id
+                            id: trimmedName,
                             name: trimmedName,
                             icon: icon || '✋',
                             gifFile: gifFile || '',
-                            enabled: true
+                            enabled: true,
+                            gestureType: 'instant'
                         });
                         this.isDirty = true;
                         this.renderGesturesTab();
-                        this.showToast('手势已添加', 'success');
+                        this.showToast('瞬时手势已添加', 'success');
+                    }
+                });
+            }
+
+            // 【新增】添加持续手势按钮
+            const addSustainedBtn = document.getElementById('addSustainedGestureBtn');
+            if (addSustainedBtn) {
+                addSustainedBtn.addEventListener('click', async () => {
+                    const name = await this.showPrompt('请输入持续手势名称：');
+                    if (name && name.trim()) {
+                        const trimmedName = name.trim();
+                        const icon = await this.showPrompt('请输入手势图标（emoji）：', '🤏');
+                        const gifFile = await this.showPrompt('请输入GIF文件名（如 gesture.gif）：', '');
+
+                        this.currentTemplate.gestures.discrete.push({
+                            id: trimmedName,
+                            name: trimmedName,
+                            icon: icon || '🤏',
+                            gifFile: gifFile || '',
+                            enabled: true,
+                            gestureType: 'sustained'
+                        });
+                        this.isDirty = true;
+                        this.renderGesturesTab();
+                        this.showToast('持续手势已添加', 'success');
                     }
                 });
             }
@@ -1403,25 +1460,25 @@
                     html += `
                         <div class="config-param-item">
                             <label>每个手势重复次数</label>
-                            <input type="number" data-task="${task.id}" data-param="repeatPerGesture" 
+                            <input type="number" data-task="${task.id}" data-param="repeatPerGesture"
                                    value="${taskExec.repeatPerGesture || 5}" min="1" max="20">
                             <span class="param-unit">次</span>
                         </div>
                         <div class="config-param-item">
                             <label>重复间隔时间</label>
-                            <input type="number" data-task="${task.id}" data-param="intervalBetweenRepeat" 
+                            <input type="number" data-task="${task.id}" data-param="intervalBetweenRepeat"
                                    value="${taskExec.intervalBetweenRepeat || 1.0}" min="0.5" max="10" step="0.5">
                             <span class="param-unit">秒</span>
                         </div>
                         <div class="config-param-item">
                             <label>手势间休息时间</label>
-                            <input type="number" data-task="${task.id}" data-param="restBetweenGestures" 
+                            <input type="number" data-task="${task.id}" data-param="restBetweenGestures"
                                    value="${taskExec.restBetweenGestures || 30.0}" min="5" max="120" step="5">
                             <span class="param-unit">秒</span>
                         </div>
                         <div class="config-param-item">
                             <label>Stage开始前准备时间</label>
-                            <input type="number" data-task="${task.id}" data-param="preparationTime" 
+                            <input type="number" data-task="${task.id}" data-param="preparationTime"
                                    value="${taskExec.preparationTime || 3.0}" min="1" max="10" step="1">
                             <span class="param-unit">秒</span>
                         </div>
@@ -1430,6 +1487,13 @@
                             <input type="number" data-task="${task.id}" data-param="gestureDisplayTime"
                                    value="${taskExec.gestureDisplayTime || 2.0}" min="1" max="10" step="0.5">
                             <span class="param-unit">秒</span>
+                        </div>
+                        <div class="config-param-item config-param-sustained">
+                            <label><i class="fa fa-arrows-alt-h"></i> 持续手势时长</label>
+                            <input type="number" data-task="${task.id}" data-param="sustainedDuration"
+                                   value="${taskExec.sustainedDuration || 2.0}" min="0.5" max="10" step="0.5">
+                            <span class="param-unit">秒</span>
+                            <span class="param-hint">（持续手势从_start到_end的时间）</span>
                         </div>
                     `;
                 } else if (task.id === 'continual_gesture_1' || task.id === 'continual_gesture_2') {
