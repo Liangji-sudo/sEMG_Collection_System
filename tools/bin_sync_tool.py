@@ -490,19 +490,51 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
 
             log(f"IMU 100Hz数据构建完成: {imu_filled} 帧来自bin, {imu_missing} 帧缺失填零")
 
-            # 写入 imu_100hz 数据集（兼容旧版 imu_2khz 和新版 imu_100hz）
-            ds_imu_name = f"imu{device_id}_100hz"
-            ds_imu_name_legacy = f"imu{device_id}_2khz"
+            # 【修改】写入 2 个 IMU 100Hz 数据集（每设备有 2 个 IMU 传感器：a 和 b）
+            # imu1a_100hz / imu1b_100hz 或 imu2a_100hz / imu2b_100hz
+            ds_imu_a_name = f"imu{device_id}a_100hz"
+            ds_imu_b_name = f"imu{device_id}b_100hz"
+            ds_imu_name_legacy = f"imu{device_id}_100hz"  # 兼容旧版单一数据集
 
-            target_ds_name = None
-            if ds_imu_name in f:
-                target_ds_name = ds_imu_name
+            # 构建 IMU_B 的数据（与 IMU_A 类似，但使用 imu2 的数据）
+            data_imu_b_100hz = np.empty(num_imu_frames, dtype=imu_100hz_dtype)
+            imu_b_filled = 0
+            imu_b_missing = 0
+
+            for idx, imu_fid in enumerate(imu_frame_ids_unique):
+                imu_fid = int(imu_fid)
+                imu_data = imu_parser.frames.get(imu_fid)
+
+                if imu_data is not None:
+                    imu1, imu2 = imu_data
+                    # IMU_B 使用第二个 IMU 芯片的数据
+                    data_imu_b_100hz[idx]['acc'] = np.array(imu2['acc'], dtype=np.float32)
+                    data_imu_b_100hz[idx]['gyr'] = np.array(imu2['gyr'], dtype=np.float32)
+                    data_imu_b_100hz[idx]['mag'] = np.array(imu2['mag'], dtype=np.float32)
+                    imu_b_filled += 1
+                else:
+                    data_imu_b_100hz[idx]['acc'] = np.zeros(3, dtype=np.float32)
+                    data_imu_b_100hz[idx]['gyr'] = np.zeros(3, dtype=np.float32)
+                    data_imu_b_100hz[idx]['mag'] = np.zeros(3, dtype=np.float32)
+                    imu_b_missing += 1
+
+                data_imu_b_100hz[idx]['sd_frame_id'] = imu_fid
+                data_imu_b_100hz[idx]['time'] = data_imu_100hz[idx]['time']  # 使用相同的时间戳
+
+            # 写入 IMU_A 数据集
+            if ds_imu_a_name in f:
+                ds_imu_a = f[ds_imu_a_name]
+                ds_imu_a.resize(num_imu_frames, axis=0)
+                ds_imu_a[:] = data_imu_100hz
+                ds_imu_a.attrs["sample_rate"] = 100
+                ds_imu_a.attrs["source_bin"] = os.path.basename(imu_bin_path)
+                ds_imu_a.attrs["sync_time"] = datetime.now().isoformat()
+                ds_imu_a.attrs["filled_frames"] = imu_filled
+                ds_imu_a.attrs["missing_frames"] = imu_missing
+                log(f"IMU_A 同步完成！100Hz数据已写入 {ds_imu_a_name}")
             elif ds_imu_name_legacy in f:
-                target_ds_name = ds_imu_name_legacy
-                log(f"使用旧版数据集名 {ds_imu_name_legacy}")
-
-            if target_ds_name is not None:
-                ds_imu = f[target_ds_name]
+                # 兼容旧版：如果只有旧版数据集，则只写入 IMU_A
+                ds_imu = f[ds_imu_name_legacy]
                 ds_imu.resize(num_imu_frames, axis=0)
                 ds_imu[:] = data_imu_100hz
                 ds_imu.attrs["sample_rate"] = 100
@@ -510,26 +542,32 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
                 ds_imu.attrs["sync_time"] = datetime.now().isoformat()
                 ds_imu.attrs["filled_frames"] = imu_filled
                 ds_imu.attrs["missing_frames"] = imu_missing
+                log(f"使用旧版数据集名 {ds_imu_name_legacy}")
             else:
-                log(f"数据集 {ds_imu_name} 不存在，创建新数据集")
-                ds_imu = f.create_dataset(
-                    ds_imu_name, data=data_imu_100hz,
-                    chunks=(500,), compression="gzip"
-                )
-                ds_imu.attrs["device"] = f"device_{device_id}"
-                ds_imu.attrs["sample_rate"] = 100
-                ds_imu.attrs["description"] = "100Hz IMU data synced from SD card bin"
-                ds_imu.attrs["source_bin"] = os.path.basename(imu_bin_path)
-                ds_imu.attrs["sync_time"] = datetime.now().isoformat()
-                ds_imu.attrs["filled_frames"] = imu_filled
-                ds_imu.attrs["missing_frames"] = imu_missing
+                log(f"警告: 数据集 {ds_imu_a_name} 不存在，跳过 IMU_A 写入")
 
-            log(f"IMU同步完成！100Hz数据已写入 {target_ds_name or ds_imu_name}")
+            # 写入 IMU_B 数据集
+            if ds_imu_b_name in f:
+                ds_imu_b = f[ds_imu_b_name]
+                ds_imu_b.resize(num_imu_frames, axis=0)
+                ds_imu_b[:] = data_imu_b_100hz
+                ds_imu_b.attrs["sample_rate"] = 100
+                ds_imu_b.attrs["source_bin"] = os.path.basename(imu_bin_path)
+                ds_imu_b.attrs["sync_time"] = datetime.now().isoformat()
+                ds_imu_b.attrs["filled_frames"] = imu_b_filled
+                ds_imu_b.attrs["missing_frames"] = imu_b_missing
+                log(f"IMU_B 同步完成！100Hz数据已写入 {ds_imu_b_name}")
+            else:
+                log(f"数据集 {ds_imu_b_name} 不存在，跳过 IMU_B 写入")
+
+            log(f"IMU同步完成！A: {imu_filled}帧, B: {imu_b_filled}帧")
             imu_result = {
                 'imu_status': 'success',
                 'imu_frames': num_imu_frames,
                 'imu_filled': imu_filled,
-                'imu_missing': imu_missing
+                'imu_missing': imu_missing,
+                'imu_b_filled': imu_b_filled,
+                'imu_b_missing': imu_b_missing
             }
 
         # 更新sync_status

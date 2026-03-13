@@ -157,8 +157,11 @@ class StatisticsPanel(QFrame):
             ('created_at', '创建时间'),
             ('emg1_frames', 'EMG1帧数'),
             ('emg2_frames', 'EMG2帧数'),
-            ('imu1_frames', 'IMU1帧数'),
-            ('imu2_frames', 'IMU2帧数'),
+            # 【修改】4个IMU数据集（每设备2个IMU传感器）
+            ('imu1a_frames', 'IMU1A帧数'),
+            ('imu1b_frames', 'IMU1B帧数'),
+            ('imu2a_frames', 'IMU2A帧数'),
+            ('imu2b_frames', 'IMU2B帧数'),
             ('prompts', 'Prompts数'),
             ('duration', '时长'),
         ]
@@ -202,13 +205,18 @@ class StatisticsPanel(QFrame):
         # 数据统计
         emg1_frames = h5file['emg1'].shape[0] if 'emg1' in h5file else 0
         emg2_frames = h5file['emg2'].shape[0] if 'emg2' in h5file else 0
-        imu1_frames = h5file['imu1'].shape[0] if 'imu1' in h5file else 0
-        imu2_frames = h5file['imu2'].shape[0] if 'imu2' in h5file else 0
-        
+        # 【修改】4个IMU数据集（每设备2个IMU传感器）
+        imu1a_frames = h5file['imu1a_ble'].shape[0] if 'imu1a_ble' in h5file else 0
+        imu1b_frames = h5file['imu1b_ble'].shape[0] if 'imu1b_ble' in h5file else 0
+        imu2a_frames = h5file['imu2a_ble'].shape[0] if 'imu2a_ble' in h5file else 0
+        imu2b_frames = h5file['imu2b_ble'].shape[0] if 'imu2b_ble' in h5file else 0
+
         self.labels['emg1_frames'].setText(f'{emg1_frames:,}')
         self.labels['emg2_frames'].setText(f'{emg2_frames:,}')
-        self.labels['imu1_frames'].setText(f'{imu1_frames:,}')
-        self.labels['imu2_frames'].setText(f'{imu2_frames:,}')
+        self.labels['imu1a_frames'].setText(f'{imu1a_frames:,}')
+        self.labels['imu1b_frames'].setText(f'{imu1b_frames:,}')
+        self.labels['imu2a_frames'].setText(f'{imu2a_frames:,}')
+        self.labels['imu2b_frames'].setText(f'{imu2b_frames:,}')
         
         # Prompts
         prompts_count = 0

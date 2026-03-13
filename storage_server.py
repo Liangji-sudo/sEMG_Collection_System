@@ -168,8 +168,10 @@ class HDF5StorageServer:
         self.stats = {
             "emg1_frames": 0,
             "emg2_frames": 0,
-            "imu1_frames": 0,
-            "imu2_frames": 0,
+            "imu1a_frames": 0,
+            "imu1b_frames": 0,
+            "imu2a_frames": 0,
+            "imu2b_frames": 0,
             "mocap_frames": 0,  # 【新增】动捕帧数
             "prompts": 0
         }
@@ -263,6 +265,10 @@ class HDF5StorageServer:
             # 【新增】提取SD卡bin文件名（用于数据溯源）
             sd_bin_dev1 = params.get("sd_bin_dev1")  # 例如 "S001_L_260312_143025"
             sd_bin_dev2 = params.get("sd_bin_dev2")  # 例如 "S001_R_260312_143025"
+
+            # 【新增】提取BLE设备名称（用于追溯数据来源）
+            ble_dev1 = params.get("ble_dev1")  # 例如 "WristBand_3A76"
+            ble_dev2 = params.get("ble_dev2")  # 例如 "WristBand_5B12"
             
             # 保存当前信息
             self.current_task_id = task_id
@@ -326,6 +332,15 @@ class HDF5StorageServer:
             if sd_bin_dev2:
                 self.f.attrs["sd_bin_dev2"] = sd_bin_dev2
                 debug_log(f"   SD卡源文件(设备2/右手): {sd_bin_dev2}_emg.bin, {sd_bin_dev2}_imu.bin")
+
+            # 【新增】保存BLE设备名称到HDF5属性（用于追溯数据来源）
+            # 格式: "WristBand_3A76" -> 扫描时连接的BLE设备名称
+            if ble_dev1:
+                self.f.attrs["ble_device_dev1"] = ble_dev1
+                debug_log(f"   BLE设备(设备1/左手): {ble_dev1}")
+            if ble_dev2:
+                self.f.attrs["ble_device_dev2"] = ble_dev2
+                debug_log(f"   BLE设备(设备2/右手): {ble_dev2}")
             
             # ===================== 创建受试者信息组 =====================
             if subject_info:
@@ -381,38 +396,83 @@ class HDF5StorageServer:
             emg2_2khz_ds.attrs["description"] = "2kHz EMG raw ADC data (synced from SD card bin, empty until sync)"
 
             # ===================== 创建IMU BLE数据集（采集时写入，随BLE包接收，约27.8Hz） =====================
-            imu1_ble_ds = self.f.create_dataset(
-                "imu1_ble", shape=(0,), dtype=IMU_BLE_DTYPE,
+            # 每个设备有2个IMU传感器（a=AD0_LOW/0x68, b=AD0_HIGH/0x69）
+            # 设备1的两个IMU
+            imu1a_ble_ds = self.f.create_dataset(
+                "imu1a_ble", shape=(0,), dtype=IMU_BLE_DTYPE,
                 chunks=(500,), maxshape=(None,), compression="gzip"
             )
-            imu1_ble_ds.attrs["device"] = "device_1"
-            imu1_ble_ds.attrs["sample_rate"] = "~27.8Hz (one per BLE packet)"
-            imu1_ble_ds.attrs["description"] = "IMU data from BLE packets for sync with SD card bin"
+            imu1a_ble_ds.attrs["device"] = "device_1"
+            imu1a_ble_ds.attrs["sensor"] = "IMU_A (AD0_LOW, 0x68)"
+            imu1a_ble_ds.attrs["sample_rate"] = "~27.8Hz (one per BLE packet)"
+            imu1a_ble_ds.attrs["description"] = "IMU-A data from device 1 BLE packets"
 
-            imu2_ble_ds = self.f.create_dataset(
-                "imu2_ble", shape=(0,), dtype=IMU_BLE_DTYPE,
+            imu1b_ble_ds = self.f.create_dataset(
+                "imu1b_ble", shape=(0,), dtype=IMU_BLE_DTYPE,
                 chunks=(500,), maxshape=(None,), compression="gzip"
             )
-            imu2_ble_ds.attrs["device"] = "device_2"
-            imu2_ble_ds.attrs["sample_rate"] = "~27.8Hz (one per BLE packet)"
-            imu2_ble_ds.attrs["description"] = "IMU data from BLE packets for sync with SD card bin"
+            imu1b_ble_ds.attrs["device"] = "device_1"
+            imu1b_ble_ds.attrs["sensor"] = "IMU_B (AD0_HIGH, 0x69)"
+            imu1b_ble_ds.attrs["sample_rate"] = "~27.8Hz (one per BLE packet)"
+            imu1b_ble_ds.attrs["description"] = "IMU-B data from device 1 BLE packets"
+
+            # 设备2的两个IMU
+            imu2a_ble_ds = self.f.create_dataset(
+                "imu2a_ble", shape=(0,), dtype=IMU_BLE_DTYPE,
+                chunks=(500,), maxshape=(None,), compression="gzip"
+            )
+            imu2a_ble_ds.attrs["device"] = "device_2"
+            imu2a_ble_ds.attrs["sensor"] = "IMU_A (AD0_LOW, 0x68)"
+            imu2a_ble_ds.attrs["sample_rate"] = "~27.8Hz (one per BLE packet)"
+            imu2a_ble_ds.attrs["description"] = "IMU-A data from device 2 BLE packets"
+
+            imu2b_ble_ds = self.f.create_dataset(
+                "imu2b_ble", shape=(0,), dtype=IMU_BLE_DTYPE,
+                chunks=(500,), maxshape=(None,), compression="gzip"
+            )
+            imu2b_ble_ds.attrs["device"] = "device_2"
+            imu2b_ble_ds.attrs["sensor"] = "IMU_B (AD0_HIGH, 0x69)"
+            imu2b_ble_ds.attrs["sample_rate"] = "~27.8Hz (one per BLE packet)"
+            imu2b_ble_ds.attrs["description"] = "IMU-B data from device 2 BLE packets"
 
             # ===================== 创建IMU 100Hz数据集（同步后写入，初始为空） =====================
-            imu1_100hz_ds = self.f.create_dataset(
-                "imu1_100hz", shape=(0,), dtype=IMU_100HZ_DTYPE,
+            # 设备1的两个IMU
+            imu1a_100hz_ds = self.f.create_dataset(
+                "imu1a_100hz", shape=(0,), dtype=IMU_100HZ_DTYPE,
                 chunks=(500,), maxshape=(None,), compression="gzip"
             )
-            imu1_100hz_ds.attrs["device"] = "device_1"
-            imu1_100hz_ds.attrs["sample_rate"] = 100
-            imu1_100hz_ds.attrs["description"] = "100Hz IMU data (synced from SD card bin, empty until sync)"
+            imu1a_100hz_ds.attrs["device"] = "device_1"
+            imu1a_100hz_ds.attrs["sensor"] = "IMU_A (AD0_LOW, 0x68)"
+            imu1a_100hz_ds.attrs["sample_rate"] = 100
+            imu1a_100hz_ds.attrs["description"] = "100Hz IMU-A data (synced from SD card bin)"
 
-            imu2_100hz_ds = self.f.create_dataset(
-                "imu2_100hz", shape=(0,), dtype=IMU_100HZ_DTYPE,
+            imu1b_100hz_ds = self.f.create_dataset(
+                "imu1b_100hz", shape=(0,), dtype=IMU_100HZ_DTYPE,
                 chunks=(500,), maxshape=(None,), compression="gzip"
             )
-            imu2_100hz_ds.attrs["device"] = "device_2"
-            imu2_100hz_ds.attrs["sample_rate"] = 100
-            imu2_100hz_ds.attrs["description"] = "100Hz IMU data (synced from SD card bin, empty until sync)"
+            imu1b_100hz_ds.attrs["device"] = "device_1"
+            imu1b_100hz_ds.attrs["sensor"] = "IMU_B (AD0_HIGH, 0x69)"
+            imu1b_100hz_ds.attrs["sample_rate"] = 100
+            imu1b_100hz_ds.attrs["description"] = "100Hz IMU-B data (synced from SD card bin)"
+
+            # 设备2的两个IMU
+            imu2a_100hz_ds = self.f.create_dataset(
+                "imu2a_100hz", shape=(0,), dtype=IMU_100HZ_DTYPE,
+                chunks=(500,), maxshape=(None,), compression="gzip"
+            )
+            imu2a_100hz_ds.attrs["device"] = "device_2"
+            imu2a_100hz_ds.attrs["sensor"] = "IMU_A (AD0_LOW, 0x68)"
+            imu2a_100hz_ds.attrs["sample_rate"] = 100
+            imu2a_100hz_ds.attrs["description"] = "100Hz IMU-A data (synced from SD card bin)"
+
+            imu2b_100hz_ds = self.f.create_dataset(
+                "imu2b_100hz", shape=(0,), dtype=IMU_100HZ_DTYPE,
+                chunks=(500,), maxshape=(None,), compression="gzip"
+            )
+            imu2b_100hz_ds.attrs["device"] = "device_2"
+            imu2b_100hz_ds.attrs["sensor"] = "IMU_B (AD0_HIGH, 0x69)"
+            imu2b_100hz_ds.attrs["sample_rate"] = 100
+            imu2b_100hz_ds.attrs["description"] = "100Hz IMU-B data (synced from SD card bin)"
 
             # ===================== 同步状态标记 =====================
             # pending: 待同步（250Hz数据，需要与SD卡bin同步补全为2kHz）
@@ -447,8 +507,10 @@ class HDF5StorageServer:
             self.stats = {
                 "emg1_frames": 0,
                 "emg2_frames": 0,
-                "imu1_frames": 0,
-                "imu2_frames": 0,
+                "imu1a_frames": 0,
+                "imu1b_frames": 0,
+                "imu2a_frames": 0,
+                "imu2b_frames": 0,
                 "mocap_frames": 0,  # 【新增】
                 "prompts": 0
             }
@@ -492,16 +554,21 @@ class HDF5StorageServer:
                     frame_ids = data.get("emg2_frame_ids")
                     self._append_emg("emg2", data["emg2"], data["emg2_t"], frame_ids)
 
-                # 追加IMU1到BLE数据集
-                if data.get("imu1") and data.get("imu1_t"):
-                    # IMU帧号使用EMG帧号的第一个（同一个BLE包）
+                # 追加IMU1到BLE数据集（设备1的两个IMU：imu1a和imu1b）
+                if data.get("imu1a") and data.get("imu1_t"):
                     frame_id = data.get("emg1_frame_ids", [0])[0] if data.get("emg1_frame_ids") else None
-                    self._append_imu("imu1", data["imu1"], data["imu1_t"], frame_id)
+                    self._append_imu("imu1a", data["imu1a"], data["imu1_t"], frame_id)
+                if data.get("imu1b") and data.get("imu1_t"):
+                    frame_id = data.get("emg1_frame_ids", [0])[0] if data.get("emg1_frame_ids") else None
+                    self._append_imu("imu1b", data["imu1b"], data["imu1_t"], frame_id)
 
-                # 追加IMU2到BLE数据集
-                if data.get("imu2") and data.get("imu2_t"):
+                # 追加IMU2到BLE数据集（设备2的两个IMU：imu2a和imu2b）
+                if data.get("imu2a") and data.get("imu2_t"):
                     frame_id = data.get("emg2_frame_ids", [0])[0] if data.get("emg2_frame_ids") else None
-                    self._append_imu("imu2", data["imu2"], data["imu2_t"], frame_id)
+                    self._append_imu("imu2a", data["imu2a"], data["imu2_t"], frame_id)
+                if data.get("imu2b") and data.get("imu2_t"):
+                    frame_id = data.get("emg2_frame_ids", [0])[0] if data.get("emg2_frame_ids") else None
+                    self._append_imu("imu2b", data["imu2b"], data["imu2_t"], frame_id)
 
                 # 【修改】批量追加MOCAP
                 if data.get("mocap_frames"):
@@ -592,11 +659,11 @@ class HDF5StorageServer:
     def _append_imu(self, dataset_name, imu_data, timestamps, frame_id=None):
         """追加IMU数据到BLE数据集
 
-        采集时只保存到BLE数据集（imu1_ble/imu2_ble），
-        imu1/imu2数据集在同步后由bin_sync_tool填充100Hz数据。
+        采集时只保存到BLE数据集（imu1a_ble/imu1b_ble/imu2a_ble/imu2b_ble），
+        100Hz数据集在同步后由bin_sync_tool填充。
 
         Args:
-            dataset_name: 数据集名称 (imu1 或 imu2)
+            dataset_name: 数据集名称 (imu1a, imu1b, imu2a, imu2b)
             imu_data: IMU数据 {acc, gyr, mag}
             timestamps: 时间戳列表
             frame_id: BLE帧号（用于与SD卡bin文件同步）
@@ -754,8 +821,11 @@ class HDF5StorageServer:
                 self.f.attrs["closed_at"] = datetime.now().isoformat()
                 self.f.attrs["total_emg1_frames"] = self.stats["emg1_frames"]
                 self.f.attrs["total_emg2_frames"] = self.stats["emg2_frames"]
-                self.f.attrs["total_imu1_frames"] = self.stats["imu1_frames"]
-                self.f.attrs["total_imu2_frames"] = self.stats["imu2_frames"]
+                # 4个IMU数据集的统计（每设备2个IMU传感器）
+                self.f.attrs["total_imu1a_frames"] = self.stats["imu1a_frames"]
+                self.f.attrs["total_imu1b_frames"] = self.stats["imu1b_frames"]
+                self.f.attrs["total_imu2a_frames"] = self.stats["imu2a_frames"]
+                self.f.attrs["total_imu2b_frames"] = self.stats["imu2b_frames"]
                 self.f.attrs["total_prompts"] = self.stats["prompts"]
                 
                 self.f.close()
@@ -766,7 +836,8 @@ class HDF5StorageServer:
             rel_path = os.path.relpath(self.file_path, self.storage_dir) if self.file_path else "N/A"
             debug_log(f"✅ 文件已关闭: {rel_path}")
             debug_log(f"📊 统计: EMG1={self.stats['emg1_frames']}, EMG2={self.stats['emg2_frames']}, "
-                     f"IMU1={self.stats['imu1_frames']}, IMU2={self.stats['imu2_frames']}, "
+                     f"IMU1A={self.stats['imu1a_frames']}, IMU1B={self.stats['imu1b_frames']}, "
+                     f"IMU2A={self.stats['imu2a_frames']}, IMU2B={self.stats['imu2b_frames']}, "
                      f"MOCAP={self.stats['mocap_frames']}, Prompts={self.stats['prompts']}")
             
             return {

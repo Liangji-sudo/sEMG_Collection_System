@@ -94,6 +94,8 @@ class RealtimeEngine extends EventEmitter {
 
         // 【新增】SD卡bin文件名（用于HDF5溯源）
         this.sd_filenames = { dev1: null, dev2: null };
+        // 【新增】BLE设备名称（用于HDF5追溯数据来源）
+        this.device_names = { dev1: null, dev2: null };
     }
 
     start(port = 8080) {
@@ -281,15 +283,21 @@ class RealtimeEngine extends EventEmitter {
         // 如果在这里清空，第二次点击采集按钮时 sd_filenames 为空，导致 H5 文件缺少 bin 字段
     }
 
-    // 【新增】处理SD卡文件名更新事件
-    // 此事件由ble_server.py在start_all成功后发送，包含当前实际连接设备的文件名
-    onSdFilenamesUpdated(sd_filenames) {
+    // 【新增】处理SD卡文件名和设备名称更新事件
+    // 此事件由ble_server.py在start_all成功后发送，包含当前实际连接设备的文件名和设备名称
+    onSdFilenamesUpdated(sd_filenames, device_names) {
         // 完全替换，只保存当前实际连接设备的文件名
         this.sd_filenames = {
             dev1: sd_filenames?.dev1 || null,
             dev2: sd_filenames?.dev2 || null
         };
+        // 【新增】保存BLE设备名称
+        this.device_names = {
+            dev1: device_names?.dev1 || null,
+            dev2: device_names?.dev2 || null
+        };
         console.log(`[realtimeEngine] SD卡文件名已更新: dev1=${this.sd_filenames.dev1 || '无'}, dev2=${this.sd_filenames.dev2 || '无'}`);
+        console.log(`[realtimeEngine] BLE设备名称已更新: dev1=${this.device_names.dev1 || '无'}, dev2=${this.device_names.dev2 || '无'}`);
     }
 
     onStageChange(stageIndex, stageName) { this.currentStageName = stageName; }
@@ -468,7 +476,10 @@ class RealtimeEngine extends EventEmitter {
                 start_time: this.stage_start_time,
                 // 【新增】传递SD卡bin文件名，用于HDF5溯源
                 sd_bin_dev1: this.sd_filenames.dev1,  // 例如 "S001_L_260312_143025"
-                sd_bin_dev2: this.sd_filenames.dev2   // 例如 "S001_R_260312_143025"
+                sd_bin_dev2: this.sd_filenames.dev2,  // 例如 "S001_R_260312_143025"
+                // 【新增】传递BLE设备名称，用于追溯数据来源
+                ble_dev1: this.device_names.dev1,  // 例如 "WristBand_3A76"
+                ble_dev2: this.device_names.dev2   // 例如 "WristBand_5B12"
             });
 
             if (response.status === 'success') {
@@ -542,9 +553,9 @@ class RealtimeEngine extends EventEmitter {
                         return;
                     }
                     if (packet.type === 'emg_packet') { this.attributeEMGData(packet); return; }
-                    // 【新增】监听sd_filenames_updated事件
+                    // 【新增】监听sd_filenames_updated事件（包含设备名称）
                     if (packet.type === 'event' && packet.event === 'sd_filenames_updated') {
-                        this.onSdFilenamesUpdated(packet.sd_filenames);
+                        this.onSdFilenamesUpdated(packet.sd_filenames, packet.device_names);
                         return;
                     }
 
@@ -687,7 +698,9 @@ class RealtimeEngine extends EventEmitter {
             let emg1RawData = null, emg2RawData = null;
             let emg1Timestamps = null, emg2Timestamps = null;
             let emg1FrameIds = null, emg2FrameIds = null;  // 【新增】BLE帧号
-            let imu1Data = null, imu2Data = null;
+            // 【修改】每个设备有2个IMU传感器（a和b）
+            let imu1aData = null, imu1bData = null;  // 设备1的两个IMU
+            let imu2aData = null, imu2bData = null;  // 设备2的两个IMU
             let imu1Timestamps = null, imu2Timestamps = null;
             let timestamp = packet.ts;
             let stats1 = null, stats2 = null;
@@ -702,7 +715,9 @@ class RealtimeEngine extends EventEmitter {
                     if (dev1.raw?.length > 0) emg1RawData = this.transposeEMG(dev1.raw);
                     if (dev1.emg_t?.length > 0) emg1Timestamps = dev1.emg_t;
                     if (dev1.frame_ids?.length > 0) emg1FrameIds = dev1.frame_ids;  // 【新增】
-                    if (dev1.imu?.[0]) imu1Data = { acc: dev1.imu[0][0], gyr: dev1.imu[0][1], mag: dev1.imu[0][2] };
+                    // 【修改】提取两个IMU数据：imu[0]=IMU_A, imu[1]=IMU_B
+                    if (dev1.imu?.[0]) imu1aData = { acc: dev1.imu[0][0], gyr: dev1.imu[0][1], mag: dev1.imu[0][2] };
+                    if (dev1.imu?.[1]) imu1bData = { acc: dev1.imu[1][0], gyr: dev1.imu[1][1], mag: dev1.imu[1][2] };
                     if (dev1.imu_t?.length > 0) imu1Timestamps = dev1.imu_t;
                     stats1 = dev1.s ? { total: dev1.s[0], lost: dev1.s[1] } : null;
                     framesInPacket = dev1.n || 9;
@@ -719,7 +734,9 @@ class RealtimeEngine extends EventEmitter {
                     if (dev2.raw?.length > 0) emg2RawData = this.transposeEMG(dev2.raw);
                     if (dev2.emg_t?.length > 0) emg2Timestamps = dev2.emg_t;
                     if (dev2.frame_ids?.length > 0) emg2FrameIds = dev2.frame_ids;  // 【新增】
-                    if (dev2.imu?.[0]) imu2Data = { acc: dev2.imu[0][0], gyr: dev2.imu[0][1], mag: dev2.imu[0][2] };
+                    // 【修改】提取两个IMU数据：imu[0]=IMU_A, imu[1]=IMU_B
+                    if (dev2.imu?.[0]) imu2aData = { acc: dev2.imu[0][0], gyr: dev2.imu[0][1], mag: dev2.imu[0][2] };
+                    if (dev2.imu?.[1]) imu2bData = { acc: dev2.imu[1][0], gyr: dev2.imu[1][1], mag: dev2.imu[1][2] };
                     if (dev2.imu_t?.length > 0) imu2Timestamps = dev2.imu_t;
                     stats2 = dev2.s ? { total: dev2.s[0], lost: dev2.s[1] } : null;
                     this.dev2_packet_count += (dev2.n || 9);
@@ -729,8 +746,10 @@ class RealtimeEngine extends EventEmitter {
             this.emg_packet_count += framesInPacket;
 
             // 【优化】批量发送数据给前端，减少 WebSocket 发送次数
+            // 【修改】前端显示仍使用imu1/imu2（使用IMU_A的数据）
             const dataItem = {
-                emg1: emg1Data, emg2: emg2Data, imu1: imu1Data, imu2: imu2Data,
+                emg1: emg1Data, emg2: emg2Data,
+                imu1: imu1aData, imu2: imu2aData,  // 前端显示使用IMU_A
                 timestamp, packetCount: this.emg_packet_count, framesInPacket,
                 stats1, stats2, activeDevices: packet.active || []
             };
@@ -749,11 +768,13 @@ class RealtimeEngine extends EventEmitter {
             }
 
             // 发送原始 raw 数据给 storage_server 存储
+            // 【修改】存储4个IMU数据（imu1a, imu1b, imu2a, imu2b）
             if (this.isCollecting && !this.collectionPaused && this.stageFileOpen && !this.isClosingStageFile) {
                 this.saveDataToStorage({
                     emg1: emg1RawData, emg2: emg2RawData, emg1_t: emg1Timestamps, emg2_t: emg2Timestamps,
-                    emg1_frame_ids: emg1FrameIds, emg2_frame_ids: emg2FrameIds,  // 【新增】传递帧号
-                    imu1: imu1Data, imu2: imu2Data, imu1_t: imu1Timestamps, imu2_t: imu2Timestamps
+                    emg1_frame_ids: emg1FrameIds, emg2_frame_ids: emg2FrameIds,
+                    imu1a: imu1aData, imu1b: imu1bData, imu1_t: imu1Timestamps,
+                    imu2a: imu2aData, imu2b: imu2bData, imu2_t: imu2Timestamps
                 });
             }
 

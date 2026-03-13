@@ -1227,17 +1227,26 @@ async def start_all(ws):
     if state.dev2.sd_filename:
         sd_filenames['dev2'] = state.dev2.sd_filename  # 例如 "S001_R_260312_143025"
 
+    # 【新增】收集BLE设备名称（用于H5文件追溯数据来源）
+    device_names = {}
+    if state.dev1.name:
+        device_names['dev1'] = state.dev1.name  # 例如 "WristBand_3A76"
+    if state.dev2.name:
+        device_names['dev2'] = state.dev2.name  # 例如 "WristBand_5B12"
+
     await send_to_control(ws, 'start_all', {
         'success': True,
         'started': started,
         'active': state.get_active_devices(),
         'sd_filenames': sd_filenames,  # 【新增】返回bin文件名
+        'device_names': device_names,  # 【新增】返回BLE设备名称
     })
 
-    # 【新增】广播bin文件名事件给数据端（realtimeEngine）
-    if sd_filenames:
+    # 【新增】广播bin文件名和设备名称事件给数据端（realtimeEngine）
+    if sd_filenames or device_names:
         await broadcast_event('sd_filenames_updated', {
             'sd_filenames': sd_filenames,
+            'device_names': device_names,  # 【新增】BLE设备名称
         })
 
 

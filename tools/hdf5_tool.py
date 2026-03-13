@@ -236,14 +236,20 @@ class StatisticsPanel(QFrame):
         self.labels = {}
         stats = [
             ('文件名', '文件名'), ('文件大小', '文件大小'), ('创建时间', '创建时间'),
-            ('sync_status', '同步状态'),  # 新增：同步状态
+            ('sync_status', '同步状态'),  # 同步状态
             ('emg1_250hz', 'EMG1 250Hz'), ('emg1_2khz', 'EMG1 2kHz'),
             ('emg2_250hz', 'EMG2 250Hz'), ('emg2_2khz', 'EMG2 2kHz'),
-            ('imu1_ble', 'IMU1 BLE'), ('imu1_100hz', 'IMU1 100Hz'),
-            ('imu2_ble', 'IMU2 BLE'), ('imu2_100hz', 'IMU2 100Hz'),
+            # 【修改】4个IMU数据集（每设备2个IMU传感器）
+            ('imu1a_ble', 'IMU1A BLE'), ('imu1a_100hz', 'IMU1A 100Hz'),
+            ('imu1b_ble', 'IMU1B BLE'), ('imu1b_100hz', 'IMU1B 100Hz'),
+            ('imu2a_ble', 'IMU2A BLE'), ('imu2a_100hz', 'IMU2A 100Hz'),
+            ('imu2b_ble', 'IMU2B BLE'), ('imu2b_100hz', 'IMU2B 100Hz'),
             ('mocap', 'Mocap'),
-            ('sd_bin_dev1', 'SD Bin(设备1)'),  # 新增：SD卡bin文件名
-            ('sd_bin_dev2', 'SD Bin(设备2)'),  # 新增：SD卡bin文件名
+            ('sd_bin_dev1', 'SD Bin(设备1)'),  # SD卡bin文件名
+            ('sd_bin_dev2', 'SD Bin(设备2)'),  # SD卡bin文件名
+            # 【新增】BLE设备名称
+            ('ble_device_dev1', 'BLE设备(设备1)'),  # BLE设备名称
+            ('ble_device_dev2', 'BLE设备(设备2)'),  # BLE设备名称
         ]
 
         for i, (key, name) in enumerate(stats):
@@ -257,6 +263,8 @@ class StatisticsPanel(QFrame):
                 value_label.setStyleSheet('color: #666;')  # 同步状态初始灰色
             elif key.startswith('sd_bin'):
                 value_label.setStyleSheet('color: #009900;')  # bin文件名绿色
+            elif key.startswith('ble_device'):
+                value_label.setStyleSheet('color: #0066cc; font-weight: bold;')  # BLE设备名蓝色加粗
             else:
                 value_label.setStyleSheet('color: #0066cc;')
             layout.addWidget(name_label, row, col)
@@ -303,9 +311,27 @@ class StatisticsPanel(QFrame):
                 else:
                     self.labels['sd_bin_dev2'].setText('-')
 
+                # 【新增】读取BLE设备名称
+                ble_device_dev1 = f.attrs.get('ble_device_dev1', None)
+                if ble_device_dev1:
+                    if isinstance(ble_device_dev1, bytes):
+                        ble_device_dev1 = ble_device_dev1.decode('utf-8')
+                    self.labels['ble_device_dev1'].setText(ble_device_dev1)
+                else:
+                    self.labels['ble_device_dev1'].setText('-')
+
+                ble_device_dev2 = f.attrs.get('ble_device_dev2', None)
+                if ble_device_dev2:
+                    if isinstance(ble_device_dev2, bytes):
+                        ble_device_dev2 = ble_device_dev2.decode('utf-8')
+                    self.labels['ble_device_dev2'].setText(ble_device_dev2)
+                else:
+                    self.labels['ble_device_dev2'].setText('-')
+
                 # 读取数据集形状
                 for key in ['emg1_250hz', 'emg1_2khz', 'emg2_250hz', 'emg2_2khz',
-                           'imu1_ble', 'imu1_100hz', 'imu2_ble', 'imu2_100hz']:
+                           'imu1a_ble', 'imu1a_100hz', 'imu1b_ble', 'imu1b_100hz',
+                           'imu2a_ble', 'imu2a_100hz', 'imu2b_ble', 'imu2b_100hz']:
                     adc_key = key.replace('hz', 'hz_adc')
                     if adc_key in f:
                         self.labels[key].setText(str(f[adc_key].shape))
@@ -341,7 +367,7 @@ class ViewerTab(QWidget):
 
         # 统计信息面板
         self.stats_panel = StatisticsPanel()
-        self.stats_panel.setMaximumHeight(220)
+        self.stats_panel.setMaximumHeight(280)  # 增加高度以容纳4个IMU数据集
         layout.addWidget(self.stats_panel)
 
         # 主分割器 - 可拖动
@@ -1075,9 +1101,10 @@ class SyncTab(QWidget):
         self.emg1_check.setChecked(True)
         self.emg2_check = QCheckBox("EMG2 (emg2_250hz → emg2_2khz)")
         self.emg2_check.setChecked(True)
-        self.imu1_check = QCheckBox("IMU1 (imu1_ble → imu1_100hz)")
+        # 【修改】每个设备有2个IMU传感器（A和B）
+        self.imu1_check = QCheckBox("IMU1 A+B (imu1a/1b_ble → 100hz)")
         self.imu1_check.setChecked(True)
-        self.imu2_check = QCheckBox("IMU2 (imu2_ble → imu2_100hz)")
+        self.imu2_check = QCheckBox("IMU2 A+B (imu2a/2b_ble → 100hz)")
         self.imu2_check.setChecked(True)
         self.validate_check = QCheckBox("数据校验")
         self.validate_check.setChecked(True)
