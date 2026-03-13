@@ -25,7 +25,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             
             this.stages = [];
             this.currentStageIndex = 0;
-            this.gestures = [];
+            this.allGestures = [];   // 【新增】全局手势库
+            this.gestures = [];      // 当前Stage使用的手势库
             this.currentGestureIndex = 0;
             this.gestureRepeatCount = 0;
             
@@ -184,15 +185,16 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 }
                 console.log('[Collection] Session数量:', this.sessionCount);
 
-                // 【修复】优先从 collectionConfig 中读取手势（包含 gifFile 字段）
-                // 如果 collectionConfig 中没有手势，则从 template 中读取
+                // 【修改】先加载全局手势库作为后备
                 if (this.collectionConfig.gestures?.discrete) {
-                    this.gestures = this.collectionConfig.gestures.discrete.filter(g => g.enabled);
-                    console.log('[Collection] 从 collectionConfig 加载手势，数量:', this.gestures.length);
+                    this.allGestures = this.collectionConfig.gestures.discrete.filter(g => g.enabled);
                 } else {
-                    this.gestures = (template.gestures?.discrete || []).filter(g => g.enabled);
-                    console.log('[Collection] 从 template 加载手势，数量:', this.gestures.length);
+                    this.allGestures = (template.gestures?.discrete || []).filter(g => g.enabled);
                 }
+                console.log('[Collection] 全局手势库数量:', this.allGestures.length);
+
+                // 【新增】根据当前Stage加载对应手势库
+                this.loadGesturesForCurrentStage();
 
                 // 【关键修复】优先从collectionConfig.execution读取执行参数
                 // 这确保了从选择器保存的配置能正确传递
@@ -299,7 +301,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
         loadDefaultConfig() {
             const template = this.getDefaultTemplate();
             this.stages = template.category3;
-            this.gestures = template.gestures.discrete;
+            this.allGestures = template.gestures.discrete;  // 【新增】保存全局手势库
+            this.gestures = [...this.allGestures];          // 【修改】初始使用全局手势库
             this.executionParams = template.execution;
             this.currentExecutionParams = this.executionParams[this.currentTaskId] || this.executionParams.discrete_gesture;
             // 加载默认Session数量
@@ -654,32 +657,64 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
         // ==================== Stage切换 ====================
 
         /**
-         * 【修复】切换Stage时重置动画模块状态
+         * 【修复】切换Stage时重置动画模块状态，并加载该Stage的手势库
          */
         switchStage(stageIndex) {
             if (stageIndex < 0 || stageIndex >= this.stages.length) return;
-            
+
             console.log('[Collection] 切换Stage:', stageIndex, this.stages[stageIndex]?.name);
-            
+
             this.currentStageIndex = stageIndex;
             this.currentGestureIndex = 0;
             this.gestureRepeatCount = 0;
             this.continualTrialCount = 0;
-            
+
+            // 【新增】加载该Stage对应的手势库
+            this.loadGesturesForCurrentStage();
+
             // 【关键修复】重置动画模块的试次计数
             this.resetAnimationModules();
-            
+
             this.updateStageSelect();
             this.updateGestureList();
             this.updateNextStageButton();
             this.resetDisplay();
-            
+
             this.sendToRealtimeEngine('stage_change', {
                 stageIndex: stageIndex,
                 stageName: this.stages[stageIndex]?.name || this.stages[stageIndex]?.id,
                 sessionIndex: this.currentSessionIndex,
                 sessionNumber: this.currentSessionIndex + 1
             });
+        }
+
+        /**
+         * 【新增】加载当前Stage对应的手势库
+         * 如果Stage有配置gestures字段，则只加载该Stage指定的手势
+         * 否则加载全局手势库
+         */
+        loadGesturesForCurrentStage() {
+            const currentStage = this.stages[this.currentStageIndex];
+            const template = this.getLatestTemplate();
+
+            // 获取全局手势库（优先使用已加载的allGestures）
+            const allGestures = this.allGestures ||
+                (template.gestures?.discrete || []).filter(g => g.enabled);
+
+            if (currentStage?.gestures && currentStage.gestures.length > 0) {
+                // Stage有自己的手势配置，根据ID筛选
+                const stageGestureIds = currentStage.gestures;
+                this.gestures = allGestures.filter(g => stageGestureIds.includes(g.id));
+                // 按配置顺序排序
+                this.gestures.sort((a, b) => {
+                    return stageGestureIds.indexOf(a.id) - stageGestureIds.indexOf(b.id);
+                });
+                console.log(`[Collection] Stage "${currentStage.name}" 加载专属手势库: ${this.gestures.length}个`);
+            } else {
+                // Stage没有配置手势，使用全局手势库
+                this.gestures = [...allGestures];
+                console.log(`[Collection] Stage "${currentStage?.name}" 使用全局手势库: ${this.gestures.length}个`);
+            }
         }
 
         goToNextStage() {

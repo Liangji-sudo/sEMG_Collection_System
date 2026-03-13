@@ -276,7 +276,16 @@
                 console.log('[TemplateConfig] 补充缺失的 categoryLabels');
                 this.currentTemplate.categoryLabels = {...DEFAULT_TEMPLATE.categoryLabels};
             }
-            
+
+            // 【新增】确保category3中的每个Stage都有gestures字段
+            if (this.currentTemplate.category3 && Array.isArray(this.currentTemplate.category3)) {
+                this.currentTemplate.category3.forEach(stage => {
+                    if (!stage.gestures) {
+                        stage.gestures = [];  // 空数组表示使用全局手势库
+                    }
+                });
+            }
+
             // 检查并补充 execution（兼容旧版本格式）
             if (!this.currentTemplate.execution) {
                 console.log('[TemplateConfig] 补充缺失的 execution');
@@ -768,24 +777,38 @@
         }
 
         /**
-         * 渲染Stage项（带指导语）
+         * 渲染Stage项（带指导语和手势选择）
          */
         renderStageItem(item, index) {
+            // 获取该Stage已勾选的手势数量
+            const stageGestures = item.gestures || [];
+            // 【修改】只统计已启用的手势数量
+            const allEnabledGestures = (this.currentTemplate.gestures?.discrete || []).filter(g => g.enabled);
+            const enabledGesturesCount = stageGestures.length;
+            // 根据是否配置了手势决定按钮颜色
+            const btnBg = enabledGesturesCount > 0 ? '#1e88e5' : '#e0e0e0';
+            const btnColor = enabledGesturesCount > 0 ? 'white' : '#666';
+
             return `
                 <div class="config-item config-item-stage" data-index="${index}">
                     <div class="config-item-drag">
                         <i class="fa fa-grip-vertical"></i>
                     </div>
                     <label class="config-item-checkbox">
-                        <input type="checkbox" data-category="category3" data-index="${index}" 
+                        <input type="checkbox" data-category="category3" data-index="${index}"
                                data-field="enabled" ${item.enabled ? 'checked' : ''}>
                     </label>
                     <div class="config-item-fields">
-                        <input type="text" class="config-item-input" data-category="category3" 
+                        <input type="text" class="config-item-input" data-category="category3"
                                data-index="${index}" data-field="name" value="${item.name}" placeholder="名称">
-                        <input type="text" class="config-item-input config-item-instruction" data-category="category3" 
+                        <input type="text" class="config-item-input config-item-instruction" data-category="category3"
                                data-index="${index}" data-field="instruction" value="${item.instruction || ''}" placeholder="指导语">
                     </div>
+                    <button class="stage-gestures-btn" data-stage-index="${index}" title="配置该子场景的手势库"
+                            style="display: flex; align-items: center; gap: 4px; padding: 6px 10px; background: ${btnBg}; color: ${btnColor}; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; white-space: nowrap;">
+                        <i class="fa fa-hand-paper"></i>
+                        <span class="gesture-count">${enabledGesturesCount}/${allEnabledGestures.length}</span>
+                    </button>
                     <button class="config-item-delete" data-category="category3" data-index="${index}">
                         <i class="fa fa-trash"></i>
                     </button>
@@ -876,6 +899,19 @@
                 });
             });
 
+            // 【新增】Stage手势配置按钮
+            const stageGesturesBtns = container.querySelectorAll('.stage-gestures-btn');
+            console.log('[TemplateConfig] 找到 stage-gestures-btn 数量:', stageGesturesBtns.length);
+            stageGesturesBtns.forEach(btn => {
+                console.log('[TemplateConfig] 绑定点击事件到按钮:', btn, 'stageIndex:', btn.dataset.stageIndex);
+                btn.addEventListener('click', (e) => {
+                    console.log('[TemplateConfig] stage-gestures-btn 被点击! stageIndex:', e.currentTarget.dataset.stageIndex);
+                    e.stopPropagation();
+                    const stageIndex = parseInt(e.currentTarget.dataset.stageIndex);
+                    this.showStageGesturesDialog(stageIndex);
+                });
+            });
+
             // ========== 手势相关事件 ==========
             
             // 手势卡片点击切换启用状态 - 整个卡片都可以点击
@@ -916,7 +952,7 @@
             if (name && name.trim()) {
                 const trimmedName = name.trim();
                 const icon = await this.showPrompt('请输入手势图标（emoji）：', '✋');
-                
+
                 this.currentTemplate.gestures[gestureType].push({
                     id: trimmedName,  // 使用名称作为id
                     name: trimmedName,
@@ -927,6 +963,165 @@
                 this.renderCategoriesTab();
                 this.showToast('手势已添加', 'success');
             }
+        }
+
+        /**
+         * 【新增】显示Stage手势配置对话框
+         * @param {number} stageIndex - Stage索引
+         */
+        showStageGesturesDialog(stageIndex) {
+            console.log('[TemplateConfig] showStageGesturesDialog 被调用, stageIndex:', stageIndex);
+            console.log('[TemplateConfig] currentTemplate:', this.currentTemplate);
+            console.log('[TemplateConfig] category3:', this.currentTemplate?.category3);
+
+            const stage = this.currentTemplate.category3[stageIndex];
+            console.log('[TemplateConfig] stage:', stage);
+            if (!stage) {
+                console.log('[TemplateConfig] stage为空，退出');
+                return;
+            }
+
+            // 确保stage.gestures存在
+            if (!stage.gestures) {
+                stage.gestures = [];
+            }
+
+            // 【修改】只显示已启用的手势，而不是全部手势
+            const allGestures = (this.currentTemplate.gestures?.discrete || []).filter(g => g.enabled);
+            const stageGestureIds = stage.gestures;
+
+            // 创建对话框 - 注意：不使用 modal-overlay 类，因为该类有 opacity:0 visibility:hidden
+            const overlay = document.createElement('div');
+            overlay.className = 'stage-gestures-modal-overlay';
+            overlay.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10000; display: flex; justify-content: center; align-items: center;';
+
+            const dialog = document.createElement('div');
+            dialog.className = 'stage-gestures-dialog';
+            dialog.style.cssText = 'background: white; border-radius: 12px; max-width: 600px; width: 90%; max-height: 80vh; display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,0.3);';
+
+            dialog.innerHTML = `
+                <div style="padding: 20px 24px; border-bottom: 1px solid #e9ecef; display: flex; justify-content: space-between; align-items: center;">
+                    <h3 style="margin: 0; font-size: 18px; color: #333;">
+                        <i class="fa fa-hand-paper" style="color: #1e88e5; margin-right: 8px;"></i>
+                        配置手势库 - ${stage.name}
+                    </h3>
+                    <button class="close-dialog-btn" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #999; padding: 0; line-height: 1;">&times;</button>
+                </div>
+                <div style="padding: 16px 24px; border-bottom: 1px solid #e9ecef; background: #f8f9fa;">
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                        <button class="select-all-btn" style="padding: 6px 12px; background: #1e88e5; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
+                            <i class="fa fa-check-double"></i> 全选
+                        </button>
+                        <button class="select-none-btn" style="padding: 6px 12px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">
+                            <i class="fa fa-times"></i> 全不选
+                        </button>
+                        <span style="margin-left: auto; color: #666; font-size: 13px; line-height: 32px;">
+                            已选 <span class="selected-count">${stageGestureIds.length}</span>/${allGestures.length} 个手势
+                        </span>
+                    </div>
+                </div>
+                <div class="gestures-grid" style="padding: 20px 24px; overflow-y: auto; flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px;">
+                    ${allGestures.map((gesture, idx) => {
+                        const isSelected = stageGestureIds.includes(gesture.id);
+                        return `
+                            <label class="gesture-select-item" data-gesture-id="${gesture.id}" style="
+                                display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+                                border: 2px solid ${isSelected ? '#1e88e5' : '#e0e0e0'};
+                                background: ${isSelected ? '#e3f2fd' : 'white'};
+                                border-radius: 8px; cursor: pointer; transition: all 0.2s;
+                            ">
+                                <input type="checkbox" data-gesture-id="${gesture.id}" ${isSelected ? 'checked' : ''}
+                                       style="width: 16px; height: 16px; cursor: pointer;">
+                                <span style="font-size: 18px;">${gesture.icon || '✋'}</span>
+                                <span style="flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${gesture.name}</span>
+                            </label>
+                        `;
+                    }).join('')}
+                </div>
+                <div style="padding: 16px 24px; border-top: 1px solid #e9ecef; display: flex; justify-content: flex-end; gap: 10px;">
+                    <button class="cancel-btn" style="padding: 10px 24px; background: #f5f5f5; color: #333; border: 1px solid #ddd; border-radius: 6px; cursor: pointer; font-size: 14px;">取消</button>
+                    <button class="confirm-btn" style="padding: 10px 24px; background: #1e88e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500;">确定</button>
+                </div>
+            `;
+
+            overlay.appendChild(dialog);
+            document.body.appendChild(overlay);
+            console.log('[TemplateConfig] 对话框已添加到DOM, overlay:', overlay);
+
+            // 更新选中计数
+            const updateCount = () => {
+                const count = dialog.querySelectorAll('input[type="checkbox"]:checked').length;
+                dialog.querySelector('.selected-count').textContent = count;
+            };
+
+            // 绑定事件
+            dialog.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                cb.addEventListener('change', (e) => {
+                    const item = e.target.closest('.gesture-select-item');
+                    if (e.target.checked) {
+                        item.style.borderColor = '#1e88e5';
+                        item.style.background = '#e3f2fd';
+                    } else {
+                        item.style.borderColor = '#e0e0e0';
+                        item.style.background = 'white';
+                    }
+                    updateCount();
+                });
+            });
+
+            // 点击整个label也切换checkbox
+            dialog.querySelectorAll('.gesture-select-item').forEach(item => {
+                item.addEventListener('click', (e) => {
+                    if (e.target.tagName !== 'INPUT') {
+                        const cb = item.querySelector('input[type="checkbox"]');
+                        cb.checked = !cb.checked;
+                        cb.dispatchEvent(new Event('change'));
+                    }
+                });
+            });
+
+            // 全选
+            dialog.querySelector('.select-all-btn').addEventListener('click', () => {
+                dialog.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                    cb.checked = true;
+                    cb.dispatchEvent(new Event('change'));
+                });
+            });
+
+            // 全不选
+            dialog.querySelector('.select-none-btn').addEventListener('click', () => {
+                dialog.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                    cb.checked = false;
+                    cb.dispatchEvent(new Event('change'));
+                });
+            });
+
+            // 关闭
+            const closeDialog = () => {
+                overlay.remove();
+            };
+
+            dialog.querySelector('.close-dialog-btn').addEventListener('click', closeDialog);
+            dialog.querySelector('.cancel-btn').addEventListener('click', closeDialog);
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) closeDialog();
+            });
+
+            // 确定
+            dialog.querySelector('.confirm-btn').addEventListener('click', () => {
+                const selectedIds = [];
+                dialog.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => {
+                    selectedIds.push(cb.dataset.gestureId);
+                });
+
+                // 保存到stage
+                this.currentTemplate.category3[stageIndex].gestures = selectedIds;
+                this.isDirty = true;
+
+                closeDialog();
+                this.renderCategoriesTab();
+                this.showToast(`已更新 "${stage.name}" 的手势库 (${selectedIds.length}个)`, 'success');
+            });
         }
 
         /**
@@ -951,6 +1146,7 @@
             if (category === 'category3') {
                 const instruction = await this.showPrompt('请输入指导语（可选）：', '');
                 newItem.instruction = instruction || '';
+                newItem.gestures = [];  // 【新增】初始化空手势列表
             }
             if (category === 'category4') {
                 newItem.description = '';
