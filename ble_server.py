@@ -314,6 +314,9 @@ RETRY_DELAY = 2.0
 # ================= 批量发送配置 =================
 BATCH_INTERVAL = 0.005  # 5ms
 
+# ================= 数据超时检测 =================
+DATA_TIMEOUT = 3.0  # 3秒无数据则认为设备停止发送
+
 # ================= 优先级 =================
 PRIORITY_CONTROL = 0   # 控制命令（最高优先级）
 PRIORITY_HIGH = 1      # 控制响应
@@ -336,6 +339,7 @@ class DeviceState:
     total_frames: int = 0
     lost_frames: int = 0
     last_frame_index: int = -1
+    last_data_time: float = 0.0  # 【新增】最后收到数据的时间戳
     sd_filename: Optional[str] = None  # 【新增】当前采集的SD卡bin文件名前缀
     
     config: Dict = field(default_factory=lambda: DEFAULT_CONFIG.copy())
@@ -560,6 +564,7 @@ def create_notification_handler(dev: DeviceState):
     def handler(sender: int, data: bytearray):
         try:
             ts = time.time()
+            dev.last_data_time = ts  # 【新增】记录最后收到数据的时间
             parsed = parse_packet(data, dev)
             if parsed:
                 parsed['t'] = ts
@@ -602,8 +607,31 @@ def data_sender_thread():
     send_count = 0
     last_log_time = time.time()
 
+    # 【新增】超时警告标记，避免重复打印
+    dev1_timeout_warned = False
+    dev2_timeout_warned = False
+
     while not state.stop_thread:
         try:
+            now = time.time()
+
+            # 【新增】检测数据超时
+            if state.dev1.is_streaming and state.dev1.last_data_time > 0:
+                if now - state.dev1.last_data_time > DATA_TIMEOUT:
+                    if not dev1_timeout_warned:
+                        log(f"[Dev1] ⚠️ 数据超时！已 {now - state.dev1.last_data_time:.1f} 秒未收到数据")
+                        dev1_timeout_warned = True
+                else:
+                    dev1_timeout_warned = False
+
+            if state.dev2.is_streaming and state.dev2.last_data_time > 0:
+                if now - state.dev2.last_data_time > DATA_TIMEOUT:
+                    if not dev2_timeout_warned:
+                        log(f"[Dev2] ⚠️ 数据超时！已 {now - state.dev2.last_data_time:.1f} 秒未收到数据")
+                        dev2_timeout_warned = True
+                else:
+                    dev2_timeout_warned = False
+
             active = state.get_active_devices()
 
             if state.data_clients and active:
