@@ -51,13 +51,54 @@ class SyncWorker(QThread):
     log = pyqtSignal(str)
     finished_signal = pyqtSignal(bool, str)
 
-    def __init__(self, h5_files, emg_bin_path, imu_bin_path, devices, validate_data):
+    def __init__(self, h5_files, bin_dir, devices, validate_data):
         super().__init__()
         self.h5_files = h5_files
-        self.emg_bin_path = emg_bin_path  # 现在是文件路径
-        self.imu_bin_path = imu_bin_path  # 现在是文件路径
+        self.bin_dir = bin_dir  # bin文件所在目录
         self.devices = devices
         self.validate_data = validate_data
+
+    def _find_bin_files(self, h5_path, device_id):
+        """
+        从H5文件属性中读取bin文件前缀，在目录中查找对应的bin文件
+
+        Args:
+            h5_path: H5文件路径
+            device_id: 设备ID (1 或 2)
+
+        Returns:
+            tuple: (emg_bin_path, imu_bin_path) 或 (None, None)
+        """
+        try:
+            with h5py.File(h5_path, 'r') as f:
+                # 读取对应设备的bin文件前缀
+                attr_name = f'sd_bin_dev{device_id}'
+                bin_prefix = f.attrs.get(attr_name, None)
+
+                if bin_prefix is None:
+                    return None, None
+
+                # 处理字节字符串
+                if isinstance(bin_prefix, bytes):
+                    bin_prefix = bin_prefix.decode('utf-8')
+
+                # 构建完整的bin文件路径
+                emg_bin_name = f"{bin_prefix}_emg.bin"
+                imu_bin_name = f"{bin_prefix}_imu.bin"
+
+                emg_bin_path = os.path.join(self.bin_dir, emg_bin_name)
+                imu_bin_path = os.path.join(self.bin_dir, imu_bin_name)
+
+                # 检查文件是否存在
+                emg_exists = os.path.exists(emg_bin_path)
+                imu_exists = os.path.exists(imu_bin_path)
+
+                return (emg_bin_path if emg_exists else None,
+                        imu_bin_path if imu_exists else None)
+
+        except Exception as e:
+            self.log.emit(f"    读取H5属性失败: {str(e)}")
+            return None, None
 
     def run(self):
         if not HAS_SYNC_TOOL:
@@ -84,13 +125,24 @@ class SyncWorker(QThread):
                     try:
                         self.log.emit(f"  设备{device_id}:")
 
-                        # 只在对应设备被勾选时传入bin路径
-                        emg_bin = self.emg_bin_path if (f'emg{device_id}' in self.devices) else None
-                        imu_bin = self.imu_bin_path if (f'imu{device_id}' in self.devices) else None
+                        # 从H5属性中查找对应的bin文件
+                        emg_bin_path, imu_bin_path = self._find_bin_files(h5_file, device_id)
+
+                        # 只在对应设备被勾选时使用bin路径
+                        emg_bin = emg_bin_path if (f'emg{device_id}' in self.devices) else None
+                        imu_bin = imu_bin_path if (f'imu{device_id}' in self.devices) else None
 
                         if not emg_bin:
-                            self.log.emit(f"    - EMG bin未提供，跳过设备{device_id}")
+                            # 检查是因为未勾选还是找不到文件
+                            if f'emg{device_id}' in self.devices:
+                                self.log.emit(f"    ✗ 找不到EMG bin文件 (sd_bin_dev{device_id}属性缺失或文件不存在)")
+                            else:
+                                self.log.emit(f"    - EMG未勾选，跳过")
                             continue
+
+                        self.log.emit(f"    EMG bin: {os.path.basename(emg_bin)}")
+                        if imu_bin:
+                            self.log.emit(f"    IMU bin: {os.path.basename(imu_bin)}")
 
                         result = sync_h5_with_bin(
                             h5_path=h5_file,
@@ -110,7 +162,7 @@ class SyncWorker(QThread):
                                               f"(来自bin:{result['imu_filled']}, "
                                               f"缺失:{result['imu_missing']})")
                             elif result.get('imu_status') == 'skipped':
-                                self.log.emit(f"    - IMU: 未提供bin文件，跳过")
+                                self.log.emit(f"    - IMU: 未找到bin文件，跳过")
                         elif result.get('status') == 'skipped':
                             self.log.emit(f"    - 跳过: {result.get('reason', '已同步')}")
                         else:
@@ -184,11 +236,14 @@ class StatisticsPanel(QFrame):
         self.labels = {}
         stats = [
             ('文件名', '文件名'), ('文件大小', '文件大小'), ('创建时间', '创建时间'),
+            ('sync_status', '同步状态'),  # 新增：同步状态
             ('emg1_250hz', 'EMG1 250Hz'), ('emg1_2khz', 'EMG1 2kHz'),
             ('emg2_250hz', 'EMG2 250Hz'), ('emg2_2khz', 'EMG2 2kHz'),
             ('imu1_250hz', 'IMU1 250Hz'), ('imu1_100hz', 'IMU1 100Hz'),
             ('imu2_250hz', 'IMU2 250Hz'), ('imu2_100hz', 'IMU2 100Hz'),
             ('mocap', 'Mocap'),
+            ('sd_bin_dev1', 'SD Bin(设备1)'),  # 新增：SD卡bin文件名
+            ('sd_bin_dev2', 'SD Bin(设备2)'),  # 新增：SD卡bin文件名
         ]
 
         for i, (key, name) in enumerate(stats):
@@ -197,7 +252,13 @@ class StatisticsPanel(QFrame):
             name_label = QLabel(f'{name}:')
             name_label.setStyleSheet('font-weight: bold; color: #495057;')
             value_label = QLabel('-')
-            value_label.setStyleSheet('color: #0066cc;')
+            # 根据字段类型设置不同颜色
+            if key == 'sync_status':
+                value_label.setStyleSheet('color: #666;')  # 同步状态初始灰色
+            elif key.startswith('sd_bin'):
+                value_label.setStyleSheet('color: #009900;')  # bin文件名绿色
+            else:
+                value_label.setStyleSheet('color: #0066cc;')
             layout.addWidget(name_label, row, col)
             layout.addWidget(value_label, row, col + 1)
             self.labels[key] = value_label
@@ -212,6 +273,37 @@ class StatisticsPanel(QFrame):
             self.labels['创建时间'].setText(time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mtime)))
 
             with h5py.File(file_path, 'r') as f:
+                # 读取同步状态
+                sync_status = f.attrs.get('sync_status', 'unknown')
+                if isinstance(sync_status, bytes):
+                    sync_status = sync_status.decode('utf-8')
+                self.labels['sync_status'].setText(sync_status)
+                # 根据状态设置颜色
+                if sync_status == 'synced':
+                    self.labels['sync_status'].setStyleSheet('color: #009900; font-weight: bold;')  # 绿色
+                elif sync_status == 'pending':
+                    self.labels['sync_status'].setStyleSheet('color: #ff6600; font-weight: bold;')  # 橙色
+                else:
+                    self.labels['sync_status'].setStyleSheet('color: #666;')
+
+                # 读取SD卡bin文件名
+                sd_bin_dev1 = f.attrs.get('sd_bin_dev1', None)
+                if sd_bin_dev1:
+                    if isinstance(sd_bin_dev1, bytes):
+                        sd_bin_dev1 = sd_bin_dev1.decode('utf-8')
+                    self.labels['sd_bin_dev1'].setText(sd_bin_dev1)
+                else:
+                    self.labels['sd_bin_dev1'].setText('-')
+
+                sd_bin_dev2 = f.attrs.get('sd_bin_dev2', None)
+                if sd_bin_dev2:
+                    if isinstance(sd_bin_dev2, bytes):
+                        sd_bin_dev2 = sd_bin_dev2.decode('utf-8')
+                    self.labels['sd_bin_dev2'].setText(sd_bin_dev2)
+                else:
+                    self.labels['sd_bin_dev2'].setText('-')
+
+                # 读取数据集形状
                 for key in ['emg1_250hz', 'emg1_2khz', 'emg2_250hz', 'emg2_2khz',
                            'imu1_250hz', 'imu1_100hz', 'imu2_250hz', 'imu2_100hz']:
                     adc_key = key.replace('hz', 'hz_adc')
@@ -249,7 +341,7 @@ class ViewerTab(QWidget):
 
         # 统计信息面板
         self.stats_panel = StatisticsPanel()
-        self.stats_panel.setMaximumHeight(180)
+        self.stats_panel.setMaximumHeight(220)
         layout.addWidget(self.stats_panel)
 
         # 主分割器 - 可拖动
@@ -851,8 +943,7 @@ class SyncTab(QWidget):
         super().__init__()
         self.h5_files = []
         self.worker = None
-        self.emg_bin_dir = None
-        self.imu_bin_dir = None
+        self.bin_dir = None  # 改为存储bin目录路径
         self.init_ui()
 
     def init_ui(self):
@@ -931,21 +1022,28 @@ class SyncTab(QWidget):
         h5_layout.addWidget(self.h5_count_label)
         left_layout.addWidget(h5_group)
 
-        # Bin文件选择
-        bin_group = QGroupBox("SD卡Bin文件")
+        # Bin目录选择（改为选择目录而非单个文件）
+        bin_group = QGroupBox("SD卡Bin文件目录")
         bin_layout = QVBoxLayout(bin_group)
 
-        # EMG bin文件
-        emg_bin_layout = QHBoxLayout()
-        emg_label = QLabel("EMG文件:")
-        emg_label.setFixedWidth(70)
-        emg_bin_layout.addWidget(emg_label)
-        self.emg_bin_label = QLabel("未选择")
-        self.emg_bin_label.setStyleSheet("color: gray; padding: 5px; background: #f8f9fa; border: 1px solid #ddd;")
-        self.emg_bin_btn = QPushButton("选择...")
-        self.emg_bin_btn.setFixedWidth(70)
-        self.emg_bin_btn.clicked.connect(self.select_emg_bin_dir)
-        self.emg_bin_btn.setStyleSheet("""
+        # 说明文字
+        hint_label = QLabel("同步时将根据H5文件中的sd_bin_dev1/dev2属性自动查找对应的bin文件")
+        hint_label.setWordWrap(True)
+        hint_label.setStyleSheet("color: #666; font-size: 10px; padding: 5px;")
+        bin_layout.addWidget(hint_label)
+
+        # Bin目录选择
+        bin_dir_layout = QHBoxLayout()
+        dir_label = QLabel("Bin目录:")
+        dir_label.setFixedWidth(70)
+        bin_dir_layout.addWidget(dir_label)
+        self.bin_dir_label = QLabel("未选择")
+        self.bin_dir_label.setStyleSheet("color: gray; padding: 5px; background: #f8f9fa; border: 1px solid #ddd;")
+        self.bin_dir_label.setWordWrap(True)
+        self.bin_dir_btn = QPushButton("选择目录...")
+        self.bin_dir_btn.setFixedWidth(90)
+        self.bin_dir_btn.clicked.connect(self.select_bin_dir)
+        self.bin_dir_btn.setStyleSheet("""
             QPushButton {
                 padding: 6px 12px;
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -963,41 +1061,9 @@ class SyncTab(QWidget):
                 background: #1565c0;
             }
         """)
-        emg_bin_layout.addWidget(self.emg_bin_label, 1)
-        emg_bin_layout.addWidget(self.emg_bin_btn)
-        bin_layout.addLayout(emg_bin_layout)
-
-        # IMU bin文件
-        imu_bin_layout = QHBoxLayout()
-        imu_label = QLabel("IMU文件:")
-        imu_label.setFixedWidth(70)
-        imu_bin_layout.addWidget(imu_label)
-        self.imu_bin_label = QLabel("未选择")
-        self.imu_bin_label.setStyleSheet("color: gray; padding: 5px; background: #f8f9fa; border: 1px solid #ddd;")
-        self.imu_bin_btn = QPushButton("选择...")
-        self.imu_bin_btn.setFixedWidth(70)
-        self.imu_bin_btn.clicked.connect(self.select_imu_bin_dir)
-        self.imu_bin_btn.setStyleSheet("""
-            QPushButton {
-                padding: 6px 12px;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #ab47bc, stop:1 #8e24aa);
-                color: white;
-                border: none;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #ba68c8, stop:1 #ab47bc);
-            }
-            QPushButton:pressed {
-                background: #7b1fa2;
-            }
-        """)
-        imu_bin_layout.addWidget(self.imu_bin_label, 1)
-        imu_bin_layout.addWidget(self.imu_bin_btn)
-        bin_layout.addLayout(imu_bin_layout)
+        bin_dir_layout.addWidget(self.bin_dir_label, 1)
+        bin_dir_layout.addWidget(self.bin_dir_btn)
+        bin_layout.addLayout(bin_dir_layout)
 
         left_layout.addWidget(bin_group)
 
@@ -1146,32 +1212,33 @@ class SyncTab(QWidget):
         self.h5_list.clear()
         self.h5_count_label.setText("共 0 个文件")
 
-    def select_emg_bin_dir(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "选择EMG Bin文件", "", "Binary Files (*emg*.bin *.bin);;All Files (*)"
+    def select_bin_dir(self):
+        """选择bin文件所在目录"""
+        dir_path = QFileDialog.getExistingDirectory(
+            self, "选择Bin文件所在目录"
         )
-        if file_path:
-            self.emg_bin_dir = file_path
-            self.emg_bin_label.setText(os.path.basename(file_path))
-            self.emg_bin_label.setStyleSheet("color: #009900; padding: 5px; background: #f0fff0; border: 1px solid #90EE90;")
-            self.emg_bin_label.setToolTip(file_path)
+        if dir_path:
+            self.bin_dir = dir_path
+            # 显示目录名（如果路径太长则截断）
+            display_path = dir_path
+            if len(display_path) > 50:
+                display_path = "..." + display_path[-47:]
+            self.bin_dir_label.setText(display_path)
+            self.bin_dir_label.setStyleSheet("color: #009900; padding: 5px; background: #f0fff0; border: 1px solid #90EE90;")
+            self.bin_dir_label.setToolTip(dir_path)
 
-    def select_imu_bin_dir(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "选择IMU Bin文件", "", "Binary Files (*imu*.bin *.bin);;All Files (*)"
-        )
-        if file_path:
-            self.imu_bin_dir = file_path
-            self.imu_bin_label.setText(os.path.basename(file_path))
-            self.imu_bin_label.setStyleSheet("color: #cc6600; padding: 5px; background: #fff8f0; border: 1px solid #ffcc99;")
-            self.imu_bin_label.setToolTip(file_path)
+            # 统计目录中的bin文件数量
+            emg_count = len([f for f in os.listdir(dir_path) if f.endswith('_emg.bin')])
+            imu_count = len([f for f in os.listdir(dir_path) if f.endswith('_imu.bin')])
+            self.log_text.append(f"已选择目录: {dir_path}")
+            self.log_text.append(f"  找到 {emg_count} 个EMG bin文件, {imu_count} 个IMU bin文件")
 
     def start_sync(self):
         if not self.h5_files:
             QMessageBox.warning(self, "警告", "请先添加H5文件")
             return
-        if not self.emg_bin_dir:
-            QMessageBox.warning(self, "警告", "请选择EMG Bin文件（同步必须）")
+        if not self.bin_dir:
+            QMessageBox.warning(self, "警告", "请选择Bin文件所在目录")
             return
 
         devices = []
@@ -1188,10 +1255,10 @@ class SyncTab(QWidget):
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self.log_text.append("=" * 50)
-        self.log_text.append("开始同步...")
+        self.log_text.append(f"开始同步... (bin目录: {self.bin_dir})")
 
         self.worker = SyncWorker(
-            self.h5_files, self.emg_bin_dir, self.imu_bin_dir,
+            self.h5_files, self.bin_dir,
             devices, self.validate_check.isChecked()
         )
         self.worker.progress.connect(self.on_progress)
