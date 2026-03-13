@@ -219,21 +219,27 @@ class HDF5StorageServer:
         
         return dir_path
     
-    def generate_filename(self, dir_path, user_id, stage_name, session_number):
+    def generate_filename(self, dir_path, user_id, stage_name, session_number, category2=None):
         """
-        生成文件名: {user_id}_session{N}_{stage_name}_{YYYYMMDD}_{HHMMSS}.h5
-        例如: S001_session2_palm_up_20260105_143000.h5
+        生成文件名: {user_id}_session{N}_{category2}_{stage_name}_{YYYYMMDD}_{HHMMSS}.h5
+        例如: S001_session2_坐姿_palm_up_20260105_143000.h5
+
+        【修改】在 session 和 stage 之间增加大场景(category2)
         """
         now = datetime.now()
         date_str = now.strftime("%Y%m%d")
         time_str = now.strftime("%H%M%S")
-        
-        # 清理用户ID和stage名称
+
+        # 清理用户ID、category2和stage名称
         safe_user_id = self._sanitize_name(user_id)
         safe_stage_name = self._sanitize_name(stage_name)
-        
-        # 文件名包含: 受试者编号_session{N}_stage_日期_时间
-        filename = f"{safe_user_id}_session{session_number}_{safe_stage_name}_{date_str}_{time_str}.h5"
+
+        # 文件名包含: 受试者编号_session{N}_大场景_stage_日期_时间
+        if category2:
+            safe_category2 = self._sanitize_name(category2)
+            filename = f"{safe_user_id}_session{session_number}_{safe_category2}_{safe_stage_name}_{date_str}_{time_str}.h5"
+        else:
+            filename = f"{safe_user_id}_session{session_number}_{safe_stage_name}_{date_str}_{time_str}.h5"
         return os.path.join(dir_path, filename)
     
     def create_file(self, params):
@@ -281,8 +287,8 @@ class HDF5StorageServer:
             # 生成多级目录路径（包含user_id层级）
             dir_path = self.generate_directory_path(task_id, category1, category2, category4, user_id)
             
-            # 生成文件名（包含session_number和stage_name）
-            self.file_path = self.generate_filename(dir_path, user_id, stage_name, session_number)
+            # 生成文件名（包含session_number、category2和stage_name）
+            self.file_path = self.generate_filename(dir_path, user_id, stage_name, session_number, category2)
             
             # 如果文件已存在，添加序号
             base_path = self.file_path
