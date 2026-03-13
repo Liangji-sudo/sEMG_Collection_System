@@ -121,9 +121,17 @@ class HDF5StorageServer:
     def __init__(self, host="127.0.0.1", port=5555, storage_dir="./storage"):
         # ZeroMQ配置
         self.context = zmq.Context()
+
+        # REP socket 用于控制命令（create/close/stats等）
         self.socket = self.context.socket(zmq.REP)
         self.socket.bind(f"tcp://{host}:{port}")
-        debug_log(f"HDF5存储服务已启动，监听 {host}:{port}")
+        debug_log(f"HDF5存储服务已启动，控制端口 {host}:{port}")
+
+        # 【新增】PULL socket 用于数据接收（append命令，非阻塞）
+        self.data_port = port + 1  # 5556
+        self.data_socket = self.context.socket(zmq.PULL)
+        self.data_socket.bind(f"tcp://{host}:{self.data_port}")
+        debug_log(f"数据接收端口: {host}:{self.data_port} (PULL模式，非阻塞)")
         
         # 存储根目录
         self.storage_dir = os.path.abspath(storage_dir)
@@ -819,46 +827,71 @@ class HDF5StorageServer:
     
     def run(self):
         """启动服务，循环处理客户端请求"""
-        debug_log("🚀 存储服务开始运行 (v4.2 - 包含Session信息)...")
+        debug_log("🚀 存储服务开始运行 (v4.3 - PUSH/PULL优化版)...")
+        debug_log(f"   控制端口: 5555 (REP模式，用于create/close/stats)")
+        debug_log(f"   数据端口: 5556 (PULL模式，用于append数据)")
         debug_log(f"   目录结构: task/category1/category2/category4/user_id/")
         debug_log(f"   文件命名: [user_id]_session{{N}}_[stage]_[date]_[time].h5")
-        
+
+        # 使用 poller 同时监听两个 socket
+        poller = zmq.Poller()
+        poller.register(self.socket, zmq.POLLIN)        # REP socket (控制命令)
+        poller.register(self.data_socket, zmq.POLLIN)   # PULL socket (数据)
+
         try:
             while True:
-                # 接收请求
-                request = self.socket.recv_json()
-                
-                cmd = request.get("cmd")
-                params = request.get("params", {})
-                
-                # 处理命令
-                if cmd == "create":
-                    response = self.create_file(params)
-                elif cmd == "append":
-                    response = self.append_data(params)
-                elif cmd == "close":
-                    response = self.close_file()
-                elif cmd == "stats":
-                    response = {"status": "success", "data": self.get_stats()}
-                elif cmd == "flush":
-                    self.flush()
-                    response = {"status": "success", "msg": "数据已刷盘"}
-                elif cmd == "tree":
-                    response = {"status": "success", "data": self.get_directory_tree()}
-                else:
-                    response = {
-                        "status": "error",
-                        "msg": f"未知指令：{cmd}，支持的指令：create/append/close/stats/flush/tree"
-                    }
-                
-                # 发送响应
-                self.socket.send_json(response)
-                
+                # 等待事件，超时100ms
+                socks = dict(poller.poll(100))
+
+                # 处理控制命令 (REP socket)
+                if self.socket in socks:
+                    request = self.socket.recv_json()
+
+                    cmd = request.get("cmd")
+                    params = request.get("params", {})
+
+                    # 处理命令
+                    if cmd == "create":
+                        response = self.create_file(params)
+                    elif cmd == "append":
+                        # 兼容旧版：REP socket 也支持 append
+                        response = self.append_data(params)
+                    elif cmd == "close":
+                        response = self.close_file()
+                    elif cmd == "stats":
+                        response = {"status": "success", "data": self.get_stats()}
+                    elif cmd == "flush":
+                        self.flush()
+                        response = {"status": "success", "msg": "数据已刷盘"}
+                    elif cmd == "tree":
+                        response = {"status": "success", "data": self.get_directory_tree()}
+                    else:
+                        response = {
+                            "status": "error",
+                            "msg": f"未知指令：{cmd}，支持的指令：create/append/close/stats/flush/tree"
+                        }
+
+                    # 发送响应
+                    self.socket.send_json(response)
+
+                # 处理数据 (PULL socket) - 非阻塞，不需要响应
+                if self.data_socket in socks:
+                    try:
+                        request = self.data_socket.recv_json(zmq.NOBLOCK)
+                        cmd = request.get("cmd")
+                        if cmd == "append":
+                            params = request.get("params", {})
+                            self.append_data(params)
+                            # PULL 模式不需要响应
+                    except zmq.Again:
+                        pass  # 没有数据，继续
+
         except KeyboardInterrupt:
             debug_log("\n⚠️ 服务正在关闭...")
         finally:
             self.close_file()
             self.socket.close()
+            self.data_socket.close()
             self.context.term()
             debug_log("✅ 服务已关闭")
 

@@ -121,10 +121,19 @@
         handleMessage(rawData) {
             try {
                 const packet = JSON.parse(rawData);
-                
+
                 // 处理连接确认消息
                 if (packet.type === 'connection_established') {
                     console.log('[Waveform] 收到连接确认:', packet.message);
+                    return;
+                }
+
+                // 【优化】处理批量实时数据包
+                if (packet.type === 'realtime_data_batch') {
+                    // 批量渲染所有数据
+                    for (const data of packet.batch) {
+                        this.renderRealtimeData(data);
+                    }
                     return;
                 }
 

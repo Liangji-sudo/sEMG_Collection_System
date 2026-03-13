@@ -53,11 +53,20 @@ class RealtimeEngine extends EventEmitter {
         this.dev2_packet_count = 0;
         this.mocap_packet_count = 0;
 
+        // 【优化】批量发送缓冲区
+        this.realtimeDataBuffer = [];
+        this.realtimeDataBufferLimit = 3;  // 每3个数据包发送一次（约100ms间隔）
+        this.realtimeDataTimer = null;
+        this.realtimeDataMaxDelay = 50;    // 最大延迟50ms
+
         // Storage Server
-        this.storage_server_socket = new zmq.Request();
+        this.storage_server_socket = new zmq.Request();  // REP socket 用于控制命令
+        this.storage_push_socket = new zmq.Push();       // 【新增】PUSH socket 用于数据发送
         this.storage_server_host = '127.0.0.1';
         this.storage_server_port = 5555;
+        this.storage_data_port = 5556;                   // 【新增】数据端口
         this.storage_connected = false;
+        this.storage_push_connected = false;             // 【新增】PUSH连接状态
         this.storageRequestQueue = [];
         this.isStorageRequestPending = false;
 
@@ -701,15 +710,25 @@ class RealtimeEngine extends EventEmitter {
 
             this.emg_packet_count += framesInPacket;
 
-            // 发送滤波后的 uv 数据给前端显示
-            this.broadcastToClients({
-                type: 'realtime_data',
-                data: {
-                    emg1: emg1Data, emg2: emg2Data, imu1: imu1Data, imu2: imu2Data,
-                    timestamp, packetCount: this.emg_packet_count, framesInPacket,
-                    stats1, stats2, activeDevices: packet.active || []
-                }
-            });
+            // 【优化】批量发送数据给前端，减少 WebSocket 发送次数
+            const dataItem = {
+                emg1: emg1Data, emg2: emg2Data, imu1: imu1Data, imu2: imu2Data,
+                timestamp, packetCount: this.emg_packet_count, framesInPacket,
+                stats1, stats2, activeDevices: packet.active || []
+            };
+            this.realtimeDataBuffer.push(dataItem);
+
+            // 设置定时器，确保数据不会延迟太久
+            if (!this.realtimeDataTimer) {
+                this.realtimeDataTimer = setTimeout(() => {
+                    this.flushRealtimeDataBuffer();
+                }, this.realtimeDataMaxDelay);
+            }
+
+            // 达到缓冲区限制时立即发送
+            if (this.realtimeDataBuffer.length >= this.realtimeDataBufferLimit) {
+                this.flushRealtimeDataBuffer();
+            }
 
             // 发送原始 raw 数据给 storage_server 存储
             if (this.isCollecting && !this.collectionPaused && this.stageFileOpen && !this.isClosingStageFile) {
@@ -723,6 +742,24 @@ class RealtimeEngine extends EventEmitter {
         } catch (error) {
             console.error('[realtimeEngine] 处理BLE数据包错误:', error);
         }
+    }
+
+    // 【新增】批量发送缓冲区数据给前端
+    flushRealtimeDataBuffer() {
+        if (this.realtimeDataTimer) {
+            clearTimeout(this.realtimeDataTimer);
+            this.realtimeDataTimer = null;
+        }
+
+        if (this.realtimeDataBuffer.length === 0) return;
+
+        // 批量发送所有缓冲的数据
+        this.broadcastToClients({
+            type: 'realtime_data_batch',
+            batch: this.realtimeDataBuffer
+        });
+
+        this.realtimeDataBuffer = [];
     }
 
     transposeEMG(uvData) {
@@ -742,12 +779,21 @@ class RealtimeEngine extends EventEmitter {
 
     async storage_server_connect() {
         try {
+            // 连接 REP socket（用于控制命令）
             const address = `tcp://${this.storage_server_host}:${this.storage_server_port}`;
             await this.storage_server_socket.connect(address);
             this.storage_connected = true;
-            console.log(`[realtimeEngine] 已连接到storage_server: ${address}`);
+            console.log(`[realtimeEngine] 已连接到storage_server控制端: ${address}`);
+
+            // 【新增】连接 PUSH socket（用于数据发送）
+            const dataAddress = `tcp://${this.storage_server_host}:${this.storage_data_port}`;
+            await this.storage_push_socket.connect(dataAddress);
+            this.storage_push_connected = true;
+            console.log(`[realtimeEngine] 已连接到storage_server数据端: ${dataAddress} (PUSH模式)`);
         } catch (err) {
             this.storage_connected = false;
+            this.storage_push_connected = false;
+            console.error('[realtimeEngine] 连接storage_server失败:', err);
         }
     }
 
@@ -783,10 +829,17 @@ class RealtimeEngine extends EventEmitter {
         if (this.isClosingStageFile || !this.stageFileOpen) return;
 
         try {
-            // 【修复】移除 pending_prompt 处理，prompt 现在在 onPrompt() 中直接保存
-            // 不再通过 EMG 数据附带保存，避免重复
-            await this.sendStorageCommand('append', { data: sensorData });
-        } catch (error) {}
+            // 【优化】使用 PUSH socket 发送数据，非阻塞，不等待响应
+            if (this.storage_push_connected) {
+                const request = JSON.stringify({ cmd: 'append', params: { data: sensorData } });
+                await this.storage_push_socket.send(request);
+            } else {
+                // 回退到 REP socket（如果 PUSH 未连接）
+                await this.sendStorageCommand('append', { data: sensorData });
+            }
+        } catch (error) {
+            // 静默失败，不阻塞主流程
+        }
     }
 
     async attributeEMGData(emgData) {
@@ -850,6 +903,12 @@ class RealtimeEngine extends EventEmitter {
 
             if (this.ble_client) { this.ble_client.close(1000); this.ble_client = null; }
             if (this.mocap_client) { this.mocap_client.close(1000); this.mocap_client = null; }
+
+            // 【新增】关闭 ZMQ sockets
+            try {
+                if (this.storage_push_socket) { this.storage_push_socket.close(); }
+                if (this.storage_server_socket) { this.storage_server_socket.close(); }
+            } catch (e) {}
 
             clearTimeout(this.reconnectTimer);
             clearTimeout(this.mocap_reconnectTimer);
