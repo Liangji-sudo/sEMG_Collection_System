@@ -95,6 +95,13 @@ class DataStorage extends EventEmitter {
         });
     }
 
+    // 获取状态
+    getStatus() {
+        return {
+            isRunning: this.pythonProcess !== null
+        };
+    }
+
 }
 
 // 创建单例实例

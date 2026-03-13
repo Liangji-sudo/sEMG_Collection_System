@@ -5231,19 +5231,48 @@
         let sdkConnected = false;
         let ws = null;
         const wsUrl = 'ws://localhost:8080';
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 10;
+        let isReconnecting = false;
 
         // DOM元素（延迟获取）
         let toggleBtn, btnText, statusBadge, infoText;
 
         // 连接WebSocket
         function connectWs() {
-            if (ws && ws.readyState === WebSocket.OPEN) return;
+            // 【修复】检查是否已连接或正在连接
+            if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+                console.log('[MocapControl] WebSocket已连接或正在连接，跳过');
+                return;
+            }
+
+            // 【修复】如果正在重连中，跳过
+            if (isReconnecting) {
+                console.log('[MocapControl] 正在重连中，跳过');
+                return;
+            }
+
+            // 【修复】清理旧连接
+            if (ws) {
+                ws.onopen = null;
+                ws.onclose = null;
+                ws.onerror = null;
+                ws.onmessage = null;
+                ws = null;
+            }
 
             try {
+                console.log(`[MocapControl] 正在连接 ${wsUrl}... (尝试 ${reconnectAttempts + 1}/${maxReconnectAttempts})`);
                 ws = new WebSocket(wsUrl);
 
                 ws.onopen = () => {
-                    console.log('[MocapControl] WebSocket已连接');
+                    console.log('[MocapControl] ✓ WebSocket已连接');
+                    reconnectAttempts = 0;  // 【修复】重置重连计数
+                    isReconnecting = false;
+
+                    // 【新增】自报身份
+                    ws.send(JSON.stringify({ type: 'client_identify', clientName: 'MocapControl' }));
+
                     // 获取当前SDK状态
                     ws.send(JSON.stringify({ type: 'control_command', action: 'mocap_sdk_get_status', data: {} }));
                 };
@@ -5261,17 +5290,35 @@
                     }
                 };
 
-                ws.onclose = () => {
-                    console.log('[MocapControl] WebSocket断开，3秒后重连');
-                    setTimeout(connectWs, 3000);
+                ws.onclose = (event) => {
+                    console.log(`[MocapControl] WebSocket断开 (code: ${event.code})`);
+                    ws = null;  // 【修复】清理引用
+                    // 【修复】只在非主动关闭且未达到最大重连次数时重连
+                    if (event.code !== 1000 && reconnectAttempts < maxReconnectAttempts) {
+                        reconnectAttempts++;
+                        isReconnecting = true;
+                        console.log(`[MocapControl] ${3}秒后重连 (${reconnectAttempts}/${maxReconnectAttempts})`);
+                        setTimeout(() => {
+                            isReconnecting = false;
+                            connectWs();
+                        }, 3000);
+                    }
                 };
 
                 ws.onerror = (e) => {
-                    console.error('[MocapControl] WebSocket错误:', e);
+                    console.error('[MocapControl] WebSocket错误');
                 };
             } catch (e) {
                 console.error('[MocapControl] 创建WebSocket失败:', e);
-                setTimeout(connectWs, 3000);
+                // 【修复】创建失败也要检查重连次数
+                if (reconnectAttempts < maxReconnectAttempts) {
+                    reconnectAttempts++;
+                    isReconnecting = true;
+                    setTimeout(() => {
+                        isReconnecting = false;
+                        connectWs();
+                    }, 3000);
+                }
             }
         }
 
@@ -5326,6 +5373,15 @@
             // 连接WebSocket
             connectWs();
         }
+
+        // 【新增】页面刷新/关闭前主动断开WebSocket连接
+        window.addEventListener('beforeunload', () => {
+            if (ws) {
+                ws.onclose = null;  // 防止触发重连
+                ws.close(1000, '页面关闭');
+                ws = null;
+            }
+        });
 
         // 等待DOM加载完成
         if (document.readyState === 'loading') {

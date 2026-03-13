@@ -599,29 +599,31 @@ def create_notification_handler(dev: DeviceState):
 def data_sender_thread():
     """数据发送线程 - 发送到数据端"""
     log("数据发送线程启动")
-    
+    send_count = 0
+    last_log_time = time.time()
+
     while not state.stop_thread:
         try:
             active = state.get_active_devices()
-            
+
             if state.data_clients and active:
                 dev1_data = None
                 dev2_data = None
-                
+
                 if state.dev1.is_streaming and state.dev1.data_buffer:
                     batch1 = []
                     while state.dev1.data_buffer and len(batch1) < 5:
                         batch1.append(state.dev1.data_buffer.popleft())
                     if batch1:
                         dev1_data = batch1 if len(batch1) > 1 else batch1[0]
-                
+
                 if state.dev2.is_streaming and state.dev2.data_buffer:
                     batch2 = []
                     while state.dev2.data_buffer and len(batch2) < 5:
                         batch2.append(state.dev2.data_buffer.popleft())
                     if batch2:
                         dev2_data = batch2 if len(batch2) > 1 else batch2[0]
-                
+
                 if dev1_data is not None or dev2_data is not None:
                     msg = {
                         'type': 'data',
@@ -631,7 +633,16 @@ def data_sender_thread():
                         'active': active,
                     }
                     add_to_queue(PRIORITY_LOW, 'data', msg)
-            
+                    send_count += 1
+
+            # 每5秒打印一次发送统计
+            now = time.time()
+            if now - last_log_time >= 5.0:
+                if send_count > 0 or active:
+                    log(f"[数据发送] 已发送 {send_count} 批数据, 数据端客户端: {len(state.data_clients)}, 活跃设备: {active}")
+                last_log_time = now
+                send_count = 0
+
             time.sleep(BATCH_INTERVAL)
             
         except Exception as e:
@@ -1196,25 +1207,29 @@ async def handle_control_client(websocket):
     """处理控制端客户端（index.html）"""
     state.control_clients.add(websocket)
     log(f"[控制端] 客户端已连接 (总数: {len(state.control_clients)})")
-    
-    # 发送当前状态
-    await send_to_control(websocket, 'welcome', {
-        'message': '控制端已连接',
-        'dev1': state.dev1.to_dict(),
-        'dev2': state.dev2.to_dict(),
-        'connected': state.get_connected_devices(),
-        'active': state.get_active_devices(),
-    })
-    
+
+    try:
+        # 发送当前状态
+        await send_to_control(websocket, 'welcome', {
+            'message': '控制端已连接',
+            'dev1': state.dev1.to_dict(),
+            'dev2': state.dev2.to_dict(),
+            'connected': state.get_connected_devices(),
+            'active': state.get_active_devices(),
+        })
+    except Exception:
+        # 发送欢迎消息失败，连接可能已断开
+        state.control_clients.discard(websocket)
+        return
+
     try:
         async for message in websocket:
             try:
                 if isinstance(message, bytes):
                     data = msgpack.unpackb(message)
                 else:
-                    import json
                     data = json.loads(message)
-                
+
                 action = data.get('action', '')
                 # 不打印 status 命令，减少日志噪音
                 if action != 'status':
@@ -1330,7 +1345,7 @@ async def handle_data_client(websocket):
     """处理数据端客户端（realtimeEngine.js）"""
     state.data_clients.add(websocket)
     log(f"[数据端] 客户端已连接 (总数: {len(state.data_clients)})")
-    
+
     # 发送欢迎消息
     welcome = {
         'type': 'welcome',
@@ -1339,11 +1354,13 @@ async def handle_data_client(websocket):
         'connected': state.get_connected_devices(),
     }
     try:
-        #await websocket.send(msgpack.packb(welcome))
         await websocket.send(json.dumps(welcome, ensure_ascii=False))
-    except:
-        pass
-    
+    except Exception as e:
+        # 发送失败，连接可能已断开
+        log(f"[数据端] 发送欢迎消息失败: {e}")
+        state.data_clients.discard(websocket)
+        return
+
     try:
         # 数据端主要是接收数据，但也可以接收简单命令
         async for message in websocket:
@@ -1351,9 +1368,8 @@ async def handle_data_client(websocket):
                 if isinstance(message, bytes):
                     data = msgpack.unpackb(message)
                 else:
-                    import json
                     data = json.loads(message)
-                
+
                 action = data.get('action', '')
                 
                 # 数据端只支持状态查询
@@ -1430,23 +1446,30 @@ async def main():
     log("  start1/2, stop1/2, start_all, stop_all")
     log("  status")
     log("=" * 60)
-    
+
     try:
+        # 创建一个静默的logger来抑制握手失败的错误日志
+        import logging
+        ws_logger = logging.getLogger('websockets')
+        ws_logger.setLevel(logging.ERROR)  # 只显示ERROR级别，过滤掉握手失败的WARNING
+
         # 启动两个 WebSocket 服务器
         control_server = await websockets.serve(
             handle_control_client,
             WEBSOCKET_HOST,
             CONTROL_PORT,
             max_size=1 * 1024 * 1024,
+            logger=ws_logger,
         )
-        
+
         data_server = await websockets.serve(
             handle_data_client,
             WEBSOCKET_HOST,
             DATA_PORT,
             max_size=10 * 1024 * 1024,
+            logger=ws_logger,
         )
-        
+
         log("服务器启动完成，等待连接...")
 
         # 启动心跳任务

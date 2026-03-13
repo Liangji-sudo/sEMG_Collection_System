@@ -127,6 +127,12 @@
                     this.isConnected = true;
                     this._reconnectAttempts = 0;  // 重置重连计数
                     clearTimeout(this.reconnectTimer);
+
+                    // 【新增】自报身份
+                    this.ws.send(JSON.stringify({
+                        type: 'client_identify',
+                        clientName: 'AnimationInput'
+                    }));
                 };
 
                 this.ws.onmessage = (event) => {
@@ -528,12 +534,19 @@
     }
 
     // ==================== 创建全局实例 ====================
-    
+
     const animationInputInterface = new AnimationInputInterface();
     animationInputInterface.init();
-    
+
     window.animationInputInterface = animationInputInterface;
-    
+
+    // 【新增】页面刷新/关闭前主动断开WebSocket连接
+    window.addEventListener('beforeunload', () => {
+        if (animationInputInterface) {
+            animationInputInterface.destroy();
+        }
+    });
+
     console.log('[AnimationInputInterface] 模块加载完成');
 
 })();

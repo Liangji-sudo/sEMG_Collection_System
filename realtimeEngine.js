@@ -30,8 +30,8 @@ class RealtimeEngine extends EventEmitter {
         // BLE服务器
         this.ble_client = null;
         this.ble_clientUrl = 'ws://localhost:8766';
-        this.reconnectInterval = 3000;
-        this.maxReconnectTimes = 3;
+        this.reconnectInterval = 2000;   // 重连间隔2秒
+        this.maxReconnectTimes = 10;     // 最多重连10次
         this.currentReconnectTimes = 0;
         this.reconnectTimer = null;
         this.connectTimeoutTimer = null;
@@ -39,8 +39,8 @@ class RealtimeEngine extends EventEmitter {
         // 【新增】Mocap服务器
         this.mocap_client = null;
         this.mocap_clientUrl = 'ws://localhost:8767';
-        this.mocap_reconnectInterval = 3000;
-        this.mocap_maxReconnectTimes = 3;
+        this.mocap_reconnectInterval = 2000;
+        this.mocap_maxReconnectTimes = 10;
         this.mocap_currentReconnectTimes = 0;
         this.mocap_reconnectTimer = null;
         this.mocap_connected = false;
@@ -89,39 +89,50 @@ class RealtimeEngine extends EventEmitter {
     start(port = 8080) {
         return new Promise((resolve, reject) => {
             try {
+                // 延迟连接BLE服务器，等待ble_server启动完成（包括蓝牙适配器预热）
                 this.connectTimeoutTimer = setTimeout(() => {
                     this.ble_server_connect();
-                }, 3000);
-                
+                }, 5000);  // 从3秒改为5秒，给ble_server更多启动时间
+
                 // 【新增】延迟连接Mocap服务器
                 setTimeout(() => {
                     this.mocap_server_connect();
-                }, 3500);
+                }, 5500);
 
                 this.websocket_server = new WebSocket.Server({ port });
 
-                this.websocket_server.on('connection', (ws) => {
-                    console.log('[realtimeEngine] 前端client连接已建立');
+                // 【新增】客户端ID计数器
+                let clientIdCounter = 0;
+
+                this.websocket_server.on('connection', (ws, req) => {
+                    // 【新增】为每个客户端分配唯一ID
+                    const clientId = ++clientIdCounter;
+                    ws.clientId = clientId;
+                    ws.clientName = `未知客户端#${clientId}`;  // 默认名称，等待客户端自报
+                    ws.connectedAt = new Date().toISOString();
+
+                    console.log(`[realtimeEngine] 前端client连接已建立 (ID: ${clientId}, 当前总数: ${this.clients.size + 1})`);
                     this.clients.add(ws);
 
                     ws.send(JSON.stringify({
                         type: 'connection_established',
                         message: '实时数据连接已建立',
                         timestamp: Date.now(),
-                        mocap_connected: this.mocap_connected
+                        mocap_connected: this.mocap_connected,
+                        clientId: clientId  // 【新增】告知客户端其ID
                     }));
 
                     ws.on('message', (message) => {
-                        this.handleFrontendMessage(message);
+                        this.handleFrontendMessage(message, ws);
                     });
 
                     ws.on('close', () => {
-                        console.log('[realtimeEngine] 前端WebSocket连接已关闭');
+                        console.log(`[realtimeEngine] 前端WebSocket连接已关闭 (ID: ${ws.clientId}, 名称: ${ws.clientName})`);
                         this.clients.delete(ws);
                     });
 
                     ws.on('error', (error) => {
-                        console.error('[realtimeEngine] WebSocket错误:', error);
+                        console.error(`[realtimeEngine] WebSocket错误 (ID: ${ws.clientId}):`, error);
                         this.clients.delete(ws);
                     });
                 });
@@ -146,13 +157,25 @@ class RealtimeEngine extends EventEmitter {
         });
     }
 
-    handleFrontendMessage(rawMessage) {
+    handleFrontendMessage(rawMessage, ws) {
         try {
             const message = JSON.parse(rawMessage.toString());
+
+            // 【新增】处理客户端自报身份
+            if (message.type === 'client_identify') {
+                if (ws && message.clientName) {
+                    ws.clientName = message.clientName;
+                    console.log(`[realtimeEngine] 客户端 #${ws.clientId} 自报身份: ${message.clientName}`);
+                }
+                return;
+            }
+
             if (message.type !== 'control_command') return;
 
             const { action, data } = message;
-            console.log(`[realtimeEngine] <<< 收到前端命令: ${action}`, data);
+            // 【修改】打印时包含客户端信息
+            const clientInfo = ws ? `(来自: ${ws.clientName})` : '';
+            console.log(`[realtimeEngine] <<< 收到前端命令: ${action} ${clientInfo}`, data);
 
             switch (action) {
                 case 'task_change': this.onTaskChange(data.taskId); break;
@@ -167,7 +190,7 @@ class RealtimeEngine extends EventEmitter {
                 case 'prompt_start': this.onPromptStart(data.promptName, data.promptIndex); break;
                 case 'prompt_end': this.onPromptEnd(data.promptName, data.promptIndex); break;
                 case 'prompt': this.onPrompt(data.name, data.stageName, data.timestamp); break;
-                
+
                 // 【新增】Mocap命令
                 case 'mocap_set_channel': this.onMocapSetChannel(data.channel); break;
                 case 'mocap_reset_channel': this.onMocapResetChannel(data.channel, data.value); break;
@@ -461,13 +484,22 @@ class RealtimeEngine extends EventEmitter {
     }
 
     ble_server_connect() {
-        if (this.ble_client) { this.ble_client.close(); this.ble_client = null; }
+        // 【修复】清理旧连接时先清除事件处理器，避免触发重连
+        if (this.ble_client) {
+            this.ble_client.onopen = null;
+            this.ble_client.onclose = null;
+            this.ble_client.onerror = null;
+            this.ble_client.onmessage = null;
+            try { this.ble_client.close(); } catch (e) {}
+            this.ble_client = null;
+        }
 
         try {
+            console.log(`[realtimeEngine] 正在连接BLE数据端: ${this.ble_clientUrl} (尝试 ${this.currentReconnectTimes + 1}/${this.maxReconnectTimes})`);
             this.ble_client = new WebSocket(this.ble_clientUrl);
 
             this.ble_client.onopen = () => {
-                console.log(`[realtimeEngine] ✅ BLE服务器连接成功`);
+                console.log(`[realtimeEngine] ✅ BLE数据端连接成功 (${this.ble_clientUrl})`);
                 this.currentReconnectTimes = 0;
                 clearTimeout(this.reconnectTimer);
                 this.broadcastToClients({ type: 'ble_connection_status', connected: true, message: 'BLE服务器已连接' });
@@ -476,18 +508,33 @@ class RealtimeEngine extends EventEmitter {
             this.ble_client.onmessage = (event) => {
                 try {
                     const packet = JSON.parse(event.data);
-                    if (packet.type === 'data') { this.handleBleDataPacket(packet); return; }
+
+                    // 调试：打印收到的数据类型
+                    if (packet.type === 'data') {
+                        this.handleBleDataPacket(packet);
+                        return;
+                    }
                     if (packet.type === 'emg_packet') { this.attributeEMGData(packet); return; }
                     // 【新增】监听sd_filenames_updated事件
                     if (packet.type === 'event' && packet.event === 'sd_filenames_updated') {
                         this.onSdFilenamesUpdated(packet.sd_filenames);
                         return;
                     }
+
+                    // 打印欢迎消息
+                    if (packet.type === 'welcome') {
+                        console.log(`[realtimeEngine] 收到数据端欢迎消息:`, packet.message);
+                    }
                 } catch (error) {}
             };
 
-            this.ble_client.onerror = (error) => { this.handleReconnect(); };
+            this.ble_client.onerror = (error) => {
+                // 【修复】onerror后通常会触发onclose，这里不重复处理
+                console.log(`[realtimeEngine] BLE数据端连接错误`);
+            };
             this.ble_client.onclose = (event) => {
+                console.log(`[realtimeEngine] BLE数据端连接关闭, code: ${event.code}`);
+                this.ble_client = null;  // 【修复】清理引用
                 this.broadcastToClients({ type: 'ble_connection_status', connected: false, message: 'BLE服务器连接已断开' });
                 if (event.code !== 1000) this.handleReconnect();
             };
@@ -500,12 +547,21 @@ class RealtimeEngine extends EventEmitter {
         this.currentReconnectTimes++;
         this.reconnectTimer = setTimeout(() => { this.ble_server_connect(); }, this.reconnectInterval);
     }
-    
+
     // 【新增】Mocap Server连接
     mocap_server_connect() {
-        if (this.mocap_client) { this.mocap_client.close(); this.mocap_client = null; }
+        // 【修复】清理旧连接时先清除事件处理器，避免触发重连
+        if (this.mocap_client) {
+            this.mocap_client.onopen = null;
+            this.mocap_client.onclose = null;
+            this.mocap_client.onerror = null;
+            this.mocap_client.onmessage = null;
+            try { this.mocap_client.close(); } catch (e) {}
+            this.mocap_client = null;
+        }
 
         try {
+            console.log(`[realtimeEngine] 正在连接Mocap服务器: ${this.mocap_clientUrl} (尝试 ${this.mocap_currentReconnectTimes + 1}/${this.mocap_maxReconnectTimes})`);
             this.mocap_client = new WebSocket(this.mocap_clientUrl);
 
             this.mocap_client.onopen = () => {
@@ -513,9 +569,9 @@ class RealtimeEngine extends EventEmitter {
                 this.mocap_currentReconnectTimes = 0;
                 this.mocap_connected = true;
                 clearTimeout(this.mocap_reconnectTimer);
-                
+
                 this.broadcastToClients({ type: 'mocap_connection_status', connected: true, message: 'Mocap服务器已连接' });
-                
+
                 if (this.mocap_activeChannel) {
                     this.mocap_client.send(JSON.stringify({ cmd: 'set_channel', channel: this.mocap_activeChannel }));
                 }
@@ -538,9 +594,14 @@ class RealtimeEngine extends EventEmitter {
                 } catch (error) {}
             };
 
-            this.mocap_client.onerror = (error) => { this.handleMocapReconnect(); };
+            this.mocap_client.onerror = (error) => {
+                // 【修复】onerror后通常会触发onclose，这里不重复处理
+                console.log(`[realtimeEngine] Mocap服务器连接错误`);
+            };
             this.mocap_client.onclose = (event) => {
+                console.log(`[realtimeEngine] Mocap服务器连接关闭, code: ${event.code}`);
                 this.mocap_connected = false;
+                this.mocap_client = null;  // 【修复】清理引用
                 this.broadcastToClients({ type: 'mocap_connection_status', connected: false, message: 'Mocap服务器连接已断开' });
                 if (event.code !== 1000) this.handleMocapReconnect();
             };
@@ -744,12 +805,27 @@ class RealtimeEngine extends EventEmitter {
     }
 
     getStatus() {
+        const WebSocket = require('ws');
+        const bleConnected = this.ble_client && this.ble_client.readyState === WebSocket.OPEN;
+
+        // 【新增】获取已连接客户端列表
+        const connectedClients = [];
+        this.clients.forEach(client => {
+            connectedClients.push({
+                id: client.clientId,
+                name: client.clientName,
+                connectedAt: client.connectedAt
+            });
+        });
+
         return {
             isRunning: this.isRunning, isCollecting: this.isCollecting, collectionPaused: this.collectionPaused,
             currentTaskId: this.currentTaskId, currentStageName: this.currentStageName, stageFileOpen: this.stageFileOpen,
             clientCount: this.clients.size, packetCount: this.emg_packet_count, mocapPacketCount: this.mocap_packet_count,
             storageConnected: this.storage_connected, mocapConnected: this.mocap_connected,
-            pendingStorageRequests: this.storageRequestQueue.length
+            bleConnected: bleConnected,
+            pendingStorageRequests: this.storageRequestQueue.length,
+            connectedClients: connectedClients  // 【新增】客户端列表
         };
     }
 

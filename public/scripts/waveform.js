@@ -51,7 +51,13 @@
                     this.isConnected = true;
                     this.reconnectAttempts = 0;
                     clearTimeout(this.reconnectTimer);
-                    
+
+                    // 【新增】自报身份
+                    this.ws.send(JSON.stringify({
+                        type: 'client_identify',
+                        clientName: 'Waveform'
+                    }));
+
                     // 更新UI状态
                     this.updateConnectionStatus(true);
                 };
@@ -411,21 +417,28 @@
 
     document.addEventListener('DOMContentLoaded', () => {
         controller = new WaveformController();
-        
+
         // 暴露全局接口
         window.waveformController = controller;
-        
+
         // 便捷方法
         window.startRealtime = () => controller.startRealtime();
         window.startSimulation = () => controller.startRealtime(); // 兼容旧接口
         window.stopWaveform = () => controller.stop();
         window.clearWaveform = () => controller.clearAll();
-        
+
         console.log('[Waveform] 系统初始化完成');
         console.log('[Waveform] 可用命令:');
         console.log('  - startRealtime(): 启动实时数据显示');
         console.log('  - stopWaveform(): 停止显示');
         console.log('  - clearWaveform(): 清除显示');
+    });
+
+    // 【新增】页面刷新/关闭前主动断开WebSocket连接
+    window.addEventListener('beforeunload', () => {
+        if (controller) {
+            controller.stop();
+        }
     });
 
 })();

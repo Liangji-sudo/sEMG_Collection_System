@@ -422,6 +422,80 @@ async function startServer() {
 setupGracefulShutdown();
 startServer().then(server => {
     console.log('服务器启动完成');
+
+    // 8秒后打印各模块连接状态汇总（等待所有连接建立）
+    setTimeout(() => {
+        printSystemStatus();
+    }, 8000);
 }).catch(error => {
     console.error('服务器启动失败:', error);
 });
+
+// 打印系统状态汇总
+function printSystemStatus() {
+    console.log('\n');
+    console.log('╔══════════════════════════════════════════════════════════════════════════════╗');
+    console.log('║                         系统模块连接架构图                                   ║');
+    console.log('╠══════════════════════════════════════════════════════════════════════════════╣');
+    console.log('║                                                                              ║');
+    console.log('║   [前端浏览器]                                                               ║');
+    console.log('║       │                                                                      ║');
+    console.log('║       ├──(HTTP)──────► [Express Server :3000]                                ║');
+    console.log('║       │                                                                      ║');
+    console.log('║       └──(WS :8080)──► [realtimeEngine]                                      ║');
+    console.log('║                             │                                                ║');
+    console.log('║                             ├──(WS :8766)──► [ble_server 数据端]             ║');
+    console.log('║                             │                                                ║');
+    console.log('║                             ├──(WS :8767)──► [mocap_server]                  ║');
+    console.log('║                             │                                                ║');
+    console.log('║                             └──(ZMQ :5555)─► [storage_server]                ║');
+    console.log('║                                                                              ║');
+    console.log('║   [前端 ble_control.js]                                                      ║');
+    console.log('║       │                                                                      ║');
+    console.log('║       └──(WS :8764)──► [ble_server 控制端]                                   ║');
+    console.log('║                                                                              ║');
+    console.log('╠══════════════════════════════════════════════════════════════════════════════╣');
+    console.log('║                         各端口连接状态                                       ║');
+    console.log('╠══════════════════════════════════════════════════════════════════════════════╣');
+
+    // realtimeEngine 状态
+    const rtStatus = realtimeEngine.getStatus();
+    const bleDataConn = rtStatus.bleConnected ? '✓ 已连接' : '✗ 未连接';
+    const storageConn = rtStatus.storageConnected ? '✓ 已连接' : '✗ 未连接';
+    const mocapConn = rtStatus.mocapConnected ? '✓ 已连接' : '✗ 未连接';
+    const frontendCount = rtStatus.clientCount || 0;
+
+    console.log('║                                                                              ║');
+    console.log(`║  :8080  realtimeEngine ← 前端WebSocket        ${(frontendCount + ' 个客户端').padEnd(25)} ║`);
+
+    // 【新增】显示已连接的客户端列表
+    if (rtStatus.connectedClients && rtStatus.connectedClients.length > 0) {
+        const clientNames = rtStatus.connectedClients.map(c => c.name).join(', ');
+        console.log(`║         已连接: ${clientNames.padEnd(55)} ║`);
+    }
+    // 【新增】显示需要手动触发才连接的客户端
+    console.log(`║         待连接: Waveform (进入采集页面后连接)                                ║`);
+
+    console.log(`║  :8766  realtimeEngine → ble_server(数据端)   ${bleDataConn.padEnd(25)} ║`);
+    console.log(`║  :8767  realtimeEngine → mocap_server         ${mocapConn.padEnd(25)} ║`);
+    console.log(`║  :5555  realtimeEngine → storage_server(ZMQ)  ${storageConn.padEnd(25)} ║`);
+    console.log('║                                                                              ║');
+
+    // deviceSync 状态 (ble_server进程)
+    const deviceSyncStatus = deviceSync.getStatus();
+    const bleProcessRunning = deviceSyncStatus.isConnected ? '✓ 进程运行中' : '✗ 进程未启动';
+    console.log(`║  :8764  ble_server(控制端) ← 前端ble_control  ${bleProcessRunning.padEnd(25)} ║`);
+    console.log(`║  :8766  ble_server(数据端) ← realtimeEngine   ${bleDataConn.padEnd(25)} ║`);
+    console.log('║                                                                              ║');
+
+    // storage 状态
+    const dsStatus = dataStorage.getStatus();
+    const storageRunning = dsStatus.isRunning ? '✓ 进程运行中' : '✗ 进程未启动';
+    console.log(`║  :5555  storage_server(ZMQ) ← realtimeEngine  ${storageRunning.padEnd(25)} ║`);
+    console.log('║                                                                              ║');
+
+    console.log('╠══════════════════════════════════════════════════════════════════════════════╣');
+    console.log('║  提示: 如果 :8766 数据端未连接，波形将无法显示                               ║');
+    console.log('╚══════════════════════════════════════════════════════════════════════════════╝');
+    console.log('\n');
+}

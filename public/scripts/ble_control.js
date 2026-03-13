@@ -691,7 +691,7 @@ async function decodeData(buffer) {
             select1.addEventListener('change', checkDuplicate);
             select2.addEventListener('change', checkDuplicate);
         }
-        
+
         // 自动连接服务器
         connect();
     }
@@ -702,6 +702,11 @@ async function decodeData(buffer) {
     } else {
         init();
     }
+
+    // 【新增】页面刷新/关闭前主动断开WebSocket连接
+    window.addEventListener('beforeunload', () => {
+        disconnect();
+    });
 
     // 导出到全局
     window.BleControl = BleControl;
