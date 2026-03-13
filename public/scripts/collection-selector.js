@@ -293,26 +293,44 @@
         renderSubjectForm() {
             // 获取字段配置，如果模板中没有则使用默认字段
             let fields = this.template.subjectFields;
-            
+
             // 如果模板中没有subjectFields，使用默认字段
             if (!fields || fields.length === 0) {
                 fields = DEFAULT_SUBJECT_FIELDS;
                 console.log('[CollectionSelector] 使用默认受试者字段配置');
             }
-            
+
             const saved = JSON.parse(localStorage.getItem('emg_current_user') || '{}');
 
+            // 【新增】从初始界面获取受试者编号，并设置到saved中
+            const sessionIdInput = document.getElementById('sessionIdInput');
+            if (sessionIdInput && sessionIdInput.value.trim()) {
+                saved.id = sessionIdInput.value.trim();
+                console.log('[CollectionSelector] 从初始界面获取受试者编号:', saved.id);
+            }
+
             let html = '<div class="selector-subject-form">';
-            
+
             // 显示当前选择的分类摘要
             html += this.renderSelectionSummary();
-            
+
             // 分组渲染字段（两列布局）
             html += '<div class="subject-fields-container">';
             for (let i = 0; i < fields.length; i += 2) {
                 html += '<div class="form-row">';
-                html += this.renderFormField(fields[i], saved);
-                if (fields[i + 1]) html += this.renderFormField(fields[i + 1], saved);
+                // 【修改】对于id字段，标记为只读
+                const field1 = {...fields[i]};
+                if (field1.id === 'id' && saved.id) {
+                    field1.readonly = true;
+                }
+                html += this.renderFormField(field1, saved);
+                if (fields[i + 1]) {
+                    const field2 = {...fields[i + 1]};
+                    if (field2.id === 'id' && saved.id) {
+                        field2.readonly = true;
+                    }
+                    html += this.renderFormField(field2, saved);
+                }
                 html += '</div>';
             }
             html += '</div>';
@@ -353,8 +371,10 @@
         renderFormField(field, saved = {}) {
             const value = saved[field.id] || '';
             const req = field.required ? '<span class="required">*</span>' : '';
+            const readonly = field.readonly ? 'readonly' : '';
+            const readonlyClass = field.readonly ? 'readonly-field' : '';
             let input = '';
-            
+
             if (field.type === 'select') {
                 const opts = (field.options || []).map(opt => {
                     const v = typeof opt === 'object' ? opt.value : opt;
@@ -363,22 +383,22 @@
                 }).join('');
                 input = `<select id="subject_${field.id}" ${field.required ? 'required' : ''}><option value="">请选择</option>${opts}</select>`;
             } else if (field.type === 'number') {
-                const readonly = field.readonly ? 'readonly' : '';
-                input = `<input type="number" id="subject_${field.id}" value="${value}" 
-                         ${field.min !== undefined ? `min="${field.min}"` : ''} 
-                         ${field.max !== undefined ? `max="${field.max}"` : ''} 
+                input = `<input type="number" id="subject_${field.id}" value="${value}"
+                         ${field.min !== undefined ? `min="${field.min}"` : ''}
+                         ${field.max !== undefined ? `max="${field.max}"` : ''}
                          ${field.placeholder ? `placeholder="${field.placeholder}"` : ''}
-                         ${field.required ? 'required' : ''} ${readonly}>`;
+                         ${field.required ? 'required' : ''} ${readonly} class="${readonlyClass}">`;
             } else if (field.type === 'textarea') {
-                input = `<textarea id="subject_${field.id}" rows="2" 
+                input = `<textarea id="subject_${field.id}" rows="2"
                          ${field.placeholder ? `placeholder="${field.placeholder}"` : ''}
-                         ${field.required ? 'required' : ''}>${value}</textarea>`;
+                         ${field.required ? 'required' : ''} ${readonly} class="${readonlyClass}">${value}</textarea>`;
             } else {
-                input = `<input type="text" id="subject_${field.id}" value="${value}" 
+                // 【修改】text 类型也支持只读
+                input = `<input type="text" id="subject_${field.id}" value="${value}"
                          ${field.placeholder ? `placeholder="${field.placeholder}"` : ''}
-                         ${field.required ? 'required' : ''}>`;
+                         ${field.required ? 'required' : ''} ${readonly} class="${readonlyClass}">`;
             }
-            
+
             return `<div class="form-group"><label>${field.label} ${req}</label>${input}</div>`;
         }
 
