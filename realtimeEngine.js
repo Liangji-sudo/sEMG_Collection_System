@@ -266,8 +266,10 @@ class RealtimeEngine extends EventEmitter {
         }
         this.isCollecting = false;
         this.collectionPaused = false;
-        // 【新增】采集停止时清空SD卡文件名
-        this.sd_filenames = { dev1: null, dev2: null };
+        // 【修复】不再清空 sd_filenames
+        // 原因：在同一个采集会话中（从进入采集界面到离开），ESP32 持续录制到同一个 bin 文件
+        // sd_filenames 由 sd_filenames_updated 事件更新，只有在 start_all 时才会变化
+        // 如果在这里清空，第二次点击采集按钮时 sd_filenames 为空，导致 H5 文件缺少 bin 字段
     }
 
     // 【新增】处理SD卡文件名更新事件
