@@ -126,15 +126,17 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 startBtn.addEventListener('click', (e) => {
                     e.preventDefault();
                     console.log('[Collection] ★★★ 开始按钮被点击 ★★★');
-                    this.startTask();
+                    this.startTask(false);  // 正常采集模式
                 });
             }
 
-            const pauseBtn = document.getElementById('pauseTaskBtn');
-            if (pauseBtn) {
-                pauseBtn.addEventListener('click', (e) => {
+            // 【修改】测试模式按钮（替换暂停按钮）
+            const testBtn = document.getElementById('testModeBtn');
+            if (testBtn) {
+                testBtn.addEventListener('click', (e) => {
                     e.preventDefault();
-                    this.togglePause();
+                    console.log('[Collection] ★★★ 测试模式按钮被点击 ★★★');
+                    this.startTask(true);  // 测试模式，不保存H5文件
                 });
             }
 
@@ -726,45 +728,53 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
         // ==================== 采集控制 ====================
 
-        startTask() {
+        /**
+         * 开始采集任务
+         * @param {boolean} isTestMode - 是否为测试模式（不保存H5文件）
+         */
+        startTask(isTestMode = false) {
             if (this._isRunning) return;
-            
+
+            // 【新增】保存测试模式状态
+            this._isTestMode = isTestMode;
+
             console.log('[Collection] ===== 开始采集任务 =====');
             console.log('[Collection] 任务类型:', this.currentTaskId);
+            console.log('[Collection] 测试模式:', isTestMode ? '是（不保存H5文件）' : '否');
             console.log('[Collection] 当前Stage:', this.stages[this.currentStageIndex]?.name);
-            
+
             // 【关键修复】重新从localStorage读取最新配置
             this.loadCollectionConfig();
             console.log('[Collection] ★★★ 重新加载配置后 ★★★');
             console.log('[Collection] currentExecutionParams:', this.currentExecutionParams);
             console.log('[Collection] trialsPerStage:', this.currentExecutionParams.trialsPerStage);
-            
+
             // 【关键修复】重置动画模块状态
             this.resetAnimationModules();
-            
+
             this._isRunning = true;
             this._isPaused = false;
             this.currentGestureIndex = 0;
             this.gestureRepeatCount = 0;
             this.continualTrialCount = 0;
-            
+
             this.updateControlButtons(true);
-            
+
             // 禁用Session和Stage选择器
             const sessionSelect = document.getElementById('sessionSwitchSelect');
             if (sessionSelect) sessionSelect.disabled = true;
             const stageSelect = document.getElementById('stageSwitchSelect');
             if (stageSelect) stageSelect.disabled = true;
-            
+
             this.updateNextStageButton();
-            
+
             const currentStage = this.stages[this.currentStageIndex];
             const userData = JSON.parse(localStorage.getItem('emg_current_user') || '{}');
-            
-            const userId = userData.id || 
-                           this.collectionConfig?.subject?.id || 
+
+            const userId = userData.id ||
+                           this.collectionConfig?.subject?.id ||
                            `S${Date.now().toString().slice(-6)}`;
-            
+
             this.sendToRealtimeEngine('collection_start', {
                 taskId: this.currentTaskId,
                 sessionIndex: this.currentSessionIndex,
@@ -773,11 +783,13 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 stageName: currentStage?.name || currentStage?.id || 'stage_1',
                 stageIndex: this.currentStageIndex,
                 userId: userId,
+                // 【新增】测试模式标志
+                isTestMode: isTestMode,
                 // 文件名建议格式: userId_session{N}_{stageName}_{timestamp}
                 suggestedFileName: `${userId}_session${this.currentSessionIndex + 1}_${currentStage?.name || currentStage?.id || 'stage'}`,
                 config: this.collectionConfig
             });
-            
+
             if (this.currentTaskId === 'discrete_gesture') {
                 this.startDiscreteGestureCollection();
             } else {
@@ -849,26 +861,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this.sendToRealtimeEngine('collection_stop', { completed: false });
         }
 
-        togglePause() {
-            if (!this._isRunning) return;
-            
-            this._isPaused = !this._isPaused;
-            
-            const pauseBtn = document.getElementById('pauseTaskBtn');
-            if (pauseBtn) {
-                pauseBtn.innerHTML = this._isPaused ? 
-                    '<i class="fas fa-play"></i> 继续' : 
-                    '<i class="fas fa-pause"></i> 暂停';
-            }
-            
-            this.updateStatus(this._isPaused ? '已暂停' : '采集中');
-            
-            if (this._isPaused) {
-                this.sendToRealtimeEngine('collection_pause', {});
-            } else {
-                this.sendToRealtimeEngine('collection_resume', {});
-            }
-        }
+        // 【已移除】togglePause 方法已被测试模式替代
 
         isRunning() {
             return this._isRunning;
@@ -1509,16 +1502,12 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
         updateControlButtons(running) {
             const startBtn = document.getElementById('startTaskBtn');
-            const pauseBtn = document.getElementById('pauseTaskBtn');
+            const testBtn = document.getElementById('testModeBtn');
             const stopBtn = document.getElementById('stopTaskBtn');
 
             if (startBtn) startBtn.disabled = running;
-            if (pauseBtn) pauseBtn.disabled = !running;
+            if (testBtn) testBtn.disabled = running;  // 测试按钮在运行时禁用
             if (stopBtn) stopBtn.disabled = !running;
-
-            if (pauseBtn) {
-                pauseBtn.innerHTML = '<i class="fas fa-pause"></i> 暂停';
-            }
         }
 
         updateStatus(text) {

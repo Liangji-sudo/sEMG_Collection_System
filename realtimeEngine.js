@@ -76,6 +76,7 @@ class RealtimeEngine extends EventEmitter {
         this.isCollecting = false;
         this.collectionPaused = false;
         this.collectionConfig = null;
+        this.isTestMode = false;  // 【新增】测试模式标志（不保存H5文件）
 
         // Stage状态
         this.currentStageName = null;
@@ -241,7 +242,7 @@ class RealtimeEngine extends EventEmitter {
 
     async onCollectionStart(data) {
         console.log(`[realtimeEngine] ========== 开始采集会话 ==========`);
-        const { taskId, stageName, userId, config, sessionIndex, sessionNumber, sessionCount } = data;
+        const { taskId, stageName, userId, config, sessionIndex, sessionNumber, sessionCount, isTestMode } = data;
 
         this.currentTaskId = taskId;
         this.currentUser = { id: userId, ...config?.subject };
@@ -252,6 +253,12 @@ class RealtimeEngine extends EventEmitter {
         this.currentSessionIndex = sessionIndex ?? 0;
         this.currentSessionNumber = sessionNumber ?? 1;
         this.sessionCount = sessionCount ?? 3;
+
+        // 【新增】保存测试模式状态
+        this.isTestMode = isTestMode || false;
+        if (this.isTestMode) {
+            console.log(`[realtimeEngine] ★★★ 测试模式：不会创建H5文件 ★★★`);
+        }
 
         // 注意：不在这里重置sd_filenames，因为sd_filenames_updated事件会在start_all之后到达
         // sd_filenames的管理完全由onSdFilenamesUpdated负责
@@ -266,6 +273,8 @@ class RealtimeEngine extends EventEmitter {
         }
         this.isCollecting = false;
         this.collectionPaused = false;
+        // 【新增】重置测试模式标志
+        this.isTestMode = false;
         // 【修复】不再清空 sd_filenames
         // 原因：在同一个采集会话中（从进入采集界面到离开），ESP32 持续录制到同一个 bin 文件
         // sd_filenames 由 sd_filenames_updated 事件更新，只有在 start_all 时才会变化
@@ -396,6 +405,13 @@ class RealtimeEngine extends EventEmitter {
     async openStageFile(stageName, stageIndex) {
         console.log(`[realtimeEngine] 尝试打开Stage文件: ${stageName}`);
         console.log(`[realtimeEngine] storage_connected = ${this.storage_connected}`);
+
+        // 【新增】测试模式下跳过创建H5文件
+        if (this.isTestMode) {
+            console.log(`[realtimeEngine] ★ 测试模式：跳过创建H5文件 ★`);
+            this.stageFileOpen = false;  // 确保不会尝试写入
+            return;
+        }
 
         if (!this.storage_connected) {
             console.warn('[realtimeEngine] ⚠️ Storage未连接，无法打开文件');

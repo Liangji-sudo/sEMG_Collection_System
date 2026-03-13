@@ -1513,9 +1513,13 @@
             background: #16a34a;
         }
 
-        .control-btn.pause {
-            background: #f59e0b;
+        .control-btn.test {
+            background: #8b5cf6;
             color: white;
+        }
+
+        .control-btn.test:hover {
+            background: #7c3aed;
         }
 
         .control-btn.stop {
@@ -5074,8 +5078,8 @@
                         <button class="control-btn start" id="startTaskBtn">
                             <i class="fas fa-play"></i> 开始采集
                         </button>
-                        <button class="control-btn pause" id="pauseTaskBtn" disabled>
-                            <i class="fas fa-pause"></i> 暂停
+                        <button class="control-btn test" id="testModeBtn">
+                            <i class="fas fa-flask"></i> 测试
                         </button>
                         <button class="control-btn stop" id="stopTaskBtn" disabled>
                             <i class="fas fa-stop"></i> 停止
