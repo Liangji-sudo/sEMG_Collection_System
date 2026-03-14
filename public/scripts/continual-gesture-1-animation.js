@@ -379,7 +379,7 @@
                     name: 'start',
                     stageName: this.currentStage?.name || 'unknown',
                     trialIndex: this.trial,
-                    timestamp: Date.now()
+                    timestamp: Date.now() / 1000  // 【修改】转换为秒，与ble_server时间戳一致
                 });
             }
 
@@ -448,7 +448,7 @@
                     name: 'end',
                     stageName: this.currentStage?.name || 'unknown',
                     trialIndex: this.trial,
-                    timestamp: Date.now()
+                    timestamp: Date.now() / 1000  // 【修改】转换为秒，与ble_server时间戳一致
                 });
             }
 

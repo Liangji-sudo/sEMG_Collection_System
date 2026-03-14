@@ -1046,7 +1046,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this.sendToRealtimeEngine('stage_start', {
                 stageName: currentStage?.name || currentStage?.id,
                 stageIndex: this.currentStageIndex,
-                timestamp: Date.now()
+                timestamp: Date.now() / 1000  // 【修改】转换为秒，与ble_server时间戳一致
             });
 
             this.currentPhase = 'prepare';
@@ -1144,7 +1144,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this.sendToRealtimeEngine('prompt', {
                 name: gesture.id || gesture.name,
                 stageName: this.stages[this.currentStageIndex]?.name || this.stages[this.currentStageIndex]?.id,
-                timestamp: Date.now()
+                timestamp: Date.now() / 1000  // 【修改】转换为秒，与ble_server时间戳一致
             });
             
             this.updateGestureDisplay({
@@ -1464,7 +1464,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                     type: 'control_command',
                     action: action,
                     data: data,
-                    timestamp: Date.now()
+                    timestamp: Date.now() / 1000  // 【修改】转换为秒，与ble_server时间戳一致
                 });
                 ws.send(message);
             }

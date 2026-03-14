@@ -321,7 +321,7 @@
                         stageName: stageName,
                         repeatIndex: index,
                         promptType: promptType,  // 【新增】
-                        timestamp: Date.now()
+                        timestamp: Date.now() / 1000  // 【修改】转换为秒，与ble_server时间戳一致
                     });
                 }
             });

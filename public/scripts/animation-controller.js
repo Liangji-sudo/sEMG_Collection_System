@@ -101,7 +101,7 @@
                     type: 'control_command',
                     action: action,
                     data: data,
-                    timestamp: Date.now()
+                    timestamp: Date.now() / 1000  // 【修改】转换为秒，与ble_server时间戳一致
                 });
                 ws.send(message);
                 console.log(`[Animation] 消息已发送: ${action}`);
@@ -114,8 +114,8 @@
          * 发送Prompt信号到realtimeEngine
          */
         sendPrompt(promptName, stageName) {
-            // 【修复】统一使用毫秒时间戳，与其他地方保持一致
-            const timestamp = Date.now();
+            // 【修改】使用秒时间戳，与ble_server保持一致
+            const timestamp = Date.now() / 1000;
 
             this.sendToRealtimeEngine('prompt', {
                 name: promptName,
