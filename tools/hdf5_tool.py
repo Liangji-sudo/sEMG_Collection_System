@@ -108,6 +108,7 @@ class SyncWorker(QThread):
         try:
             total = len(self.h5_files)
             success_count = 0
+            skipped_count = 0
 
             # 根据勾选的设备确定需要处理的device_id列表
             device_ids = set()
@@ -116,9 +117,39 @@ class SyncWorker(QThread):
             if 'emg2' in self.devices or 'imu2' in self.devices:
                 device_ids.add(2)
 
+            # 检查是否需要双设备同步（两个设备都被勾选）
+            require_both_devices = len(device_ids) == 2
+
             for i, h5_file in enumerate(self.h5_files):
                 self.progress.emit(i + 1, total, os.path.basename(h5_file))
                 self.log.emit(f"\n处理文件: {os.path.basename(h5_file)}")
+
+                # 【新增】如果需要双设备同步，先检查H5文件是否有两个设备的bin文件配置
+                if require_both_devices:
+                    # 检查H5文件中是否配置了两个设备的bin文件前缀
+                    try:
+                        with h5py.File(h5_file, 'r') as f:
+                            sd_bin_dev1 = f.attrs.get('sd_bin_dev1', None)
+                            sd_bin_dev2 = f.attrs.get('sd_bin_dev2', None)
+
+                            # 如果H5文件配置了两个设备的bin文件，则必须两个都能找到
+                            if sd_bin_dev1 and sd_bin_dev2:
+                                # 检查两个设备的bin文件是否都存在
+                                missing_devices = []
+                                for dev_id in [1, 2]:
+                                    emg_bin_path, imu_bin_path = self._find_bin_files(h5_file, dev_id)
+                                    # 检查EMG bin文件（主要数据）
+                                    if f'emg{dev_id}' in self.devices and not emg_bin_path:
+                                        missing_devices.append(dev_id)
+
+                                if missing_devices:
+                                    self.log.emit(f"  ⚠️ 警告: 此H5文件需要两个设备的bin文件，但设备{missing_devices}的bin文件缺失")
+                                    self.log.emit(f"  ✗ 跳过此文件: 双设备模式要求两个设备的bin文件都存在")
+                                    skipped_count += 1
+                                    continue
+                    except Exception as e:
+                        self.log.emit(f"  ✗ 检查bin文件配置失败: {str(e)}")
+                        continue
 
                 file_success = False
                 for device_id in sorted(device_ids):
@@ -174,7 +205,12 @@ class SyncWorker(QThread):
                 if file_success:
                     success_count += 1
 
-            self.finished_signal.emit(True, f"完成: {success_count}/{total} 个文件同步成功")
+            # 构建完成消息
+            if skipped_count > 0:
+                msg = f"完成: {success_count}/{total} 个文件同步成功, {skipped_count} 个文件因bin文件不全被跳过"
+            else:
+                msg = f"完成: {success_count}/{total} 个文件同步成功"
+            self.finished_signal.emit(True, msg)
 
         except Exception as e:
             self.finished_signal.emit(False, f"同步出错: {str(e)}")
@@ -234,23 +270,43 @@ class StatisticsPanel(QFrame):
         layout.setSpacing(8)
 
         self.labels = {}
+        # 定义字段及其颜色分组
+        # 颜色方案：
+        #   - 基本信息：蓝色 #0066cc
+        #   - 同步状态：动态（synced绿色，pending橙色）
+        #   - Session相关：紫色 #9933cc
+        #   - SD卡bin索引：绿色 #009900
+        #   - BLE设备：深蓝色 #0066cc 加粗
+        #   - 数据集形状：蓝色 #0066cc
         stats = [
-            ('文件名', '文件名'), ('文件大小', '文件大小'), ('创建时间', '创建时间'),
-            ('sync_status', '同步状态'),  # 同步状态
+            # 基本文件信息
+            ('文件名', '文件名'), ('文件大小', '文件大小'),
+            ('创建时间', '创建时间'), ('sync_status', '同步状态'),
+            # Session相关（紫色）
+            ('session_index', 'Session索引'), ('session_count', 'Session总数'),
+            ('recording_session_id', '录制会话ID'), ('is_multi_session', '多Session'),
+            # 任务信息
+            ('task_id', '任务ID'), ('user_id', '用户ID'),
+            ('stage_name', 'Stage名称'), ('template_name', '模板名称'),
+            # EMG数据集
             ('emg1_250hz', 'EMG1 250Hz'), ('emg1_2khz', 'EMG1 2kHz'),
             ('emg2_250hz', 'EMG2 250Hz'), ('emg2_2khz', 'EMG2 2kHz'),
-            # 【修改】4个IMU数据集（每设备2个IMU传感器）
+            # IMU数据集（每设备2个IMU传感器）
             ('imu1a_ble', 'IMU1A BLE'), ('imu1a_100hz', 'IMU1A 100Hz'),
             ('imu1b_ble', 'IMU1B BLE'), ('imu1b_100hz', 'IMU1B 100Hz'),
             ('imu2a_ble', 'IMU2A BLE'), ('imu2a_100hz', 'IMU2A 100Hz'),
             ('imu2b_ble', 'IMU2B BLE'), ('imu2b_100hz', 'IMU2B 100Hz'),
             ('mocap', 'Mocap'),
-            ('sd_bin_dev1', 'SD Bin(设备1)'),  # SD卡bin文件名
-            ('sd_bin_dev2', 'SD Bin(设备2)'),  # SD卡bin文件名
-            # 【新增】BLE设备名称
-            ('ble_device_dev1', 'BLE设备(设备1)'),  # BLE设备名称
-            ('ble_device_dev2', 'BLE设备(设备2)'),  # BLE设备名称
+            # SD卡bin文件索引（绿色）
+            ('sd_bin_dev1', 'SD Bin(设备1)'), ('sd_bin_dev2', 'SD Bin(设备2)'),
+            # BLE设备名称
+            ('ble_device_dev1', 'BLE设备(设备1)'), ('ble_device_dev2', 'BLE设备(设备2)'),
         ]
+
+        # Session相关字段（紫色）
+        session_keys = {'session_index', 'session_count', 'recording_session_id', 'is_multi_session'}
+        # SD卡bin索引字段（绿色）
+        sd_bin_keys = {'sd_bin_dev1', 'sd_bin_dev2'}
 
         for i, (key, name) in enumerate(stats):
             row = i // 2
@@ -260,9 +316,11 @@ class StatisticsPanel(QFrame):
             value_label = QLabel('-')
             # 根据字段类型设置不同颜色
             if key == 'sync_status':
-                value_label.setStyleSheet('color: #666;')  # 同步状态初始灰色
-            elif key.startswith('sd_bin'):
-                value_label.setStyleSheet('color: #009900;')  # bin文件名绿色
+                value_label.setStyleSheet('color: #666;')  # 同步状态初始灰色，动态更新
+            elif key in session_keys:
+                value_label.setStyleSheet('color: #9933cc; font-weight: bold;')  # Session相关紫色
+            elif key in sd_bin_keys:
+                value_label.setStyleSheet('color: #009900; font-weight: bold;')  # bin文件名绿色
             elif key.startswith('ble_device'):
                 value_label.setStyleSheet('color: #0066cc; font-weight: bold;')  # BLE设备名蓝色加粗
             else:
@@ -294,7 +352,67 @@ class StatisticsPanel(QFrame):
                 else:
                     self.labels['sync_status'].setStyleSheet('color: #666;')
 
-                # 读取SD卡bin文件名
+                # 读取Session相关字段（紫色）
+                session_index = f.attrs.get('session_index', None)
+                if session_index is not None:
+                    self.labels['session_index'].setText(str(session_index))
+                else:
+                    self.labels['session_index'].setText('-')
+
+                session_count = f.attrs.get('session_count', None)
+                if session_count is not None:
+                    self.labels['session_count'].setText(str(session_count))
+                else:
+                    self.labels['session_count'].setText('-')
+
+                recording_session_id = f.attrs.get('recording_session_id', None)
+                if recording_session_id:
+                    if isinstance(recording_session_id, bytes):
+                        recording_session_id = recording_session_id.decode('utf-8')
+                    self.labels['recording_session_id'].setText(str(recording_session_id))
+                else:
+                    self.labels['recording_session_id'].setText('-')
+
+                is_multi_session = f.attrs.get('is_multi_session', None)
+                if is_multi_session is not None:
+                    self.labels['is_multi_session'].setText('是' if is_multi_session else '否')
+                else:
+                    self.labels['is_multi_session'].setText('-')
+
+                # 读取任务信息字段
+                task_id = f.attrs.get('task_id', None)
+                if task_id:
+                    if isinstance(task_id, bytes):
+                        task_id = task_id.decode('utf-8')
+                    self.labels['task_id'].setText(str(task_id))
+                else:
+                    self.labels['task_id'].setText('-')
+
+                user_id = f.attrs.get('user_id', None)
+                if user_id:
+                    if isinstance(user_id, bytes):
+                        user_id = user_id.decode('utf-8')
+                    self.labels['user_id'].setText(str(user_id))
+                else:
+                    self.labels['user_id'].setText('-')
+
+                stage_name = f.attrs.get('stage_name', None)
+                if stage_name:
+                    if isinstance(stage_name, bytes):
+                        stage_name = stage_name.decode('utf-8')
+                    self.labels['stage_name'].setText(str(stage_name))
+                else:
+                    self.labels['stage_name'].setText('-')
+
+                template_name = f.attrs.get('template_name', None)
+                if template_name:
+                    if isinstance(template_name, bytes):
+                        template_name = template_name.decode('utf-8')
+                    self.labels['template_name'].setText(str(template_name))
+                else:
+                    self.labels['template_name'].setText('-')
+
+                # 读取SD卡bin文件名（绿色）
                 sd_bin_dev1 = f.attrs.get('sd_bin_dev1', None)
                 if sd_bin_dev1:
                     if isinstance(sd_bin_dev1, bytes):
@@ -311,7 +429,7 @@ class StatisticsPanel(QFrame):
                 else:
                     self.labels['sd_bin_dev2'].setText('-')
 
-                # 【新增】读取BLE设备名称
+                # 读取BLE设备名称
                 ble_device_dev1 = f.attrs.get('ble_device_dev1', None)
                 if ble_device_dev1:
                     if isinstance(ble_device_dev1, bytes):
@@ -367,7 +485,7 @@ class ViewerTab(QWidget):
 
         # 统计信息面板
         self.stats_panel = StatisticsPanel()
-        self.stats_panel.setMaximumHeight(280)  # 增加高度以容纳4个IMU数据集
+        self.stats_panel.setMaximumHeight(380)  # 增加高度以容纳Session和任务信息字段
         layout.addWidget(self.stats_panel)
 
         # 主分割器 - 可拖动
