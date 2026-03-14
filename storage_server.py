@@ -341,7 +341,18 @@ class HDF5StorageServer:
             if ble_dev2:
                 self.f.attrs["ble_device_dev2"] = ble_dev2
                 debug_log(f"   BLE设备(设备2/右手): {ble_dev2}")
-            
+
+            # 【新增】保存录像同步信息到HDF5属性
+            # recording_session_id: 录像会话ID，格式 "rec_YYYYMMDD_HHMMSS_N"
+            # is_multi_session: 是否为多轮次采集模式
+            recording_session_id = params.get("recording_session_id")
+            is_multi_session = params.get("is_multi_session", False)
+            if recording_session_id:
+                self.f.attrs["recording_session_id"] = recording_session_id
+                self.f.attrs["is_multi_session"] = is_multi_session
+                debug_log(f"   录像会话ID: {recording_session_id}")
+                debug_log(f"   多轮次模式: {is_multi_session}")
+
             # ===================== 创建受试者信息组 =====================
             if subject_info:
                 subject_grp = self.f.create_group("subject")

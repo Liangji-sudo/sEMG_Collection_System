@@ -97,6 +97,10 @@ class RealtimeEngine extends EventEmitter {
         this.sd_filenames = { dev1: null, dev2: null };
         // 【新增】BLE设备名称（用于HDF5追溯数据来源）
         this.device_names = { dev1: null, dev2: null };
+
+        // 【新增】录像同步相关
+        this.recordingSessionId = null;  // 录像会话ID
+        this.isMultiSession = false;     // 是否为多轮次采集
     }
 
     start(port = 8080) {
@@ -245,7 +249,7 @@ class RealtimeEngine extends EventEmitter {
 
     async onCollectionStart(data) {
         console.log(`[realtimeEngine] ========== 开始采集会话 ==========`);
-        const { taskId, stageName, userId, config, sessionIndex, sessionNumber, sessionCount, isTestMode } = data;
+        const { taskId, stageName, userId, config, sessionIndex, sessionNumber, sessionCount, isTestMode, recordingSessionId, isMultiSession } = data;
 
         this.currentTaskId = taskId;
         this.currentUser = { id: userId, ...config?.subject };
@@ -261,6 +265,14 @@ class RealtimeEngine extends EventEmitter {
         this.isTestMode = isTestMode || false;
         if (this.isTestMode) {
             console.log(`[realtimeEngine] ★★★ 测试模式：不会创建H5文件 ★★★`);
+        }
+
+        // 【新增】保存录像会话信息
+        this.recordingSessionId = recordingSessionId || null;
+        this.isMultiSession = isMultiSession || false;
+        if (this.recordingSessionId) {
+            console.log(`[realtimeEngine] 录像会话ID: ${this.recordingSessionId}`);
+            console.log(`[realtimeEngine] 多轮次模式: ${this.isMultiSession}`);
         }
 
         // 注意：不在这里重置sd_filenames，因为sd_filenames_updated事件会在start_all之后到达
@@ -483,7 +495,10 @@ class RealtimeEngine extends EventEmitter {
                 sd_bin_dev2: this.sd_filenames.dev2,  // 例如 "S001_R_260312_143025"
                 // 【新增】传递BLE设备名称，用于追溯数据来源
                 ble_dev1: this.device_names.dev1,  // 例如 "WristBand_3A76"
-                ble_dev2: this.device_names.dev2   // 例如 "WristBand_5B12"
+                ble_dev2: this.device_names.dev2,  // 例如 "WristBand_5B12"
+                // 【新增】录像同步信息
+                recording_session_id: this.recordingSessionId,  // 例如 "rec_20260314_153045_5"
+                is_multi_session: this.isMultiSession           // 是否为多轮次采集
             });
 
             if (response.status === 'success') {

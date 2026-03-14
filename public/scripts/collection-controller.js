@@ -83,6 +83,11 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this._restBetweenSessions = 30;     // 轮次间休息时间（秒）
             this._restCountdownTimer = null;    // 休息倒计时定时器
 
+            // ===== 录像同步相关状态 =====
+            this._recordingSessionId = null;    // 录像会话ID，格式: rec_YYYYMMDD_HHMMSS_N
+            this._spaceKeyEnabled = false;      // 是否启用空格键监听
+            this._spaceKeyHandler = null;       // 空格键事件处理函数引用
+
             console.log('[Collection] 构造函数结束');
         }
 
@@ -170,6 +175,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                     this.goToNextStage();
                 });
             }
+
+            // 【新增】初始化空格键监听器（但不立即启用）
+            this._initSpaceKeyListener();
 
             console.log('[Collection] bindEvents() 完成 ✓');
         }
@@ -798,6 +806,17 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                            this.collectionConfig?.subject?.id ||
                            `S${Date.now().toString().slice(-6)}`;
 
+            // 【新增】单轮采集时生成新的录像会话ID，全部轮次模式下复用已有ID
+            if (!this._isAllSessionsMode) {
+                // 单轮采集：生成新的录像会话ID
+                this._recordingSessionId = this._generateRecordingSessionId(1);
+                console.log('[Collection] 单轮采集，生成录像会话ID:', this._recordingSessionId);
+            }
+            // 全部轮次模式下，录像会话ID在 startAllSessions 中已生成
+
+            // 【新增】启用空格键监听
+            this._enableSpaceKey();
+
             this.sendToRealtimeEngine('collection_start', {
                 taskId: this.currentTaskId,
                 sessionIndex: this.currentSessionIndex,
@@ -808,6 +827,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 userId: userId,
                 // 【新增】测试模式标志
                 isTestMode: isTestMode,
+                // 【新增】录像会话信息
+                recordingSessionId: this._recordingSessionId,
+                isMultiSession: this._isAllSessionsMode,
                 // 文件名建议格式: userId_session{N}_{stageName}_{timestamp}
                 suggestedFileName: `${userId}_session${this.currentSessionIndex + 1}_${currentStage?.name || currentStage?.id || 'stage'}`,
                 config: this.collectionConfig
@@ -848,6 +870,10 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             // 设置全部轮次模式标志
             this._isAllSessionsMode = true;
+
+            // 【新增】生成录像会话ID（全部轮次共用一个ID）
+            this._recordingSessionId = this._generateRecordingSessionId(this.sessionCount);
+            console.log('[Collection] 全部轮次采集，生成录像会话ID:', this._recordingSessionId);
 
             // 显示开始提示弹窗
             this.showSessionOverlay({
@@ -1009,6 +1035,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             if (sessionSelect) sessionSelect.disabled = false;
             const stageSelect = document.getElementById('stageSwitchSelect');
             if (stageSelect) stageSelect.disabled = false;
+
+            // 【新增】禁用空格键监听
+            this._disableSpaceKey();
 
             this.updateControlButtons(false);
             this.updateNextStageButton();
@@ -2088,9 +2117,174 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
         getCurrentTaskId() {
             return this.currentTaskId;
         }
-        
+
         getCurrentExecutionParams() {
             return this.currentExecutionParams;
+        }
+
+        // ==================== 录像同步相关方法 ====================
+
+        /**
+         * 生成录像会话ID
+         * 格式: rec_YYYYMMDD_HHMMSS_N
+         * @param {number} totalSessions - 总轮次数
+         * @returns {string} 录像会话ID
+         */
+        _generateRecordingSessionId(totalSessions) {
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const seconds = String(now.getSeconds()).padStart(2, '0');
+
+            return `rec_${year}${month}${day}_${hours}${minutes}${seconds}_${totalSessions}`;
+        }
+
+        /**
+         * 初始化空格键监听器
+         */
+        _initSpaceKeyListener() {
+            this._spaceKeyHandler = (e) => {
+                // 只在启用状态下响应空格键
+                if (!this._spaceKeyEnabled) return;
+
+                // 检查是否是空格键
+                if (e.code === 'Space' || e.key === ' ') {
+                    // 防止页面滚动
+                    e.preventDefault();
+
+                    // 触发空格键同步信号
+                    this._onSpaceKeyPressed();
+                }
+            };
+
+            // 添加事件监听器
+            document.addEventListener('keydown', this._spaceKeyHandler);
+            console.log('[Collection] 空格键监听器已初始化');
+        }
+
+        /**
+         * 启用空格键监听
+         */
+        _enableSpaceKey() {
+            this._spaceKeyEnabled = true;
+            console.log('[Collection] 空格键监听已启用');
+        }
+
+        /**
+         * 禁用空格键监听
+         */
+        _disableSpaceKey() {
+            this._spaceKeyEnabled = false;
+            console.log('[Collection] 空格键监听已禁用');
+        }
+
+        /**
+         * 空格键按下时的处理
+         */
+        _onSpaceKeyPressed() {
+            if (!this._isRunning) {
+                console.log('[Collection] 采集未运行，忽略空格键');
+                return;
+            }
+
+            const timestamp = Date.now() / 1000;  // 转换为秒
+            console.log('[Collection] ★★★ 空格键同步信号 ★★★');
+            console.log('[Collection] 时间戳:', timestamp);
+            console.log('[Collection] 录像会话ID:', this._recordingSessionId);
+
+            // 发送 space prompt 到 realtimeEngine
+            this.sendToRealtimeEngine('prompt', {
+                name: 'space',
+                stageName: this.stages[this.currentStageIndex]?.name || 'unknown',
+                timestamp: timestamp,
+                recordingSessionId: this._recordingSessionId
+            });
+
+            // 显示视觉同步信号
+            this._showSyncVisualSignal();
+
+            // 显示提示
+            this.showToast('已记录同步信号 ⌨️', 'success');
+        }
+
+        /**
+         * 显示视觉同步信号（全屏闪烁 + 大字提示）
+         * 让相机能够清楚拍到
+         */
+        _showSyncVisualSignal() {
+            // 创建全屏闪烁遮罩
+            const overlay = document.createElement('div');
+            overlay.id = 'syncVisualOverlay';
+            overlay.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(255, 255, 255, 0.95);
+                z-index: 99999;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                animation: syncFlash 0.8s ease-out forwards;
+            `;
+
+            // 添加大字提示
+            overlay.innerHTML = `
+                <div style="
+                    font-size: 200px;
+                    font-weight: 900;
+                    color: #2563eb;
+                    text-shadow: 0 0 30px rgba(37, 99, 235, 0.5);
+                    animation: syncPulse 0.4s ease-out;
+                ">SYNC</div>
+                <div style="
+                    font-size: 48px;
+                    color: #1e40af;
+                    margin-top: 20px;
+                    font-weight: 600;
+                ">⌨️ 空格键已按下</div>
+                <div style="
+                    font-size: 24px;
+                    color: #6b7280;
+                    margin-top: 10px;
+                ">${new Date().toLocaleTimeString()}</div>
+            `;
+
+            // 添加动画样式
+            const style = document.createElement('style');
+            style.id = 'syncVisualStyle';
+            style.textContent = `
+                @keyframes syncFlash {
+                    0% { opacity: 1; }
+                    100% { opacity: 0; }
+                }
+                @keyframes syncPulse {
+                    0% { transform: scale(0.8); opacity: 0; }
+                    50% { transform: scale(1.1); }
+                    100% { transform: scale(1); opacity: 1; }
+                }
+            `;
+
+            // 移除之前的样式和遮罩（如果存在）
+            const existingStyle = document.getElementById('syncVisualStyle');
+            const existingOverlay = document.getElementById('syncVisualOverlay');
+            if (existingStyle) existingStyle.remove();
+            if (existingOverlay) existingOverlay.remove();
+
+            // 添加到页面
+            document.head.appendChild(style);
+            document.body.appendChild(overlay);
+
+            // 0.8秒后移除
+            setTimeout(() => {
+                overlay.remove();
+                style.remove();
+            }, 800);
         }
     }
 
