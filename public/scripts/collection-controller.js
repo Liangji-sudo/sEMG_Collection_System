@@ -109,7 +109,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                         this.switchSession(parseInt(e.target.value));
                     } else {
                         e.target.value = this.currentSessionIndex;
-                        this.showToast('采集进行中，无法切换Session', 'warning');
+                        this.showToast('采集进行中，无法切换轮次', 'warning');
                     }
                 });
             }
@@ -407,14 +407,14 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             for (let i = 0; i < this.sessionCount; i++) {
                 const option = document.createElement('option');
                 option.value = i;
-                option.textContent = `Session ${i + 1}`;
+                option.textContent = `第 ${i + 1} 轮`;
                 if (i === this.currentSessionIndex) {
                     option.selected = true;
                 }
                 select.appendChild(option);
             }
-            
-            console.log('[Collection] Session选择器已更新, 当前Session:', this.currentSessionIndex + 1);
+
+            console.log('[Collection] 轮次选择器已更新, 当前轮次:', this.currentSessionIndex + 1);
         }
 
         updateStageSelect() {
@@ -459,10 +459,10 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             }
             
             let html = '';
-            
+
             html += `
                 <div class="gesture-progress-summary" style="font-size: 12px; padding: 5px 8px; margin-bottom: 5px;">
-                    <span>Session: ${this.currentSessionIndex + 1}/${this.sessionCount}</span>
+                    <span>轮次: ${this.currentSessionIndex + 1}/${this.sessionCount}</span>
                     <span>Stage: ${this.currentStageIndex + 1}/${this.stages.length}</span>
                     <span>手势: ${this.currentGestureIndex}/${this.gestures.length}</span>
                 </div>
@@ -521,11 +521,11 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             // 如果没有运行，显示0
             
             let html = '';
-            
+
             html += `
                 <div class="gesture-progress-summary" style="font-size: 12px; padding: 8px; margin-bottom: 8px; background: #f0f9ff; border-radius: 6px;">
                     <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                        <span><i class="fas fa-sync-alt"></i> Session ${this.currentSessionIndex + 1}/${this.sessionCount}</span>
+                        <span><i class="fas fa-sync-alt"></i> 轮次 ${this.currentSessionIndex + 1}/${this.sessionCount}</span>
                         <span><i class="fas fa-layer-group"></i> Stage ${this.currentStageIndex + 1}/${this.stages.length}</span>
                     </div>
                     <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
@@ -630,39 +630,39 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             return { name: taskNames[this.currentTaskId] || this.currentTaskId };
         }
 
-        // ==================== Session切换 ====================
+        // ==================== 轮次切换 ====================
 
         /**
-         * 切换Session
+         * 切换轮次
          */
         switchSession(sessionIndex) {
             if (sessionIndex < 0 || sessionIndex >= this.sessionCount) return;
-            
-            console.log('[Collection] 切换Session:', sessionIndex + 1);
-            
+
+            console.log('[Collection] 切换轮次:', sessionIndex + 1);
+
             this.currentSessionIndex = sessionIndex;
-            // 切换Session时重置Stage为第一个
+            // 切换轮次时重置Stage为第一个
             this.currentStageIndex = 0;
             this.currentGestureIndex = 0;
             this.gestureRepeatCount = 0;
             this.continualTrialCount = 0;
-            
+
             // 重置动画模块的试次计数
             this.resetAnimationModules();
-            
+
             this.updateSessionSelect();
             this.updateStageSelect();
             this.updateGestureList();
             this.updateNextStageButton();
             this.resetDisplay();
-            
+
             // 发送session变更消息
             this.sendToRealtimeEngine('session_change', {
                 sessionIndex: sessionIndex,
                 sessionNumber: sessionIndex + 1
             });
-            
-            this.showToast(`已切换到 Session ${sessionIndex + 1}，请重新穿戴采集设备`, 'info');
+
+            this.showToast(`已切换到第 ${sessionIndex + 1} 轮，请重新穿戴采集设备`, 'info');
         }
 
         /**
