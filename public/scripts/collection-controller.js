@@ -78,6 +78,11 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this.calibrationTimer = null;       // 标定计时器
             this.skipCalibration = false;       // 是否跳过标定
 
+            // ===== 全部轮次采集相关状态 =====
+            this._isAllSessionsMode = false;    // 是否为全部轮次采集模式
+            this._restBetweenSessions = 30;     // 轮次间休息时间（秒）
+            this._restCountdownTimer = null;    // 休息倒计时定时器
+
             console.log('[Collection] 构造函数结束');
         }
 
@@ -140,6 +145,16 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 });
             }
 
+            // 【新增】全部轮次采集按钮
+            const startAllBtn = document.getElementById('startAllSessionsBtn');
+            if (startAllBtn) {
+                startAllBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    console.log('[Collection] ★★★ 全部轮次采集按钮被点击 ★★★');
+                    this.startAllSessions();
+                });
+            }
+
             const stopBtn = document.getElementById('stopTaskBtn');
             if (stopBtn) {
                 stopBtn.addEventListener('click', (e) => {
@@ -186,6 +201,14 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                     this.sessionCount = template.sessionConfig?.count || 3;
                 }
                 console.log('[Collection] Session数量:', this.sessionCount);
+
+                // 【新增】加载轮次间休息时间
+                if (this.collectionConfig.sessionConfig?.restBetweenSessions) {
+                    this._restBetweenSessions = this.collectionConfig.sessionConfig.restBetweenSessions;
+                } else {
+                    this._restBetweenSessions = template.sessionConfig?.restBetweenSessions || 30;
+                }
+                console.log('[Collection] 轮次间休息时间:', this._restBetweenSessions, '秒');
 
                 // 【修改】先加载全局手势库作为后备
                 if (this.collectionConfig.gestures?.discrete) {
@@ -797,13 +820,147 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             }
         }
 
+        /**
+         * 【新增】开始全部轮次采集
+         * 始终从 Session 1 开始，自动循环完成所有轮次
+         */
+        startAllSessions() {
+            if (this._isRunning) return;
+
+            console.log('[Collection] ===== 开始全部轮次采集 =====');
+            console.log('[Collection] 总Session数:', this.sessionCount);
+            console.log('[Collection] 轮次间休息时间:', this._restBetweenSessions, '秒');
+
+            // 【修复】始终从 Session 1 开始
+            this.currentSessionIndex = 0;
+            this.currentGestureIndex = 0;
+            this.gestureRepeatCount = 0;
+            this.continualTrialCount = 0;
+
+            // 重置动画模块
+            this.resetAnimationModules();
+
+            // 更新UI显示
+            this.updateSessionSelect();
+            this.updateGestureList();
+
+            console.log('[Collection] 重置到 Session 1 开始采集');
+
+            // 设置全部轮次模式标志
+            this._isAllSessionsMode = true;
+
+            // 显示开始提示弹窗
+            this.showSessionOverlay({
+                title: '开始第 1 轮',
+                subtitle: `共 ${this.sessionCount} 轮，准备开始采集...`,
+                icon: '🚀',
+                type: 'start'
+            });
+
+            // 2秒后隐藏弹窗并开始采集
+            setTimeout(() => {
+                this.hideSessionOverlay();
+                this.startTask(false);
+            }, 2000);
+        }
+
+        /**
+         * 【新增】显示休息倒计时并继续下一轮
+         */
+        showRestCountdownAndContinue() {
+            const nextSessionIndex = this.currentSessionIndex + 1;
+            let remainingSeconds = this._restBetweenSessions;
+            const totalSeconds = this._restBetweenSessions;
+
+            console.log('[Collection] 开始休息倒计时:', remainingSeconds, '秒');
+            console.log('[Collection] 下一轮Session:', nextSessionIndex + 1);
+
+            // 【修改】使用全屏居中弹窗显示休息倒计时
+            this.showSessionOverlay({
+                title: '休息时间',
+                subtitle: `第 ${this.currentSessionIndex + 1} 轮完成！\n即将开始第 ${nextSessionIndex + 1}/${this.sessionCount} 轮`,
+                icon: '☕',
+                countdown: remainingSeconds,
+                type: 'rest'
+            });
+
+            this.updateStatus(`休息中 - ${remainingSeconds}秒后开始第${nextSessionIndex + 1}轮`);
+
+            // 清理之前的定时器
+            if (this._restCountdownTimer) {
+                clearInterval(this._restCountdownTimer);
+                this._restCountdownTimer = null;
+            }
+
+            this._restCountdownTimer = setInterval(() => {
+                remainingSeconds--;
+
+                // 更新全屏弹窗的倒计时
+                this.updateSessionOverlayCountdown(remainingSeconds, totalSeconds);
+                this.updateStatus(`休息中 - ${remainingSeconds}秒后开始第${nextSessionIndex + 1}轮`);
+
+                if (remainingSeconds <= 0) {
+                    clearInterval(this._restCountdownTimer);
+                    this._restCountdownTimer = null;
+
+                    // 隐藏休息弹窗
+                    this.hideSessionOverlay();
+
+                    // 切换到下一个Session并开始采集
+                    this.currentSessionIndex = nextSessionIndex;
+                    this.currentGestureIndex = 0;
+                    this.gestureRepeatCount = 0;
+                    this.continualTrialCount = 0;
+
+                    // 重置动画模块
+                    this.resetAnimationModules();
+
+                    // 更新UI
+                    this.updateSessionSelect();
+                    this.updateGestureList();
+
+                    console.log('[Collection] 休息结束，开始第', nextSessionIndex + 1, '轮采集');
+
+                    // 【修改】显示开始新轮次的提示弹窗（短暂显示后自动开始）
+                    this.showSessionOverlay({
+                        title: `开始第 ${nextSessionIndex + 1} 轮`,
+                        subtitle: `共 ${this.sessionCount} 轮，准备开始采集...`,
+                        icon: '🚀',
+                        type: 'start'
+                    });
+
+                    // 2秒后隐藏弹窗并开始采集
+                    setTimeout(() => {
+                        this.hideSessionOverlay();
+                        this.startTask(false);
+                    }, 2000);
+                }
+            }, 1000);
+        }
+
+        /**
+         * 【新增】取消全部轮次采集模式
+         */
+        cancelAllSessionsMode() {
+            this._isAllSessionsMode = false;
+            if (this._restCountdownTimer) {
+                clearInterval(this._restCountdownTimer);
+                this._restCountdownTimer = null;
+            }
+            // 隐藏全屏弹窗
+            this.hideSessionOverlay();
+        }
+
         stopTask() {
-            if (!this._isRunning) return;
+            if (!this._isRunning && !this._isAllSessionsMode) return;
 
             console.log('[Collection] ===== 停止采集任务 =====');
 
             this._isRunning = false;
             this._isPaused = false;
+
+            // 【新增】取消全部轮次模式
+            this.cancelAllSessionsMode();
 
             if (this.phaseTimer) {
                 clearTimeout(this.phaseTimer);
@@ -1217,17 +1374,6 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             // 【新增】隐藏手势示范 GIF
             this.hideGestureGif();
 
-            const hasMoreStages = this.currentStageIndex < this.stages.length - 1;
-            const nextStageName = hasMoreStages ? this.stages[this.currentStageIndex + 1]?.name : '';
-
-            this.updateGestureDisplay({
-                name: '🎉 Stage采集完成！',
-                instruction: hasMoreStages ?
-                    `可以点击"进入下一Stage"继续采集: ${nextStageName}` :
-                    '所有Stage已完成！',
-                showCountdown: false
-            });
-
             const currentStage = this.stages[this.currentStageIndex];
             this.sendToRealtimeEngine('stage_end', {
                 stageName: currentStage?.name || currentStage?.id
@@ -1247,6 +1393,51 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this.updateNextStageButton();
             this.updateGestureList();
             this.updateStatus('采集完成');
+
+            // 【新增】全部轮次模式：检查是否需要继续下一轮
+            if (this._isAllSessionsMode) {
+                const hasMoreSessions = this.currentSessionIndex < this.sessionCount - 1;
+                if (hasMoreSessions) {
+                    // 还有更多轮次，显示休息倒计时后自动开始下一轮
+                    this.showRestCountdownAndContinue();
+                    return;
+                } else {
+                    // 所有轮次完成
+                    this._isAllSessionsMode = false;
+
+                    // 【修改】使用全屏弹窗显示完成信息
+                    this.showSessionOverlay({
+                        title: '全部轮次采集完成！',
+                        subtitle: `已完成所有 ${this.sessionCount} 轮采集\n感谢您的配合！`,
+                        icon: '🎉',
+                        type: 'complete'
+                    });
+
+                    // 5秒后自动隐藏
+                    setTimeout(() => {
+                        this.hideSessionOverlay();
+                    }, 5000);
+
+                    this.updateGestureDisplay({
+                        name: '🎉 全部轮次采集完成！',
+                        instruction: `已完成所有 ${this.sessionCount} 轮采集`,
+                        showCountdown: false
+                    });
+                    return;
+                }
+            }
+
+            // 单轮模式：显示正常完成信息
+            const hasMoreStages = this.currentStageIndex < this.stages.length - 1;
+            const nextStageName = hasMoreStages ? this.stages[this.currentStageIndex + 1]?.name : '';
+
+            this.updateGestureDisplay({
+                name: '🎉 Stage采集完成！',
+                instruction: hasMoreStages ?
+                    `可以点击"进入下一Stage"继续采集: ${nextStageName}` :
+                    '所有Stage已完成！',
+                showCountdown: false
+            });
 
             this.showToast('当前Stage采集完成！', 'success');
         }
@@ -1567,6 +1758,177 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 toast.innerHTML = `<i class="fas fa-${icon}-circle"></i> ${message}`;
                 toast.classList.add('visible');
                 setTimeout(() => toast.classList.remove('visible'), 3000);
+            }
+        }
+
+        // ==================== 全屏Session提示弹窗 ====================
+
+        /**
+         * 【新增】显示全屏居中的Session提示弹窗
+         * @param {Object} options - 配置选项
+         * @param {string} options.title - 标题
+         * @param {string} options.subtitle - 副标题
+         * @param {string} options.icon - 图标（emoji）
+         * @param {number} options.countdown - 倒计时秒数（可选）
+         * @param {string} options.type - 类型：'rest' | 'start' | 'complete'
+         */
+        showSessionOverlay(options) {
+            const { title, subtitle, icon = '⏸️', countdown, type = 'rest' } = options;
+
+            // 移除已存在的弹窗
+            this.hideSessionOverlay();
+
+            // 根据类型选择颜色
+            const colorMap = {
+                'rest': { bg: '#3b82f6', light: '#dbeafe' },
+                'start': { bg: '#22c55e', light: '#dcfce7' },
+                'complete': { bg: '#f59e0b', light: '#fef3c7' }
+            };
+            const colors = colorMap[type] || colorMap.rest;
+
+            // 创建全屏遮罩和弹窗
+            const overlay = document.createElement('div');
+            overlay.id = 'sessionOverlay';
+            overlay.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0, 0, 0, 0.5);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 10000;
+                animation: fadeIn 0.3s ease;
+            `;
+
+            overlay.innerHTML = `
+                <style>
+                    @keyframes fadeIn {
+                        from { opacity: 0; }
+                        to { opacity: 1; }
+                    }
+                    @keyframes scaleIn {
+                        from { transform: scale(0.8); opacity: 0; }
+                        to { transform: scale(1); opacity: 1; }
+                    }
+                    @keyframes pulse {
+                        0%, 100% { transform: scale(1); }
+                        50% { transform: scale(1.05); }
+                    }
+                </style>
+                <div id="sessionOverlayPanel" style="
+                    background: white;
+                    border-radius: 24px;
+                    padding: 48px 64px;
+                    text-align: center;
+                    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+                    min-width: 500px;
+                    max-width: 700px;
+                    animation: scaleIn 0.3s ease;
+                ">
+                    <!-- 图标 -->
+                    <div style="
+                        font-size: 80px;
+                        margin-bottom: 24px;
+                        animation: pulse 2s infinite;
+                    ">${icon}</div>
+
+                    <!-- 标题 -->
+                    <div style="
+                        font-size: 42px;
+                        font-weight: 700;
+                        color: ${colors.bg};
+                        margin-bottom: 16px;
+                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    ">${title}</div>
+
+                    <!-- 副标题 -->
+                    <div style="
+                        font-size: 24px;
+                        color: #6b7280;
+                        margin-bottom: 32px;
+                        line-height: 1.5;
+                    ">${subtitle}</div>
+
+                    <!-- 倒计时（如果有） -->
+                    ${countdown !== undefined ? `
+                    <div style="
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        gap: 16px;
+                        padding: 24px;
+                        background: ${colors.light};
+                        border-radius: 16px;
+                    ">
+                        <span style="font-size: 20px; color: #6b7280;">倒计时</span>
+                        <span id="sessionOverlayCountdown" style="
+                            font-size: 72px;
+                            font-weight: 800;
+                            color: ${colors.bg};
+                            min-width: 100px;
+                            line-height: 1;
+                        ">${countdown}</span>
+                        <span style="font-size: 24px; color: #6b7280;">秒</span>
+                    </div>
+                    ` : ''}
+
+                    <!-- 进度条（如果有倒计时） -->
+                    ${countdown !== undefined ? `
+                    <div style="
+                        margin-top: 24px;
+                        background: #e5e7eb;
+                        border-radius: 8px;
+                        height: 8px;
+                        overflow: hidden;
+                    ">
+                        <div id="sessionOverlayProgress" style="
+                            height: 100%;
+                            background: linear-gradient(90deg, ${colors.bg}, ${colors.bg}88);
+                            border-radius: 8px;
+                            width: 100%;
+                            transition: width 1s linear;
+                        "></div>
+                    </div>
+                    ` : ''}
+                </div>
+            `;
+
+            document.body.appendChild(overlay);
+        }
+
+        /**
+         * 【新增】更新Session弹窗的倒计时
+         * @param {number} seconds - 剩余秒数
+         * @param {number} total - 总秒数
+         */
+        updateSessionOverlayCountdown(seconds, total) {
+            const countdownEl = document.getElementById('sessionOverlayCountdown');
+            const progressEl = document.getElementById('sessionOverlayProgress');
+
+            if (countdownEl) {
+                countdownEl.textContent = seconds;
+                // 最后3秒变红色
+                if (seconds <= 3) {
+                    countdownEl.style.color = '#ef4444';
+                }
+            }
+
+            if (progressEl && total > 0) {
+                const percent = (seconds / total) * 100;
+                progressEl.style.width = `${percent}%`;
+            }
+        }
+
+        /**
+         * 【新增】隐藏Session弹窗
+         */
+        hideSessionOverlay() {
+            const overlay = document.getElementById('sessionOverlay');
+            if (overlay) {
+                overlay.remove();
             }
         }
 

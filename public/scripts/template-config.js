@@ -605,13 +605,19 @@
                     </div>
                     <div class="session-config-block">
                         <p class="config-hint" style="margin-bottom: 12px;">
-                            ${template.sessionConfig?.description || '每个Session代表一次设备穿戴，受试者需要摘下重新穿戴采集设备'}
+                            ${template.sessionConfig?.description || '每个Session代表一个采集轮次，用于多轮次数据采集'}
                         </p>
                         <div class="session-count-input-group">
                             <label for="sessionCountInput">Session数量：</label>
-                            <input type="number" id="sessionCountInput" class="session-count-input" 
+                            <input type="number" id="sessionCountInput" class="session-count-input"
                                    value="${template.sessionConfig?.count || 3}" min="1" max="20" step="1">
                             <span class="session-count-hint">（1-20之间）</span>
+                        </div>
+                        <div class="session-count-input-group" style="margin-top: 12px;">
+                            <label for="sessionRestTimeInput">轮次间休息时间：</label>
+                            <input type="number" id="sessionRestTimeInput" class="session-count-input"
+                                   value="${template.sessionConfig?.restBetweenSessions || 30}" min="5" max="300" step="5">
+                            <span class="session-count-hint">秒（全部轮次采集时，轮次之间的休息时间）</span>
                         </div>
                     </div>
                 </div>
@@ -830,7 +836,7 @@
                     const count = parseInt(e.target.value);
                     if (count >= 1 && count <= 20) {
                         if (!this.currentTemplate.sessionConfig) {
-                            this.currentTemplate.sessionConfig = { count: 3, description: '' };
+                            this.currentTemplate.sessionConfig = { count: 3, description: '', restBetweenSessions: 30 };
                         }
                         this.currentTemplate.sessionConfig.count = count;
                         this.isDirty = true;
@@ -838,6 +844,25 @@
                     } else {
                         e.target.value = this.currentTemplate.sessionConfig?.count || 3;
                         this.showToast('Session数量必须在1-20之间', 'warning');
+                    }
+                });
+            }
+
+            // 【新增】Session间休息时间变化
+            const sessionRestTimeInput = container.querySelector('#sessionRestTimeInput');
+            if (sessionRestTimeInput) {
+                sessionRestTimeInput.addEventListener('change', (e) => {
+                    const restTime = parseInt(e.target.value);
+                    if (restTime >= 5 && restTime <= 300) {
+                        if (!this.currentTemplate.sessionConfig) {
+                            this.currentTemplate.sessionConfig = { count: 3, description: '', restBetweenSessions: 30 };
+                        }
+                        this.currentTemplate.sessionConfig.restBetweenSessions = restTime;
+                        this.isDirty = true;
+                        console.log('[TemplateConfig] Session间休息时间已更新为:', restTime, '秒');
+                    } else {
+                        e.target.value = this.currentTemplate.sessionConfig?.restBetweenSessions || 30;
+                        this.showToast('休息时间必须在5-300秒之间', 'warning');
                     }
                 });
             }
