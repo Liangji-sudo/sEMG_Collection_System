@@ -257,6 +257,12 @@
                 statusElement.textContent = connected ? '已连接' : '未连接';
                 statusElement.className = connected ? 'status-connected' : 'status-disconnected';
             }
+
+            // 【新增】通知 ble_control.js 更新扫描按钮状态
+            // 数据端连接状态变化时，触发扫描按钮状态检查
+            if (window.BleControl && typeof window.BleControl.updateScanButtonState === 'function') {
+                window.BleControl.updateScanButtonState();
+            }
         }
     }
 

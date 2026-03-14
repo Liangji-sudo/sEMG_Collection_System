@@ -1676,7 +1676,54 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this.updateControlButtons(false);
             this.updateNextStageButton();
             this.updateGestureList();
-            this.updateStatus('采集完成');  // 【修复】更新状态显示
+            this.updateStatus('采集完成');
+
+            // 【新增】全部轮次模式：检查是否需要继续下一轮（与离散手势逻辑一致）
+            if (this._isAllSessionsMode) {
+                const hasMoreSessions = this.currentSessionIndex < this.sessionCount - 1;
+                if (hasMoreSessions) {
+                    // 还有更多轮次，显示休息倒计时后自动开始下一轮
+                    this.showRestCountdownAndContinue();
+                    return;
+                } else {
+                    // 所有轮次完成
+                    this._isAllSessionsMode = false;
+
+                    // 使用全屏弹窗显示完成信息
+                    this.showSessionOverlay({
+                        title: '全部轮次采集完成！',
+                        subtitle: `已完成所有 ${this.sessionCount} 轮采集\n感谢您的配合！`,
+                        icon: '🎉',
+                        type: 'complete'
+                    });
+
+                    // 5秒后自动隐藏
+                    setTimeout(() => {
+                        this.hideSessionOverlay();
+                    }, 5000);
+
+                    this.updateGestureDisplay({
+                        name: '🎉 全部轮次采集完成！',
+                        instruction: `已完成所有 ${this.sessionCount} 轮采集`,
+                        showCountdown: false
+                    });
+                    return;
+                }
+            }
+
+            // 单轮模式：显示正常完成信息
+            const hasMoreStages = this.currentStageIndex < this.stages.length - 1;
+            const nextStageName = hasMoreStages ? this.stages[this.currentStageIndex + 1]?.name : '';
+
+            this.updateGestureDisplay({
+                name: '🎉 Stage采集完成！',
+                instruction: hasMoreStages ?
+                    `可以点击"进入下一Stage"继续采集: ${nextStageName}` :
+                    '所有Stage已完成！',
+                showCountdown: false
+            });
+
+            this.showToast('当前Stage采集完成！', 'success');
         }
 
         // ==================== WebSocket通信 ====================

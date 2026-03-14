@@ -398,16 +398,45 @@ async function decodeData(buffer) {
                 disconnected: '未连接'
             }[status] || status;
         }
+
+        // 【新增】控制端状态变化时，更新扫描按钮状态
+        updateScanButton(false);
     }
     
     function updateScanButton(scanning) {
         const btn = document.getElementById('scanAllBtn');
         if (btn) {
-            btn.disabled = scanning;
-            btn.innerHTML = scanning 
+            // 【修改】扫描按钮只需要控制端连接即可（8764端口）
+            // 数据端（8080端口）是用于波形显示的，扫描蓝牙不需要
+            const controlConnected = BleState.connected;
+            btn.disabled = scanning || !controlConnected;
+            btn.innerHTML = scanning
                 ? '<i class="fas fa-spinner fa-spin"></i> 扫描中'
                 : '<i class="fas fa-search"></i> 扫描';
+
+            // 【新增】如果控制端未连接，显示提示
+            if (!controlConnected && !scanning) {
+                btn.title = '等待BLE服务器连接...';
+            } else {
+                btn.title = '';
+            }
         }
+    }
+
+    /**
+     * 【新增】检查所有连接是否就绪（控制端 + 数据端）
+     * 注意：此函数保留供其他功能使用，扫描按钮只需要控制端连接
+     */
+    function checkAllConnectionsReady() {
+        // 检查控制端连接（ble_control.js 自身的 WebSocket）
+        const controlConnected = BleState.connected;
+
+        // 检查数据端连接（waveform.js 的 dataReceiver）
+        const dataConnected = window.waveformController?.dataReceiver?.isConnected || false;
+
+        console.log(`[BLE] 连接状态检查: 控制端=${controlConnected}, 数据端=${dataConnected}`);
+
+        return controlConnected && dataConnected;
     }
     
     function updateDeviceSelects() {
@@ -609,17 +638,25 @@ async function decodeData(buffer) {
         onDeviceChange: (fn) => { BleState.onDeviceChange = fn; },
         onScanResult: (fn) => { BleState.onScanResult = fn; },
         onError: (fn) => { BleState.onError = fn; },
+
+        // 【新增】更新扫描按钮状态（供外部调用，如 waveform.js）
+        updateScanButtonState: () => {
+            updateScanButton(false);
+        },
     };
 
     // ================= 初始化 =================
     
     function init() {
         console.log('[BLE] 初始化蓝牙控制模块');
-        
+
         // 绑定扫描按钮
         const scanBtn = document.getElementById('scanAllBtn');
         if (scanBtn) {
             scanBtn.addEventListener('click', () => BleControl.scan());
+            // 【新增】初始化时禁用扫描按钮，等待控制端连接就绪
+            scanBtn.disabled = true;
+            scanBtn.title = '等待BLE服务器连接...';
         }
         
         // 绑定设备选择
