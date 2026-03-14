@@ -90,24 +90,42 @@ IMU_100HZ_DTYPE = np.dtype([
     ("time", "<f8")         # 时间戳
 ])
 
-# 【新增】MOCAP数据集类型：12个marker点的3D坐标 + 帧号 + 时间戳
-# marker顺序: rt1, rt2, rt3, ri1, ri2, ri3, rm1, rm2, rm3, m1, m2, m3
-MOCAP_MARKER_NAMES = ["rt1", "rt2", "rt3", "ri1", "ri2", "ri3", "rm1", "rm2", "rm3", "m1", "m2", "m3"]
-MOCAP_DTYPE = np.dtype([
-    ("rt1", "<f4", (3,)),   # 拇指指尖 [x, y, z]
-    ("rt2", "<f4", (3,)),   # 拇指第一关节
-    ("rt3", "<f4", (3,)),   # 拇指第二关节
-    ("ri1", "<f4", (3,)),   # 食指指尖
-    ("ri2", "<f4", (3,)),   # 食指第一关节
-    ("ri3", "<f4", (3,)),   # 食指第二关节
-    ("rm1", "<f4", (3,)),   # 中指指尖
-    ("rm2", "<f4", (3,)),   # 中指第一关节
-    ("rm3", "<f4", (3,)),   # 中指第二关节
-    ("m1", "<f4", (3,)),    # 食指指根
-    ("m2", "<f4", (3,)),    # 中指指根
-    ("m3", "<f4", (3,)),    # 腕部
-    ("frame", "<i4"),       # 帧号
-    ("time", "<f8")         # 时间戳
+# 【修改】MOCAP数据集类型：每只手10个marker点的3D坐标 + 帧号 + 时间戳
+# 左手marker: TH1_L, TH2_L, TH3_L, TH4_L, ID1_L, ID2_L, ID3_L, HB1_L, HB2_L, HB3_L
+# 右手marker: TH1_R, TH2_R, TH3_R, TH4_R, ID1_R, ID2_R, ID3_R, HB1_R, HB2_R, HB3_R
+MOCAP_MARKER_NAMES_L = ["TH1_L", "TH2_L", "TH3_L", "TH4_L", "ID1_L", "ID2_L", "ID3_L", "HB1_L", "HB2_L", "HB3_L"]
+MOCAP_MARKER_NAMES_R = ["TH1_R", "TH2_R", "TH3_R", "TH4_R", "ID1_R", "ID2_R", "ID3_R", "HB1_R", "HB2_R", "HB3_R"]
+
+# 左手MOCAP数据类型
+MOCAP_L_DTYPE = np.dtype([
+    ("TH1_L", "<f4", (3,)),   # 拇指指尖 [x, y, z]
+    ("TH2_L", "<f4", (3,)),   # 拇指第一关节
+    ("TH3_L", "<f4", (3,)),   # 拇指第二关节
+    ("TH4_L", "<f4", (3,)),   # 拇指根部
+    ("ID1_L", "<f4", (3,)),   # 食指指尖
+    ("ID2_L", "<f4", (3,)),   # 食指第一关节
+    ("ID3_L", "<f4", (3,)),   # 食指第二关节
+    ("HB1_L", "<f4", (3,)),   # 手背点1
+    ("HB2_L", "<f4", (3,)),   # 手背点2
+    ("HB3_L", "<f4", (3,)),   # 手背点3
+    ("frame", "<i4"),         # 帧号
+    ("time", "<f8")           # 时间戳
+])
+
+# 右手MOCAP数据类型
+MOCAP_R_DTYPE = np.dtype([
+    ("TH1_R", "<f4", (3,)),   # 拇指指尖 [x, y, z]
+    ("TH2_R", "<f4", (3,)),   # 拇指第一关节
+    ("TH3_R", "<f4", (3,)),   # 拇指第二关节
+    ("TH4_R", "<f4", (3,)),   # 拇指根部
+    ("ID1_R", "<f4", (3,)),   # 食指指尖
+    ("ID2_R", "<f4", (3,)),   # 食指第一关节
+    ("ID3_R", "<f4", (3,)),   # 食指第二关节
+    ("HB1_R", "<f4", (3,)),   # 手背点1
+    ("HB2_R", "<f4", (3,)),   # 手背点2
+    ("HB3_R", "<f4", (3,)),   # 手背点3
+    ("frame", "<i4"),         # 帧号
+    ("time", "<f8")           # 时间戳
 ])
 
 # 字符串存储配置
@@ -172,7 +190,8 @@ class HDF5StorageServer:
             "imu1b_frames": 0,
             "imu2a_frames": 0,
             "imu2b_frames": 0,
-            "mocap_frames": 0,  # 【新增】动捕帧数
+            "mocap_L_frames": 0,  # 【修改】左手动捕帧数
+            "mocap_R_frames": 0,  # 【修改】右手动捕帧数
             "prompts": 0
         }
     
@@ -492,14 +511,24 @@ class HDF5StorageServer:
             self.f.attrs["ble_sample_rate"] = 250  # BLE传输采样率
             self.f.attrs["target_sample_rate"] = 2000  # 目标采样率（SD卡存储）
 
-            # ===================== 【新增】创建MOCAP数据集 =====================
-            mocap_ds = self.f.create_dataset(
-                "mocap", shape=(0,), dtype=MOCAP_DTYPE,
+            # ===================== 【修改】创建MOCAP数据集（左右手分开） =====================
+            # 左手MOCAP数据集
+            mocap_L_ds = self.f.create_dataset(
+                "mocap_L", shape=(0,), dtype=MOCAP_L_DTYPE,
                 chunks=(500,), maxshape=(None,), compression="gzip"
             )
-            mocap_ds.attrs["description"] = "Motion capture marker data (12 markers x 3D coordinates)"
-            mocap_ds.attrs["markers"] = str(MOCAP_MARKER_NAMES)
-            mocap_ds.attrs["coordinate_unit"] = "mm"
+            mocap_L_ds.attrs["description"] = "Left hand motion capture marker data (10 markers x 3D coordinates)"
+            mocap_L_ds.attrs["markers"] = str(MOCAP_MARKER_NAMES_L)
+            mocap_L_ds.attrs["coordinate_unit"] = "mm"
+
+            # 右手MOCAP数据集
+            mocap_R_ds = self.f.create_dataset(
+                "mocap_R", shape=(0,), dtype=MOCAP_R_DTYPE,
+                chunks=(500,), maxshape=(None,), compression="gzip"
+            )
+            mocap_R_ds.attrs["description"] = "Right hand motion capture marker data (10 markers x 3D coordinates)"
+            mocap_R_ds.attrs["markers"] = str(MOCAP_MARKER_NAMES_R)
+            mocap_R_ds.attrs["coordinate_unit"] = "mm"
 
             # ===================== 创建Prompts组 =====================
             prompts = self.f.create_group("prompts")
@@ -522,7 +551,8 @@ class HDF5StorageServer:
                 "imu1b_frames": 0,
                 "imu2a_frames": 0,
                 "imu2b_frames": 0,
-                "mocap_frames": 0,  # 【新增】
+                "mocap_L_frames": 0,  # 【修改】
+                "mocap_R_frames": 0,  # 【修改】
                 "prompts": 0
             }
             self.is_collecting = True
@@ -581,12 +611,9 @@ class HDF5StorageServer:
                     frame_id = data.get("emg2_frame_ids", [0])[0] if data.get("emg2_frame_ids") else None
                     self._append_imu("imu2b", data["imu2b"], data["imu2_t"], frame_id)
 
-                # 【修改】批量追加MOCAP
+                # 【修改】批量追加MOCAP（左右手分开）
                 if data.get("mocap_frames"):
                     self._append_mocap_batch(data["mocap_frames"])
-                # 兼容单帧模式
-                elif data.get("mocap"):
-                    self._append_mocap(data["mocap"], data.get("mocap_t", 0), data.get("mocap_frame", 0))
 
                 # 追加Prompt
                 if data.get("prompt_name"):
@@ -716,43 +743,11 @@ class HDF5StorageServer:
             debug_log(f"❌ 追加{dataset_name}失败: {e}")
             return 0
 
-    def _append_mocap(self, markers_data, timestamp, frame):
-        """追加MOCAP数据"""
-        try:
-            ds = self.f["mocap"]
-
-            if not markers_data:
-                return 0
-
-            # 构造结构化数组（每次一帧）
-            data_struct = np.empty(1, dtype=MOCAP_DTYPE)
-
-            # 填充12个marker点的坐标
-            for marker_name in MOCAP_MARKER_NAMES:
-                coords = markers_data.get(marker_name, [0, 0, 0])
-                data_struct[0][marker_name] = np.array(coords[:3], dtype=np.float32)
-
-            data_struct[0]["frame"] = int(frame) if frame else 0
-            data_struct[0]["time"] = float(timestamp) if timestamp else 0
-
-            # 追加到数据集
-            current_len = ds.shape[0]
-            ds.resize(current_len + 1, axis=0)
-            ds[current_len] = data_struct[0]
-
-            # 更新统计
-            self.stats["mocap_frames"] += 1
-
-            return 1
-
-        except Exception as e:
-            debug_log(f"❌ 追加mocap失败: {e}")
-            return 0
-
     def _append_mocap_batch(self, frames_data):
-        """批量追加MOCAP数据"""
+        """【修改】批量追加MOCAP数据（左右手分开存储）"""
         try:
-            ds = self.f["mocap"]
+            ds_L = self.f["mocap_L"]
+            ds_R = self.f["mocap_R"]
 
             if not frames_data or len(frames_data) == 0:
                 return 0
@@ -760,7 +755,8 @@ class HDF5StorageServer:
             num_frames = len(frames_data)
 
             # 构造结构化数组（批量）
-            data_struct = np.empty(num_frames, dtype=MOCAP_DTYPE)
+            data_L = np.empty(num_frames, dtype=MOCAP_L_DTYPE)
+            data_R = np.empty(num_frames, dtype=MOCAP_R_DTYPE)
 
             for i, frame_data in enumerate(frames_data):
                 markers_data = frame_data.get("markers", {})
@@ -768,22 +764,37 @@ class HDF5StorageServer:
                 # 优先使用系统时间戳 sys_time，与蓝牙数据、prompt保持一致
                 timestamp = frame_data.get("sys_time", frame_data.get("time", 0))
 
-                # 填充12个marker点的坐标
-                for marker_name in MOCAP_MARKER_NAMES:
+                # 填充左手10个marker点的坐标
+                for marker_name in MOCAP_MARKER_NAMES_L:
                     coords = markers_data.get(marker_name, [0, 0, 0])
-                    data_struct[i][marker_name] = np.array(coords[:3], dtype=np.float32)
+                    data_L[i][marker_name] = np.array(coords[:3], dtype=np.float32)
 
-                data_struct[i]["frame"] = int(frame_num) if frame_num else 0
-                data_struct[i]["time"] = float(timestamp) if timestamp else 0
+                data_L[i]["frame"] = int(frame_num) if frame_num else 0
+                data_L[i]["time"] = float(timestamp) if timestamp else 0
 
-            # 批量追加到数据集
-            current_len = ds.shape[0]
-            new_len = current_len + num_frames
-            ds.resize(new_len, axis=0)
-            ds[current_len:new_len] = data_struct
+                # 填充右手10个marker点的坐标
+                for marker_name in MOCAP_MARKER_NAMES_R:
+                    coords = markers_data.get(marker_name, [0, 0, 0])
+                    data_R[i][marker_name] = np.array(coords[:3], dtype=np.float32)
+
+                data_R[i]["frame"] = int(frame_num) if frame_num else 0
+                data_R[i]["time"] = float(timestamp) if timestamp else 0
+
+            # 批量追加到左手数据集
+            current_len_L = ds_L.shape[0]
+            new_len_L = current_len_L + num_frames
+            ds_L.resize(new_len_L, axis=0)
+            ds_L[current_len_L:new_len_L] = data_L
+
+            # 批量追加到右手数据集
+            current_len_R = ds_R.shape[0]
+            new_len_R = current_len_R + num_frames
+            ds_R.resize(new_len_R, axis=0)
+            ds_R[current_len_R:new_len_R] = data_R
 
             # 更新统计
-            self.stats["mocap_frames"] += num_frames
+            self.stats["mocap_L_frames"] += num_frames
+            self.stats["mocap_R_frames"] += num_frames
 
             return num_frames
 
@@ -849,7 +860,8 @@ class HDF5StorageServer:
             debug_log(f"📊 统计: EMG1={self.stats['emg1_frames']}, EMG2={self.stats['emg2_frames']}, "
                      f"IMU1A={self.stats['imu1a_frames']}, IMU1B={self.stats['imu1b_frames']}, "
                      f"IMU2A={self.stats['imu2a_frames']}, IMU2B={self.stats['imu2b_frames']}, "
-                     f"MOCAP={self.stats['mocap_frames']}, Prompts={self.stats['prompts']}")
+                     f"MOCAP_L={self.stats['mocap_L_frames']}, MOCAP_R={self.stats['mocap_R_frames']}, "
+                     f"Prompts={self.stats['prompts']}")
             
             return {
                 "status": "success",

@@ -49,17 +49,6 @@
                         duration: 10000,
                         videoUrl: null
                     }
-                },
-                'continual_gesture_3': {
-                    name: '手掌翻转',
-                    icon: '🤚',
-                    gifUrl: null,
-                    calibrate: {
-                        title: '标定动作范围',
-                        instruction: '请做完整动作：手掌从向下到向上翻转',
-                        duration: 10000,
-                        videoUrl: null
-                    }
                 }
             };
 
@@ -139,6 +128,14 @@
             const taskConfig = this.contentConfig[taskId];
             const accentColor = this.styles.primaryColor;
             this.remainingSeconds = Math.ceil(config.duration / 1000);
+
+            // 【新增】调用 animationInputInterface 开始标定
+            if (window.animationInputInterface) {
+                window.animationInputInterface.startCalibration(taskId);
+                console.log(`[CalibrationGuideAnimation] 已调用 animationInputInterface.startCalibration(${taskId})`);
+            } else {
+                console.warn('[CalibrationGuideAnimation] animationInputInterface 未加载，无法进行标定');
+            }
 
             // 获取GIF路径
             const gifUrl = taskConfig.gifUrl || this._getGestureGifUrl(taskId);
@@ -242,6 +239,55 @@
                             width: 100%;
                             transition: width 1s linear;
                         "></div>
+                    </div>
+
+                    <!-- 【新增】原始值显示区域 -->
+                    <div id="calibrationRawValues" style="
+                        margin-top: 20px;
+                        padding: 16px;
+                        background: #f8fafc;
+                        border-radius: 12px;
+                        border: 1px solid #e2e8f0;
+                    ">
+                        <div style="
+                            font-size: 14px;
+                            color: #64748b;
+                            margin-bottom: 12px;
+                        ">
+                            实时原始值
+                        </div>
+                        <div style="
+                            display: flex;
+                            justify-content: space-around;
+                            gap: 20px;
+                        ">
+                            <div style="text-align: center;">
+                                <div style="
+                                    font-size: 12px;
+                                    color: #ef4444;
+                                    font-weight: 600;
+                                    margin-bottom: 4px;
+                                ">左手</div>
+                                <div id="calibrationRawValue_L" style="
+                                    font-size: 24px;
+                                    font-weight: 700;
+                                    color: #ef4444;
+                                ">--</div>
+                            </div>
+                            <div style="text-align: center;">
+                                <div style="
+                                    font-size: 12px;
+                                    color: #3b82f6;
+                                    font-weight: 600;
+                                    margin-bottom: 4px;
+                                ">右手</div>
+                                <div id="calibrationRawValue_R" style="
+                                    font-size: 24px;
+                                    font-weight: 700;
+                                    color: #3b82f6;
+                                ">--</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -388,7 +434,22 @@
         _startCountdown() {
             const countdownEl = document.getElementById('calibrationCountdown');
             const progressEl = document.getElementById('calibrationProgress');
+            const rawValueEl_L = document.getElementById('calibrationRawValue_L');
+            const rawValueEl_R = document.getElementById('calibrationRawValue_R');
             const totalSeconds = this.remainingSeconds;
+
+            // 【新增】原始值更新定时器（更频繁，每100ms更新一次）
+            this.rawValueTimer = setInterval(() => {
+                if (window.animationInputInterface) {
+                    const rawInput = window.animationInputInterface.getRawInputDual();
+                    if (rawValueEl_L) {
+                        rawValueEl_L.textContent = rawInput.left !== undefined ? rawInput.left.toFixed(2) : '--';
+                    }
+                    if (rawValueEl_R) {
+                        rawValueEl_R.textContent = rawInput.right !== undefined ? rawInput.right.toFixed(2) : '--';
+                    }
+                }
+            }, 100);
 
             this.countdownTimer = setInterval(() => {
                 this.remainingSeconds--;
@@ -423,11 +484,28 @@
                 this.countdownTimer = null;
             }
 
+            // 【新增】清理原始值更新定时器
+            if (this.rawValueTimer) {
+                clearInterval(this.rawValueTimer);
+                this.rawValueTimer = null;
+            }
+
+            // 【新增】调用 animationInputInterface 结束标定
+            let calibrationResult = null;
+            if (window.animationInputInterface) {
+                calibrationResult = window.animationInputInterface.endCalibration();
+                if (calibrationResult) {
+                    console.log(`[CalibrationGuideAnimation] 标定完成: L=[${calibrationResult.calibratedMin_L?.toFixed(2)}, ${calibrationResult.calibratedMax_L?.toFixed(2)}], R=[${calibrationResult.calibratedMin_R?.toFixed(2)}, ${calibrationResult.calibratedMax_R?.toFixed(2)}], 采样L=${calibrationResult.sampleCount_L}个, R=${calibrationResult.sampleCount_R}个`);
+                } else {
+                    console.warn('[CalibrationGuideAnimation] 标定失败，未收到有效数据');
+                }
+            }
+
             // 短暂延迟后自动继续
             setTimeout(() => {
                 if (this.isShowing) {
                     this.hide();
-                    if (this.onComplete) this.onComplete();
+                    if (this.onComplete) this.onComplete(calibrationResult);
                 }
             }, 300);
         }
@@ -474,6 +552,12 @@
             if (this.countdownTimer) {
                 clearInterval(this.countdownTimer);
                 this.countdownTimer = null;
+            }
+
+            // 【新增】清理原始值更新定时器
+            if (this.rawValueTimer) {
+                clearInterval(this.rawValueTimer);
+                this.rawValueTimer = null;
             }
 
             if (this.container) {

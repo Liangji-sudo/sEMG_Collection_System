@@ -51,14 +51,6 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                     dwellTime: 0.5,
                     preparationTime: 3.0,
                     targetSize: 0.12
-                },
-                continual_gesture_3: {
-                    trialsPerStage: 10,
-                    stageTimeout: 120,
-                    guideSpeed: 0.15,
-                    guideSize: 0.15,
-                    holdDuration: 1.0,
-                    preparationTime: 3.0
                 }
             };
             
@@ -318,14 +310,6 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                         dwellTime: 0.5,
                         preparationTime: 3.0,
                         targetSize: 0.12
-                    },
-                    continual_gesture_3: {
-                        trialsPerStage: 10,
-                        stageTimeout: 120,
-                        guideSpeed: 0.15,
-                        guideSize: 0.15,
-                        holdDuration: 1.0,
-                        preparationTime: 3.0
                     }
                 }
             };
@@ -1567,8 +1551,6 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 animationModule = window.continualGesture1Animation;
             } else if (this.currentTaskId === 'continual_gesture_2') {
                 animationModule = window.continualGesture2Animation;
-            } else if (this.currentTaskId === 'continual_gesture_3') {
-                animationModule = window.continualGesture3Animation;
             }
             
             if (animationModule) {
@@ -2024,8 +2006,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             const dirMap = {
                 'discrete_gesture': 'discrete',
                 'continual_gesture_1': 'continual_1',
-                'continual_gesture_2': 'continual_2',
-                'continual_gesture_3': 'continual_3'
+                'continual_gesture_2': 'continual_2'
             };
             return dirMap[this.currentTaskId] || 'discrete';
         }
@@ -2141,8 +2122,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             const taskIdMap = {
                 'discrete': 'discrete_gesture',
                 'continuous1': 'continual_gesture_1',
-                'continuous2': 'continual_gesture_2',
-                'continuous3': 'continual_gesture_3'
+                'continuous2': 'continual_gesture_2'
             };
             
             this.currentTaskId = taskIdMap[htmlTaskId] || htmlTaskId;

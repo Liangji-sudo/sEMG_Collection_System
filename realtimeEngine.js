@@ -231,11 +231,11 @@ class RealtimeEngine extends EventEmitter {
     onTaskChange(taskId) {
         console.log(`[realtimeEngine] ========== 任务切换: ${taskId} ==========`);
         this.currentTaskId = taskId;
-        
+
+        // 【修改】通道映射（删除continual_gesture_3，通道名不带后缀，左右手都会计算）
         const channelMapping = {
             'continual_gesture_1': 'finger_joint_angle',
-            'continual_gesture_2': 'thumb_index_distance',
-            'continual_gesture_3': 'palm_rotation_angle'
+            'continual_gesture_2': 'thumb_index_distance'
         };
         if (channelMapping[taskId]) {
             this.onMocapSetChannel(channelMapping[taskId]);

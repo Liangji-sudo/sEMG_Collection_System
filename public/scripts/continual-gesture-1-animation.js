@@ -41,7 +41,9 @@
             this.maxRadius = 150;              // 外圆最大半径
             this.guideBandWidth = 10;          // 引导区域宽度（半径±10）
             this.guideRadius = 0;              // 当前引导圆半径
-            this.userRadius = 0;               // 用户控制的圆半径
+            this.userRadius_L = 0;             // 左手控制的圆半径（红色）
+            this.userRadius_R = 0;             // 右手控制的圆半径（蓝色）
+            this.userRadius = 0;               // 兼容旧接口（取左手值）
             
             // 动画阶段
             this.phase = 'idle';               // 'idle' | 'expand' | 'hold' | 'contract'
@@ -59,9 +61,13 @@
             this.startTime = null;             // Stage开始时间
             this.remainingTime = 0;            // 剩余时间
             
-            // 跟踪精度统计
-            this.trackingData = [];            // 当前Trial的跟踪数据
-            this.trialAccuracy = [];           // 每个Trial的平均精度
+            // 跟踪精度统计（双手）
+            this.trackingData_L = [];          // 左手跟踪数据
+            this.trackingData_R = [];          // 右手跟踪数据
+            this.trackingData = [];            // 兼容旧接口
+            this.trialAccuracy_L = [];         // 左手每个Trial的平均精度
+            this.trialAccuracy_R = [];         // 右手每个Trial的平均精度
+            this.trialAccuracy = [];           // 兼容旧接口
             
             // 配置
             this.config = {
@@ -75,6 +81,17 @@
                     outerCircleBorder: 'rgba(15, 23, 42, 0.25)',
                     guideZone: 'rgba(59, 130, 246, 0.20)',
                     guideZoneBorder: 'rgba(59, 130, 246, 0.5)',
+                    // 左手颜色（红色系）
+                    userCircle_L: '#ef4444',
+                    userCircleBorder_L: '#991b1b',
+                    userCircleOnTarget_L: '#f87171',
+                    userCircleOnTargetBorder_L: '#dc2626',
+                    // 右手颜色（蓝色系）
+                    userCircle_R: '#3b82f6',
+                    userCircleBorder_R: '#1d4ed8',
+                    userCircleOnTarget_R: '#60a5fa',
+                    userCircleOnTargetBorder_R: '#2563eb',
+                    // 兼容旧接口
                     userCircle: '#ef4444',
                     userCircleBorder: '#991b1b',
                     userCircleOnTarget: '#10b981',
@@ -266,9 +283,15 @@
             console.log('[ContinualGesture1Animation] 重置状态');
             this.trial = 0;
             this.guideRadius = 0;
+            this.userRadius_L = 0;
+            this.userRadius_R = 0;
             this.userRadius = 0;
             this.phase = 'idle';
+            this.trackingData_L = [];
+            this.trackingData_R = [];
             this.trackingData = [];
+            this.trialAccuracy_L = [];
+            this.trialAccuracy_R = [];
             this.trialAccuracy = [];
         }
 
@@ -386,6 +409,8 @@
             this.phase = 'expand';
             this.phaseStartTime = performance.now();
             this.guideRadius = 0;
+            this.trackingData_L = [];
+            this.trackingData_R = [];
             this.trackingData = [];
         }
 
@@ -452,16 +477,29 @@
                 });
             }
 
-            // 计算本次Trial的平均跟踪精度
-            let accuracy = 0;
-            if (this.trackingData.length > 0) {
-                const totalError = this.trackingData.reduce((sum, d) => sum + Math.abs(d.error), 0);
-                accuracy = 1 - (totalError / this.trackingData.length / this.maxRadius);
-                accuracy = Math.max(0, Math.min(1, accuracy));
+            // 计算左手本次Trial的平均跟踪精度
+            let accuracy_L = 0;
+            if (this.trackingData_L.length > 0) {
+                const totalError_L = this.trackingData_L.reduce((sum, d) => sum + Math.abs(d.error), 0);
+                accuracy_L = 1 - (totalError_L / this.trackingData_L.length / this.maxRadius);
+                accuracy_L = Math.max(0, Math.min(1, accuracy_L));
             }
+            this.trialAccuracy_L.push(accuracy_L);
+
+            // 计算右手本次Trial的平均跟踪精度
+            let accuracy_R = 0;
+            if (this.trackingData_R.length > 0) {
+                const totalError_R = this.trackingData_R.reduce((sum, d) => sum + Math.abs(d.error), 0);
+                accuracy_R = 1 - (totalError_R / this.trackingData_R.length / this.maxRadius);
+                accuracy_R = Math.max(0, Math.min(1, accuracy_R));
+            }
+            this.trialAccuracy_R.push(accuracy_R);
+
+            // 兼容旧接口（取平均）
+            const accuracy = (accuracy_L + accuracy_R) / 2;
             this.trialAccuracy.push(accuracy);
 
-            console.log(`[ContinualGesture1Animation] Trial ${this.trial + 1} 完成, 精度: ${(accuracy * 100).toFixed(1)}%`);
+            console.log(`[ContinualGesture1Animation] Trial ${this.trial + 1} 完成, 精度: L=${(accuracy_L * 100).toFixed(1)}%, R=${(accuracy_R * 100).toFixed(1)}%`);
 
             this.trial++;
 
@@ -503,43 +541,62 @@
         }
 
         /**
-         * 处理滚轮事件
+         * 处理滚轮事件（仅用于调试/鼠标模式）
          */
         handleWheel(e) {
             if (!this.isRunning) return;
-            
+
             e.preventDefault();
             e.stopPropagation();
-            
+
             // 标准化delta
             let multiplier = 0.5; // pixels
             if (e.deltaMode === 1) multiplier = 5; // lines
             if (e.deltaMode === 2) multiplier = 20; // pages
-            
+
             const rawDelta = e.deltaY * multiplier;
             const delta = Math.max(-5, Math.min(5, rawDelta));
-            
-            // 滚轮向下（正值）= 半径增大
-            this.userRadius = Math.max(0, Math.min(this.maxRadius, this.userRadius + delta));
-            
+
+            // 滚轮向下（正值）= 半径增大（同时控制双手，仅用于调试）
+            this.userRadius_L = Math.max(0, Math.min(this.maxRadius, this.userRadius_L + delta));
+            this.userRadius_R = Math.max(0, Math.min(this.maxRadius, this.userRadius_R + delta));
+            this.userRadius = this.userRadius_L;  // 兼容
+
             // 记录跟踪数据
-            if (this.phase !== 'idle') {
-                const error = this.userRadius - this.guideRadius;
+            if (this.phase !== 'idle' && this.phase !== 'rest') {
+                const now = performance.now();
+                // 左手
+                this.trackingData_L.push({
+                    time: now,
+                    guideRadius: this.guideRadius,
+                    userRadius: this.userRadius_L,
+                    error: this.userRadius_L - this.guideRadius
+                });
+                // 右手
+                this.trackingData_R.push({
+                    time: now,
+                    guideRadius: this.guideRadius,
+                    userRadius: this.userRadius_R,
+                    error: this.userRadius_R - this.guideRadius
+                });
+                // 兼容
                 this.trackingData.push({
-                    time: performance.now(),
+                    time: now,
                     guideRadius: this.guideRadius,
                     userRadius: this.userRadius,
-                    error: error
+                    error: this.userRadius - this.guideRadius
                 });
             }
         }
 
         /**
          * 检查用户圆是否在引导区域内
+         * @param {string} hand - 'L' | 'R' | undefined (undefined时检查左手，兼容旧接口)
          */
-        isOnTarget() {
-            if (this.phase === 'idle') return false;
-            const diff = Math.abs(this.userRadius - this.guideRadius);
+        isOnTarget(hand = 'L') {
+            if (this.phase === 'idle' || this.phase === 'rest') return false;
+            const userRadius = hand === 'R' ? this.userRadius_R : this.userRadius_L;
+            const diff = Math.abs(userRadius - this.guideRadius);
             return diff <= this.guideBandWidth;
         }
 
@@ -555,10 +612,38 @@
             // 更新引导圆半径
             this.updateGuideRadius();
 
-            // 从输入接口更新用户控制的半径
-            if (this.inputInterface && this.inputInterface.isCalibrated()) {
-                const normalizedInput = this.inputInterface.getNormalizedInput();
-                this.userRadius = normalizedInput * this.maxRadius;
+            // 从输入接口更新用户控制的半径（双手）
+            if (this.inputInterface) {
+                const dualInput = this.inputInterface.getNormalizedInputDual();
+                // 左手
+                if (this.inputInterface.calibration.isCalibrated_L) {
+                    this.userRadius_L = dualInput.left * this.maxRadius;
+                }
+                // 右手
+                if (this.inputInterface.calibration.isCalibrated_R) {
+                    this.userRadius_R = dualInput.right * this.maxRadius;
+                }
+                // 兼容旧接口
+                this.userRadius = this.userRadius_L;
+
+                // 记录跟踪数据
+                if (this.phase !== 'idle' && this.phase !== 'rest') {
+                    const now = performance.now();
+                    // 左手
+                    this.trackingData_L.push({
+                        time: now,
+                        guideRadius: this.guideRadius,
+                        userRadius: this.userRadius_L,
+                        error: this.userRadius_L - this.guideRadius
+                    });
+                    // 右手
+                    this.trackingData_R.push({
+                        time: now,
+                        guideRadius: this.guideRadius,
+                        userRadius: this.userRadius_R,
+                        error: this.userRadius_R - this.guideRadius
+                    });
+                }
             }
 
             // 清除画布
@@ -568,7 +653,7 @@
             this.drawStageInfo();
             this.drawOuterCircle();
             this.drawGuideZone();
-            this.drawUserCircle();
+            this.drawUserCircles();  // 【修改】绘制双手圆
             this.drawProgress();
             this.drawInstructions();
 
@@ -702,50 +787,84 @@
         }
 
         /**
-         * 绘制用户控制的圆
+         * 绘制用户控制的圆（双手：红色=左手，蓝色=右手）
          */
-        drawUserCircle() {
+        drawUserCircles() {
             const ctx = this.ctx;
             const cx = this.config.centerX;
             const cy = this.config.centerY;
-            
-            const isOnTarget = this.isOnTarget();
-            
+
+            // 绘制左手圆（红色）
+            this._drawSingleUserCircle(ctx, cx, cy, this.userRadius_L, 'L');
+
+            // 绘制右手圆（蓝色）
+            this._drawSingleUserCircle(ctx, cx, cy, this.userRadius_R, 'R');
+        }
+
+        /**
+         * 绘制单个用户圆
+         */
+        _drawSingleUserCircle(ctx, cx, cy, radius, hand) {
+            const isOnTarget = this.isOnTarget(hand);
+            const colors = this.config.colors;
+
+            // 根据手选择颜色
+            let strokeColor, fillColor;
+            if (hand === 'R') {
+                strokeColor = isOnTarget ? colors.userCircleOnTargetBorder_R : colors.userCircleBorder_R;
+                fillColor = isOnTarget ? colors.userCircleOnTarget_R : colors.userCircle_R;
+            } else {
+                strokeColor = isOnTarget ? colors.userCircleOnTargetBorder_L : colors.userCircleBorder_L;
+                fillColor = isOnTarget ? colors.userCircleOnTarget_L : colors.userCircle_L;
+            }
+
             ctx.save();
-            
+
             // 用户圆
-            ctx.strokeStyle = isOnTarget 
-                ? this.config.colors.userCircleOnTargetBorder 
-                : this.config.colors.userCircleBorder;
+            ctx.strokeStyle = strokeColor;
             ctx.lineWidth = 3;
-            
+
             // 添加发光效果（在目标区域内时）
             if (isOnTarget) {
-                ctx.shadowColor = this.config.colors.userCircleOnTarget;
+                ctx.shadowColor = fillColor;
                 ctx.shadowBlur = 10;
             }
-            
+
             ctx.beginPath();
-            ctx.arc(cx, cy, this.userRadius, 0, Math.PI * 2);
+            ctx.arc(cx, cy, radius, 0, Math.PI * 2);
             ctx.stroke();
-            
+
             // 重置阴影
             ctx.shadowColor = 'transparent';
             ctx.shadowBlur = 0;
-            
+
             // 在圆上绘制一个小标记点（方便看到圆的位置，即使半径很小）
-            const markerAngle = -Math.PI / 2; // 顶部
-            const markerX = cx + this.userRadius * Math.cos(markerAngle);
-            const markerY = cy + this.userRadius * Math.sin(markerAngle);
-            
-            ctx.fillStyle = isOnTarget 
-                ? this.config.colors.userCircleOnTarget 
-                : this.config.colors.userCircle;
+            // 左手标记在顶部，右手标记在底部，避免重叠
+            const markerAngle = hand === 'R' ? Math.PI / 2 : -Math.PI / 2;
+            const markerX = cx + radius * Math.cos(markerAngle);
+            const markerY = cy + radius * Math.sin(markerAngle);
+
+            ctx.fillStyle = fillColor;
             ctx.beginPath();
             ctx.arc(markerX, markerY, 6, 0, Math.PI * 2);
             ctx.fill();
-            
+
+            // 在标记点旁边显示手的标识
+            ctx.fillStyle = fillColor;
+            ctx.font = '600 10px ui-sans-serif, system-ui';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = hand === 'R' ? 'top' : 'bottom';
+            const labelY = hand === 'R' ? markerY + 10 : markerY - 10;
+            ctx.fillText(hand === 'R' ? '右' : '左', markerX, labelY);
+
             ctx.restore();
+        }
+
+        /**
+         * 绘制用户控制的圆（旧接口，保留兼容）
+         */
+        drawUserCircle() {
+            this.drawUserCircles();
         }
 
         /**
@@ -754,52 +873,64 @@
         drawProgress() {
             const ctx = this.ctx;
             const bottomY = this.config.canvasHeight - 20;
-            
+
             ctx.save();
-            
+
             // 右下角显示进度
             ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
             ctx.font = '700 16px ui-sans-serif, system-ui';
             ctx.textAlign = 'right';
             ctx.textBaseline = 'bottom';
             ctx.fillText(`Trial ${this.trial} / ${this.maxTrials}`, this.config.canvasWidth - 20, bottomY);
-            
+
             // 进度条
             const barWidth = 150;
             const barHeight = 8;
             const barX = this.config.canvasWidth - 20 - barWidth;
             const barY = bottomY - 30;
             const progress = this.maxTrials > 0 ? this.trial / this.maxTrials : 0;
-            
+
             // 进度条背景
             ctx.fillStyle = '#e5e7eb';
             ctx.beginPath();
             ctx.roundRect(barX, barY, barWidth, barHeight, 4);
             ctx.fill();
-            
+
             // 进度条填充
             ctx.fillStyle = this.config.colors.success;
             ctx.beginPath();
             ctx.roundRect(barX, barY, barWidth * progress, barHeight, 4);
             ctx.fill();
-            
-            // 左下角显示当前状态信息
+
+            // 左下角显示双手状态信息
             ctx.fillStyle = this.config.colors.muted;
             ctx.font = '500 14px ui-sans-serif, system-ui';
             ctx.textAlign = 'left';
             ctx.textBaseline = 'bottom';
-            
-            const isOnTarget = this.isOnTarget();
-            const statusText = isOnTarget ? '✓ 在引导区域内' : '○ 调整圆的大小';
-            const errorText = this.phase !== 'idle' 
-                ? `误差: ${(this.userRadius - this.guideRadius).toFixed(1)}` 
-                : '';
-            
-            ctx.fillText(`用户: ${this.userRadius.toFixed(0)} | 引导: ${this.guideRadius.toFixed(0)} | ${errorText}`, 20, bottomY - 20);
-            
-            ctx.fillStyle = isOnTarget ? this.config.colors.success : this.config.colors.muted;
-            ctx.fillText(statusText, 20, bottomY);
-            
+
+            const isOnTarget_L = this.isOnTarget('L');
+            const isOnTarget_R = this.isOnTarget('R');
+
+            // 显示双手半径和误差
+            const error_L = this.phase !== 'idle' && this.phase !== 'rest'
+                ? (this.userRadius_L - this.guideRadius).toFixed(1)
+                : '-';
+            const error_R = this.phase !== 'idle' && this.phase !== 'rest'
+                ? (this.userRadius_R - this.guideRadius).toFixed(1)
+                : '-';
+
+            ctx.fillText(`引导: ${this.guideRadius.toFixed(0)} | 左手: ${this.userRadius_L.toFixed(0)} (误差:${error_L}) | 右手: ${this.userRadius_R.toFixed(0)} (误差:${error_R})`, 20, bottomY - 20);
+
+            // 显示双手状态
+            const statusText_L = isOnTarget_L ? '✓左' : '○左';
+            const statusText_R = isOnTarget_R ? '✓右' : '○右';
+
+            ctx.fillStyle = isOnTarget_L ? this.config.colors.userCircle_L : this.config.colors.muted;
+            ctx.fillText(statusText_L, 20, bottomY);
+
+            ctx.fillStyle = isOnTarget_R ? this.config.colors.userCircle_R : this.config.colors.muted;
+            ctx.fillText(statusText_R, 60, bottomY);
+
             ctx.restore();
         }
 

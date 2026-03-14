@@ -465,8 +465,7 @@ const CollectionTiming = {
         const configMap = {
             'discrete_gesture': DISCRETE_GESTURE_CONFIG,
             'continual_gesture_1': CONTINUAL_GESTURE_1_CONFIG,
-            'continual_gesture_2': CONTINUAL_GESTURE_2_CONFIG,
-            'continual_gesture_3': CONTINUAL_GESTURE_3_CONFIG
+            'continual_gesture_2': CONTINUAL_GESTURE_2_CONFIG
         };
         return configMap[taskId] || DISCRETE_GESTURE_CONFIG;
     },
@@ -609,19 +608,6 @@ const TASK_DEFINITIONS = {
             { name: 'wrist_control_3', label: '手腕控制任务3', instruction: '用手腕动作控制光标移动到目标区域', icon: '🔄', color: '#f59e0b', maxTrials: 10, timeout: 120000 },
             { name: 'wrist_control_4', label: '手腕控制任务4', instruction: '用手腕动作控制光标移动到目标区域', icon: '🔄', color: '#f59e0b', maxTrials: 10, timeout: 120000 }
         ]
-    },
-    continual_gesture_3: {
-        id: 'continual_gesture_3',
-        name: '连续手势3',
-        description: '自定义控制光标任务',
-        icon: 'fa-gamepad',
-        taskType: 'wheel_cursor',
-        stages: [
-            { name: 'custom_control_1', label: '自定义控制任务1', instruction: '用自定义方式控制光标移动到目标区域', icon: '🎮', color: '#8b5cf6', maxTrials: 10, timeout: 120000 },
-            { name: 'custom_control_2', label: '自定义控制任务2', instruction: '用自定义方式控制光标移动到目标区域', icon: '🎮', color: '#8b5cf6', maxTrials: 10, timeout: 120000 },
-            { name: 'custom_control_3', label: '自定义控制任务3', instruction: '用自定义方式控制光标移动到目标区域', icon: '🎮', color: '#8b5cf6', maxTrials: 10, timeout: 120000 },
-            { name: 'custom_control_4', label: '自定义控制任务4', instruction: '用自定义方式控制光标移动到目标区域', icon: '🎮', color: '#8b5cf6', maxTrials: 10, timeout: 120000 }
-        ]
     }
 };
 
@@ -629,8 +615,7 @@ const TASK_DEFINITIONS = {
 const TASK_ID_MAP = {
     'discrete': 'discrete_gesture',
     'continuous1': 'continual_gesture_1',
-    'continuous2': 'continual_gesture_2',
-    'continuous3': 'continual_gesture_3'
+    'continuous2': 'continual_gesture_2'
 };
 
 // TaskConfig API（兼容原task-config.js的接口）

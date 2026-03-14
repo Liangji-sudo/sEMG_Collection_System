@@ -9,10 +9,15 @@ mocap_server.py - 动捕数据服务器
 - SDK模式：连接 Nokov 动捕 SDK (服务器IP: 10.1.1.198)
 - 模拟器模式：连接 mocap_simulator.py (ws://localhost:8768)
 
-数据通道（根据当前采集的手势类型计算）：
-- finger_joint_angle: 食指关节角度 (0-90°) - 连续手势1 (食指上抬)
-- thumb_index_distance: 拇指食指距离 (mm) - 连续手势2 (捏合)
-- palm_rotation_angle: 手掌翻转角度 (0-180°) - 连续手势3 (翻转)
+Marker点命名（每只手10个，共20个）：
+- 左手：TH1_L, TH2_L, TH3_L, TH4_L, ID1_L, ID2_L, ID3_L, HB1_L, HB2_L, HB3_L
+- 右手：TH1_R, TH2_R, TH3_R, TH4_R, ID1_R, ID2_R, ID3_R, HB1_R, HB2_R, HB3_R
+
+数据通道（左右手各自独立计算）：
+- finger_joint_angle_L/R: 食指关节角度 (0-90°) - 连续手势1 (食指上抬)
+  计算方法：用 ID1, ID2, ID3 和 HB1, HB2, HB3 计算食指与手掌法线的夹角
+- thumb_index_distance_L/R: 拇指食指距离 (mm) - 连续手势2 (捏合)
+  计算方法：用 TH1 和 ID1 的距离
 
 WebSocket端口: 8767 (供 realtimeEngine.js 连接)
 
@@ -59,8 +64,10 @@ SERVER_PORT = 8767
 # 数据发送频率
 SEND_RATE = 50  # Hz
 
-# Marker 名称映射（按顺序）
-MARKER_NAMES = ['rt1', 'rt2', 'rt3', 'ri1', 'ri2', 'ri3', 'rm1', 'rm2', 'rm3', 'm1', 'm2', 'm3']
+# Marker 名称映射（按顺序：左手10个 + 右手10个）
+MARKER_NAMES_LEFT = ['TH1_L', 'TH2_L', 'TH3_L', 'TH4_L', 'ID1_L', 'ID2_L', 'ID3_L', 'HB1_L', 'HB2_L', 'HB3_L']
+MARKER_NAMES_RIGHT = ['TH1_R', 'TH2_R', 'TH3_R', 'TH4_R', 'ID1_R', 'ID2_R', 'ID3_R', 'HB1_R', 'HB2_R', 'HB3_R']
+MARKER_NAMES = MARKER_NAMES_LEFT + MARKER_NAMES_RIGHT
 
 
 # ==================== 手势计算函数 ====================
@@ -87,19 +94,32 @@ def fit_plane_normal(p1, p2, p3):
     return normal / norm
 
 
-def calculate_finger_joint_angle(markers):
+def calculate_finger_joint_angle(markers, hand='L'):
     """计算食指上抬角度（连续手势1）
-    返回: 0° = 食指竖直（与手掌垂直）, 90° = 食指平放（与手掌平行）
-    """
-    ri1 = np.array(markers.get("ri1", [0, 0, 0]))
-    ri2 = np.array(markers.get("ri2", [0, 0, 0]))
-    ri3 = np.array(markers.get("ri3", [0, 0, 0]))
-    m1 = np.array(markers.get("m1", [0, 0, 0]))
-    m2 = np.array(markers.get("m2", [0, 0, 0]))
-    m3 = np.array(markers.get("m3", [0, 0, 0]))
 
-    index_dir = fit_line_direction(ri1, ri2, ri3)
-    palm_normal = fit_plane_normal(m1, m2, m3)
+    使用 ID1, ID2, ID3 计算食指方向，HB1, HB2, HB3 计算手掌法线
+    返回: 0° = 食指竖直（与手掌垂直）, 90° = 食指平放（与手掌平行）
+
+    Args:
+        markers: marker数据字典
+        hand: 'L' 或 'R'，指定左手或右手
+    """
+    suffix = f'_{hand}'
+
+    id1 = np.array(markers.get(f"ID1{suffix}", [0, 0, 0]))
+    id2 = np.array(markers.get(f"ID2{suffix}", [0, 0, 0]))
+    id3 = np.array(markers.get(f"ID3{suffix}", [0, 0, 0]))
+    hb1 = np.array(markers.get(f"HB1{suffix}", [0, 0, 0]))
+    hb2 = np.array(markers.get(f"HB2{suffix}", [0, 0, 0]))
+    hb3 = np.array(markers.get(f"HB3{suffix}", [0, 0, 0]))
+
+    # 检查坐标是否有效
+    all_points = [id1, id2, id3, hb1, hb2, hb3]
+    if any(any(abs(v) > 100000 for v in p) for p in all_points):
+        return None  # 无效数据
+
+    index_dir = fit_line_direction(id1, id2, id3)
+    palm_normal = fit_plane_normal(hb1, hb2, hb3)
 
     cos_angle = abs(np.dot(index_dir, palm_normal))
     cos_angle = np.clip(cos_angle, -1, 1)
@@ -111,60 +131,35 @@ def calculate_finger_joint_angle(markers):
     return angle_with_normal
 
 
-def calculate_thumb_index_distance(markers):
-    """计算拇指食指距离（连续手势2）"""
-    rt1 = np.array(markers.get("rt1", [0, 0, 0]))
-    ri1 = np.array(markers.get("ri1", [0, 0, 0]))
-    distance = np.linalg.norm(rt1 - ri1)
+def calculate_thumb_index_distance(markers, hand='L'):
+    """计算拇指食指距离（连续手势2）
+
+    使用 TH1 和 ID1 的距离
+
+    Args:
+        markers: marker数据字典
+        hand: 'L' 或 'R'，指定左手或右手
+    """
+    suffix = f'_{hand}'
+
+    th1 = np.array(markers.get(f"TH1{suffix}", [0, 0, 0]))
+    id1 = np.array(markers.get(f"ID1{suffix}", [0, 0, 0]))
+
+    # 检查坐标是否有效
+    if any(abs(v) > 100000 for v in th1) or any(abs(v) > 100000 for v in id1):
+        return None  # 无效数据
+
+    distance = np.linalg.norm(th1 - id1)
     return distance
 
 
-def calculate_palm_rotation_angle(markers):
-    """计算手掌翻转角度（连续手势3）
-
-    使用 rt2（拇指第一关节）到 ri2（食指第一关节）的向量，
-    投影到 XZ 平面后，计算与 Z 轴正方向的夹角。
-
-    坐标系：
-    - Z轴：向上（掌背方向）
-    - Y轴：指尖方向（前臂方向）
-    - X轴：向右
-
-    返回值范围：0-180°
-    """
-    global _last_valid_palm_angle
-
-    rt2 = np.array(markers.get("rt2", [0, 0, 0]))  # 拇指第一关节
-    ri2 = np.array(markers.get("ri2", [0, 0, 0]))  # 食指第一关节
-
-    # 检查坐标是否有效（超过100000认为是无效坐标，如9999999）
-    if any(abs(v) > 100000 for v in rt2) or any(abs(v) > 100000 for v in ri2):
-        return _last_valid_palm_angle
-
-    # 从 rt2 到 ri2 的向量
-    vec = ri2 - rt2
-
-    # 投影到 XZ 平面
-    x_component = vec[0]
-    z_component = vec[2]
-
-    # atan2(x, z): 计算向量与 Z 轴正方向的夹角
-    # 返回 -180° ~ 180°
-    raw_angle = math.degrees(math.atan2(x_component, z_component))
-
-    # 映射到 0° ~ 180°
-    angle = (raw_angle + 360) % 360  # 先映射到 0-360°
-    if angle > 180:
-        angle = 360 - angle  # 折叠到 0-180°
-
-    # 保存有效值
-    _last_valid_palm_angle = angle
-
-    return angle
-
-
-# 用于保存上一次有效的手掌翻转角度
-_last_valid_palm_angle = 90.0
+# 用于保存上一次有效的值（左右手分别保存）
+_last_valid_values = {
+    'finger_joint_angle_L': 45.0,
+    'finger_joint_angle_R': 45.0,
+    'thumb_index_distance_L': 50.0,
+    'thumb_index_distance_R': 50.0,
+}
 
 
 # ==================== 数据接收器基类 ====================
@@ -187,14 +182,23 @@ class BaseMocapReceiver:
         if not markers:
             return
 
-        finger_angle = calculate_finger_joint_angle(markers)
-        pinch_dist = calculate_thumb_index_distance(markers)
-        palm_angle = calculate_palm_rotation_angle(markers)
+        # 左手
+        finger_angle_L = calculate_finger_joint_angle(markers, 'L')
+        pinch_dist_L = calculate_thumb_index_distance(markers, 'L')
+
+        # 右手
+        finger_angle_R = calculate_finger_joint_angle(markers, 'R')
+        pinch_dist_R = calculate_thumb_index_distance(markers, 'R')
+
+        # 格式化输出（None显示为 --）
+        fa_L = f"{finger_angle_L:>5.1f}" if finger_angle_L is not None else "   --"
+        pd_L = f"{pinch_dist_L:>5.1f}" if pinch_dist_L is not None else "   --"
+        fa_R = f"{finger_angle_R:>5.1f}" if finger_angle_R is not None else "   --"
+        pd_R = f"{pinch_dist_R:>5.1f}" if pinch_dist_R is not None else "   --"
 
         print(f"[Mocap] Frame:{frame_no:>5} | "
-              f"食指:{finger_angle:>5.1f}° | "
-              f"捏合:{pinch_dist:>5.1f}mm | "
-              f"翻转:{palm_angle:>5.1f}°")
+              f"L: 食指:{fa_L}° 捏合:{pd_L}mm | "
+              f"R: 食指:{fa_R}° 捏合:{pd_R}mm")
 
     def get_markers(self):
         """获取最新的 marker 数据"""
@@ -445,38 +449,72 @@ class MocapServer:
         self.collecting = False
         self.active_gesture = None
 
+        # 通道配置（左右手各自独立）
         self.channels = {
-            'finger_joint_angle': {
+            # 左手通道
+            'finger_joint_angle_L': {
                 'value': 0.0, 'min': 0.0, 'max': 90.0,
-                'unit': '°', 'description': '食指关节角度'
+                'unit': '°', 'description': '左手食指关节角度'
             },
-            'thumb_index_distance': {
+            'thumb_index_distance_L': {
                 'value': 0.0, 'min': 0.0, 'max': 150.0,
-                'unit': 'mm', 'description': '拇指食指距离'
+                'unit': 'mm', 'description': '左手拇指食指距离'
             },
-            'palm_rotation_angle': {
-                'value': 0.0, 'min': 0.0, 'max': 180.0,
-                'unit': '°', 'description': '手掌翻转角度'
+            # 右手通道
+            'finger_joint_angle_R': {
+                'value': 0.0, 'min': 0.0, 'max': 90.0,
+                'unit': '°', 'description': '右手食指关节角度'
+            },
+            'thumb_index_distance_R': {
+                'value': 0.0, 'min': 0.0, 'max': 150.0,
+                'unit': 'mm', 'description': '右手拇指食指距离'
             }
         }
 
-        self.active_channel = 'finger_joint_angle'
+        # 当前激活的通道（连续手势1或2）
+        self.active_channel = 'finger_joint_angle'  # 不带后缀，表示手势类型
         self.send_rate = SEND_RATE
         self._running = False
 
     def update_from_mocap(self):
-        """从动捕数据更新通道值"""
+        """从动捕数据更新通道值（左右手分别计算）"""
+        global _last_valid_values
         markers = self.receiver.get_markers()
         if not markers:
             return
 
-        finger_angle = calculate_finger_joint_angle(markers)
-        pinch_dist = calculate_thumb_index_distance(markers)
-        palm_angle = calculate_palm_rotation_angle(markers)
+        # 左手
+        finger_angle_L = calculate_finger_joint_angle(markers, 'L')
+        pinch_dist_L = calculate_thumb_index_distance(markers, 'L')
 
-        self.channels['finger_joint_angle']['value'] = finger_angle
-        self.channels['thumb_index_distance']['value'] = pinch_dist
-        self.channels['palm_rotation_angle']['value'] = palm_angle
+        # 右手
+        finger_angle_R = calculate_finger_joint_angle(markers, 'R')
+        pinch_dist_R = calculate_thumb_index_distance(markers, 'R')
+
+        # 更新通道值（使用上次有效值填充无效数据）
+        if finger_angle_L is not None:
+            self.channels['finger_joint_angle_L']['value'] = finger_angle_L
+            _last_valid_values['finger_joint_angle_L'] = finger_angle_L
+        else:
+            self.channels['finger_joint_angle_L']['value'] = _last_valid_values['finger_joint_angle_L']
+
+        if pinch_dist_L is not None:
+            self.channels['thumb_index_distance_L']['value'] = pinch_dist_L
+            _last_valid_values['thumb_index_distance_L'] = pinch_dist_L
+        else:
+            self.channels['thumb_index_distance_L']['value'] = _last_valid_values['thumb_index_distance_L']
+
+        if finger_angle_R is not None:
+            self.channels['finger_joint_angle_R']['value'] = finger_angle_R
+            _last_valid_values['finger_joint_angle_R'] = finger_angle_R
+        else:
+            self.channels['finger_joint_angle_R']['value'] = _last_valid_values['finger_joint_angle_R']
+
+        if pinch_dist_R is not None:
+            self.channels['thumb_index_distance_R']['value'] = pinch_dist_R
+            _last_valid_values['thumb_index_distance_R'] = pinch_dist_R
+        else:
+            self.channels['thumb_index_distance_R']['value'] = _last_valid_values['thumb_index_distance_R']
 
     async def register(self, websocket):
         self.clients.add(websocket)
@@ -497,14 +535,13 @@ class MocapServer:
                 self.collecting = True
                 self.active_gesture = gesture
 
+                # 根据手势类型设置激活的通道（不带后缀，左右手都会计算）
                 if gesture == 'continual_gesture_1':
                     self.active_channel = 'finger_joint_angle'
                 elif gesture == 'continual_gesture_2':
                     self.active_channel = 'thumb_index_distance'
-                elif gesture == 'continual_gesture_3':
-                    self.active_channel = 'palm_rotation_angle'
 
-                print(f"[MocapServer] 开始采集: {gesture} -> {self.active_channel}")
+                print(f"[MocapServer] 开始采集: {gesture} -> {self.active_channel} (L/R)")
 
                 await websocket.send(json.dumps({
                     'type': 'response', 'cmd': 'start_collecting',
