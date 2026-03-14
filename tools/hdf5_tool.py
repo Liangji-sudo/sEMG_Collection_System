@@ -1409,13 +1409,36 @@ class HDF5Tool(QMainWindow):
         file_group = QGroupBox("H5文件列表")
         file_layout = QVBoxLayout(file_group)
 
+        # 文件数量和全选按钮
+        count_layout = QHBoxLayout()
         self.file_count_label = QLabel("共 0 个文件")
         self.file_count_label.setStyleSheet("color: #666;")
-        file_layout.addWidget(self.file_count_label)
+        count_layout.addWidget(self.file_count_label)
+        count_layout.addStretch()
+
+        self.select_all_btn = QPushButton("全选")
+        self.select_all_btn.setFixedWidth(60)
+        self.select_all_btn.clicked.connect(self.select_all_files)
+        self.select_all_btn.setStyleSheet("""
+            QPushButton {
+                padding: 4px 8px;
+                background: #e9ecef;
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background: #dee2e6;
+            }
+        """)
+        count_layout.addWidget(self.select_all_btn)
+        file_layout.addLayout(count_layout)
 
         self.file_list = QListWidget()
+        self.file_list.setSelectionMode(QListWidget.ExtendedSelection)  # 支持多选
         self.file_list.itemClicked.connect(self.on_file_selected)
         self.file_list.itemDoubleClicked.connect(self.on_file_double_clicked)
+        self.file_list.itemSelectionChanged.connect(self.on_selection_changed)  # 选择变化事件
         self.file_list.setAlternatingRowColors(True)
         self.file_list.setStyleSheet("""
             QListWidget {
@@ -1558,6 +1581,46 @@ class HDF5Tool(QMainWindow):
         self.view_btn.setEnabled(True)
         self.add_to_sync_btn.setEnabled(True)
 
+    def select_all_files(self):
+        """全选/取消全选文件列表"""
+        if self.file_list.count() == 0:
+            return
+
+        # 检查是否已经全选
+        all_selected = len(self.file_list.selectedItems()) == self.file_list.count()
+
+        if all_selected:
+            # 取消全选
+            self.file_list.clearSelection()
+            self.select_all_btn.setText("全选")
+        else:
+            # 全选
+            self.file_list.selectAll()
+            self.select_all_btn.setText("取消全选")
+
+    def on_selection_changed(self):
+        """选择变化时更新按钮状态和文字"""
+        selected_count = len(self.file_list.selectedItems())
+        total_count = self.file_list.count()
+
+        # 更新全选按钮文字
+        if selected_count == total_count and total_count > 0:
+            self.select_all_btn.setText("取消全选")
+        else:
+            self.select_all_btn.setText("全选")
+
+        if selected_count > 0:
+            self.view_btn.setEnabled(True)
+            self.add_to_sync_btn.setEnabled(True)
+            if selected_count == 1:
+                self.add_to_sync_btn.setText("添加到同步列表")
+            else:
+                self.add_to_sync_btn.setText(f"添加 {selected_count} 个文件到同步列表")
+        else:
+            self.view_btn.setEnabled(False)
+            self.add_to_sync_btn.setEnabled(False)
+            self.add_to_sync_btn.setText("添加到同步列表")
+
     def on_file_double_clicked(self, item):
         file_path = item.data(Qt.UserRole)
         if file_path:
@@ -1565,17 +1628,19 @@ class HDF5Tool(QMainWindow):
             self.tabs.setCurrentIndex(0)
 
     def view_selected_file(self):
-        item = self.file_list.currentItem()
-        if item:
-            file_path = item.data(Qt.UserRole)
+        items = self.file_list.selectedItems()
+        if items:
+            # 查看第一个选中的文件
+            file_path = items[0].data(Qt.UserRole)
             self.viewer_tab.load_file(file_path)
             self.tabs.setCurrentIndex(0)
 
     def add_to_sync_list(self):
-        item = self.file_list.currentItem()
-        if item:
-            file_path = item.data(Qt.UserRole)
-            self.sync_tab.add_files_from_list([file_path])
+        """批量添加选中的文件到同步列表"""
+        items = self.file_list.selectedItems()
+        if items:
+            file_paths = [item.data(Qt.UserRole) for item in items]
+            self.sync_tab.add_files_from_list(file_paths)
             self.tabs.setCurrentIndex(1)
 
 
