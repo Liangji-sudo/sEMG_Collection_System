@@ -82,6 +82,7 @@ class RealtimeEngine extends EventEmitter {
         this.currentStageName = null;
         this.stageFileOpen = false;
         this.stage_start_time = 0;
+        this.currentStageNeedMocap = false;  // 【新增】当前stage是否需要动捕数据
         
         // Session状态
         this.currentSessionIndex = 0;
@@ -197,7 +198,7 @@ class RealtimeEngine extends EventEmitter {
                 case 'collection_stop': this.onCollectionStop(data.completed); break;
                 case 'session_change': this.onSessionChange(data.sessionIndex, data.sessionNumber); break;
                 case 'stage_change': this.onStageChange(data.stageIndex, data.stageName); break;
-                case 'stage_start': this.onStageStart(data.stageName, data.stageIndex, data.timestamp); break;
+                case 'stage_start': this.onStageStart(data.stageName, data.stageIndex, data.timestamp, data.needMocap); break;
                 case 'stage_end': this.onStageEnd(data.stageName, data.timestamp); break;
                 case 'prompt_start': this.onPromptStart(data.promptName, data.promptIndex); break;
                 case 'prompt_end': this.onPromptEnd(data.promptName, data.promptIndex); break;
@@ -302,9 +303,12 @@ class RealtimeEngine extends EventEmitter {
 
     onStageChange(stageIndex, stageName) { this.currentStageName = stageName; }
 
-    async onStageStart(stageName, stageIndex, timestamp) {
+    async onStageStart(stageName, stageIndex, timestamp, needMocap = false) {
         this.currentStageName = stageName;
         this.stage_start_time = timestamp || Date.now();
+        // 【新增】保存当前stage是否需要动捕数据
+        this.currentStageNeedMocap = needMocap;
+        console.log(`[realtimeEngine] Stage开始: ${stageName}, needMocap: ${needMocap}`);
         await this.openStageFile(stageName, stageIndex);
     }
 
@@ -659,10 +663,12 @@ class RealtimeEngine extends EventEmitter {
 
         try {
             this.mocap_packet_count++;
+            // 【始终】广播给前端（用于实时显示）
             this.broadcastToClients({ type: 'mocap_data', data: packet });
 
             // 【修改】采集时批量保存 mocap 原始数据到 storage
-            if (this.isCollecting && !this.collectionPaused && this.stageFileOpen && !this.isClosingStageFile) {
+            // 【新增】只有当前stage需要动捕数据时才保存
+            if (this.isCollecting && !this.collectionPaused && this.stageFileOpen && !this.isClosingStageFile && this.currentStageNeedMocap) {
                 // 获取批量帧数据
                 const frames = packet.frames;  // [{markers, frame, time}, ...]
 

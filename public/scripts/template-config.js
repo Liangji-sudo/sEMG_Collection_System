@@ -798,6 +798,9 @@
             const btnBg = enabledGesturesCount > 0 ? '#1e88e5' : '#e0e0e0';
             const btnColor = enabledGesturesCount > 0 ? 'white' : '#666';
 
+            // 【新增】动捕勾选框状态
+            const needMocap = item.needMocap || false;
+
             return `
                 <div class="config-item config-item-stage" data-index="${index}">
                     <div class="config-item-drag">
@@ -813,6 +816,15 @@
                         <input type="text" class="config-item-input config-item-instruction" data-category="category3"
                                data-index="${index}" data-field="instruction" value="${item.instruction || ''}" placeholder="指导语">
                     </div>
+                    <!-- 【新增】动捕勾选框 -->
+                    <label class="stage-mocap-checkbox" title="勾选后该子场景采集时会记录动捕数据"
+                           style="display: flex; align-items: center; gap: 4px; padding: 4px 8px; background: ${needMocap ? '#e8f5e9' : '#f5f5f5'}; border: 1px solid ${needMocap ? '#4caf50' : '#ddd'}; border-radius: 4px; cursor: pointer; font-size: 11px; white-space: nowrap;">
+                        <input type="checkbox" data-category="category3" data-index="${index}"
+                               data-field="needMocap" ${needMocap ? 'checked' : ''}
+                               style="margin: 0; cursor: pointer;">
+                        <i class="fa fa-video" style="color: ${needMocap ? '#4caf50' : '#999'};"></i>
+                        <span style="color: ${needMocap ? '#2e7d32' : '#666'};">动捕</span>
+                    </label>
                     <button class="stage-gestures-btn" data-stage-index="${index}" title="配置该子场景的手势库"
                             style="display: flex; align-items: center; gap: 4px; padding: 6px 10px; background: ${btnBg}; color: ${btnColor}; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; white-space: nowrap;">
                         <i class="fa fa-hand-paper"></i>
@@ -871,7 +883,7 @@
             container.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
                 checkbox.addEventListener('change', (e) => {
                     const { category, id, index, field } = e.target.dataset;
-                    
+
                     if (category === 'tasks') {
                         const task = this.currentTemplate.tasks.find(t => t.id === id);
                         if (task) task.enabled = e.target.checked;
@@ -879,6 +891,11 @@
                         this.currentTemplate[category][index][field || 'enabled'] = e.target.checked;
                     }
                     this.isDirty = true;
+
+                    // 【新增】如果是needMocap字段变化，重新渲染以更新UI样式
+                    if (field === 'needMocap') {
+                        this.renderCategoriesTab();
+                    }
                 });
             });
 

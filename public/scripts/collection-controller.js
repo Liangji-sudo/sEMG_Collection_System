@@ -1200,11 +1200,15 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             // 【修复】发送 stage_start 命令打开 H5 文件
             const currentStage = this.stages[this.currentStageIndex];
+            // 【新增】离散手势采集时，根据stage配置决定是否需要动捕数据
+            const needMocap = currentStage?.needMocap || false;
             this.sendToRealtimeEngine('stage_start', {
                 stageName: currentStage?.name || currentStage?.id,
                 stageIndex: this.currentStageIndex,
-                timestamp: Date.now() / 1000  // 【修改】转换为秒，与ble_server时间戳一致
+                timestamp: Date.now() / 1000,  // 【修改】转换为秒，与ble_server时间戳一致
+                needMocap: needMocap  // 【新增】传递动捕需求标志
             });
+            console.log(`[Collection] Stage "${currentStage?.name}" needMocap: ${needMocap}`);
 
             this.currentPhase = 'prepare';
             this.showPreparation(() => {
@@ -1543,11 +1547,14 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 console.log('[Collection] 传递执行参数给动画模块:', this.currentExecutionParams);
 
                 // 【修复】发送 stage_start 命令打开 H5 文件
+                // 【新增】连续手势采集必须记录动捕数据，needMocap 始终为 true
                 this.sendToRealtimeEngine('stage_start', {
                     stageName: currentStage?.name || currentStage?.id,
                     stageIndex: this.currentStageIndex,
-                    timestamp: Date.now()
+                    timestamp: Date.now(),
+                    needMocap: true  // 【新增】连续手势必须记录动捕数据
                 });
+                console.log(`[Collection] 连续手势 Stage "${currentStage?.name}" needMocap: true (强制)`);
 
                 this.setupContinualProgressUpdater(animationModule);
 
