@@ -1219,6 +1219,13 @@
                                     <option value="instant" ${gesture.gestureType !== 'sustained' ? 'selected' : ''}>瞬时</option>
                                     <option value="sustained" ${gesture.gestureType === 'sustained' ? 'selected' : ''}>持续</option>
                                 </select>
+                                ${gesture.gestureType === 'sustained' ? `
+                                <div class="gesture-duration-wrapper" title="持续时间（秒），留空则使用执行参数中的默认值">
+                                    <input type="number" class="gesture-duration-input" data-index="${index}"
+                                           value="${gesture.duration || ''}" placeholder="时长" min="0.5" max="30" step="0.5">
+                                    <span class="duration-unit">秒</span>
+                                </div>
+                                ` : ''}
                                 <input type="text" class="gesture-gif-input" data-index="${index}"
                                        value="${gesture.gifFile || ''}" placeholder="GIF文件名" title="GIF文件名（如 thumb_up.gif）">
                                 <button class="gesture-delete-btn" data-index="${index}">
@@ -1316,8 +1323,27 @@
                 select.addEventListener('change', (e) => {
                     const index = parseInt(e.target.dataset.index);
                     this.currentTemplate.gestures.discrete[index].gestureType = e.target.value;
+                    // 如果切换为瞬时手势，清除duration字段
+                    if (e.target.value === 'instant') {
+                        delete this.currentTemplate.gestures.discrete[index].duration;
+                    }
                     this.isDirty = true;
                     this.renderGesturesTab();
+                });
+            });
+
+            // 【新增】持续时间输入
+            container.querySelectorAll('.gesture-duration-input').forEach(input => {
+                input.addEventListener('change', (e) => {
+                    const index = parseInt(e.target.dataset.index);
+                    const duration = parseFloat(e.target.value);
+                    if (!isNaN(duration) && duration > 0) {
+                        this.currentTemplate.gestures.discrete[index].duration = duration;
+                    } else {
+                        // 留空则删除duration字段，使用默认值
+                        delete this.currentTemplate.gestures.discrete[index].duration;
+                    }
+                    this.isDirty = true;
                 });
             });
 

@@ -233,10 +233,13 @@
 
             // 从executionParams获取重复次数和持续时间
             const repeatCount = executionParams?.repeatPerGesture || 5;
-            // 【新增】保存持续时间到实例变量，供createPromptObject使用
-            this.sustainedDuration = executionParams?.sustainedDuration || 2.0;
+            // 【修改】优先使用手势自身的duration，否则使用执行参数中的默认值
+            this.sustainedDuration = gesture.duration || executionParams?.sustainedDuration || 2.0;
             // 【新增】保存当前手势配置
             this.currentGestureConfig = gesture;
+
+            console.log('[DiscreteGestureAnimation] 持续时间:', this.sustainedDuration,
+                        '(来源:', gesture.duration ? '手势配置' : '执行参数默认值', ')');
 
             // 【修复】直接使用gesture.name作为gestureId，确保显示用户定义的名称
             const gestureId = gesture.name;

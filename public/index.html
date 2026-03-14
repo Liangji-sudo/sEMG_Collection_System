@@ -3383,6 +3383,41 @@
             border-color: rgba(249, 115, 22, 0.3);
         }
 
+        /* 【新增】持续时间输入框包装器 */
+        .gesture-duration-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+
+        .gesture-duration-input {
+            width: 55px;
+            padding: 6px 6px;
+            border: 1px solid #f97316;
+            border-radius: 4px;
+            font-size: 11px;
+            background: rgba(249, 115, 22, 0.05);
+            text-align: center;
+        }
+
+        .gesture-duration-input:focus {
+            outline: none;
+            border-color: #ea580c;
+            box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.2);
+        }
+
+        .gesture-duration-input::placeholder {
+            color: #f97316;
+            opacity: 0.6;
+        }
+
+        .duration-unit {
+            font-size: 11px;
+            color: #f97316;
+            font-weight: 500;
+        }
+
         /* 【新增】添加手势按钮组 */
         .gesture-add-btns {
             display: flex;
