@@ -229,7 +229,7 @@ class IMUBinParser:
 
 # ===================== h5文件同步 =====================
 
-def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, verify=True):
+def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, verify=True, set_synced=True):
     """
     将h5文件与bin文件同步
 
@@ -239,6 +239,8 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
         imu_bin_path: IMU bin文件路径（可选）
         device_id: 设备ID（1或2）
         verify: 是否进行数据校验
+        set_synced: 是否在同步完成后设置sync_status为synced（默认True）
+                    当需要同步多个设备时，应在最后一个设备同步时才设为True
 
     Returns:
         dict: 同步结果统计
@@ -570,11 +572,13 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
                 'imu_b_missing': imu_b_missing
             }
 
-        # 更新sync_status
-        f.attrs["sync_status"] = "synced"
-        f.attrs["sync_time"] = datetime.now().isoformat()
-
-        log(f"同步完成！EMG 2kHz: {ds_2khz_name}, IMU: {imu_result.get('imu_status', 'skipped')}")
+        # 更新sync_status（仅当set_synced=True时）
+        if set_synced:
+            f.attrs["sync_status"] = "synced"
+            f.attrs["sync_time"] = datetime.now().isoformat()
+            log(f"同步完成！EMG 2kHz: {ds_2khz_name}, IMU: {imu_result.get('imu_status', 'skipped')}, 状态已设为synced")
+        else:
+            log(f"同步完成！EMG 2kHz: {ds_2khz_name}, IMU: {imu_result.get('imu_status', 'skipped')}, 状态保持pending（等待其他设备同步）")
 
         result = {
             'status': 'success',

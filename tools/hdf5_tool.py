@@ -152,35 +152,34 @@ class SyncWorker(QThread):
                         continue
 
                 file_success = False
+                # 判断此H5文件需要同步几个设备
+                devices_to_sync = []
                 for device_id in sorted(device_ids):
+                    emg_bin_path, imu_bin_path = self._find_bin_files(h5_file, device_id)
+                    emg_bin = emg_bin_path if (f'emg{device_id}' in self.devices) else None
+                    imu_bin = imu_bin_path if (f'imu{device_id}' in self.devices) else None
+                    if emg_bin:
+                        devices_to_sync.append((device_id, emg_bin, imu_bin))
+
+                total_devices = len(devices_to_sync)
+
+                for idx, (device_id, emg_bin, imu_bin) in enumerate(devices_to_sync):
                     try:
                         self.log.emit(f"  设备{device_id}:")
-
-                        # 从H5属性中查找对应的bin文件
-                        emg_bin_path, imu_bin_path = self._find_bin_files(h5_file, device_id)
-
-                        # 只在对应设备被勾选时使用bin路径
-                        emg_bin = emg_bin_path if (f'emg{device_id}' in self.devices) else None
-                        imu_bin = imu_bin_path if (f'imu{device_id}' in self.devices) else None
-
-                        if not emg_bin:
-                            # 检查是因为未勾选还是找不到文件
-                            if f'emg{device_id}' in self.devices:
-                                self.log.emit(f"    ✗ 找不到EMG bin文件 (sd_bin_dev{device_id}属性缺失或文件不存在)")
-                            else:
-                                self.log.emit(f"    - EMG未勾选，跳过")
-                            continue
-
                         self.log.emit(f"    EMG bin: {os.path.basename(emg_bin)}")
                         if imu_bin:
                             self.log.emit(f"    IMU bin: {os.path.basename(imu_bin)}")
+
+                        # 判断是否是最后一个设备，只有最后一个设备同步完才设置synced
+                        is_last_device = (idx == total_devices - 1)
 
                         result = sync_h5_with_bin(
                             h5_path=h5_file,
                             emg_bin_path=emg_bin,
                             imu_bin_path=imu_bin,
                             device_id=device_id,
-                            verify=self.validate_data
+                            verify=self.validate_data,
+                            set_synced=is_last_device  # 只有最后一个设备同步完才设置synced
                         )
 
                         if result.get('status') == 'success':
@@ -201,6 +200,16 @@ class SyncWorker(QThread):
 
                     except Exception as e:
                         self.log.emit(f"    ✗ 错误: {str(e)}")
+
+                # 如果没有找到任何可同步的设备
+                if total_devices == 0:
+                    for device_id in sorted(device_ids):
+                        if f'emg{device_id}' in self.devices:
+                            self.log.emit(f"  设备{device_id}:")
+                            self.log.emit(f"    ✗ 找不到EMG bin文件 (sd_bin_dev{device_id}属性缺失或文件不存在)")
+                        else:
+                            self.log.emit(f"  设备{device_id}:")
+                            self.log.emit(f"    - EMG未勾选，跳过")
 
                 if file_success:
                     success_count += 1
