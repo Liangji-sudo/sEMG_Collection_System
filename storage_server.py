@@ -242,10 +242,10 @@ class HDF5StorageServer:
     
     def generate_filename(self, dir_path, user_id, stage_name, session_number, category2=None):
         """
-        生成文件名: {user_id}_session{N}_{category2}_{stage_name}_{YYYYMMDD}_{HHMMSS}.h5
-        例如: S001_session2_坐姿_palm_up_20260105_143000.h5
+        生成文件名: {user_id}_{category2}_{stage_name}_session{N}_{YYYYMMDD}_{HHMMSS}.h5
+        例如: S001_站姿_测试2_session1_20260315_141100.h5
 
-        【修改】在 session 和 stage 之间增加大场景(category2)
+        【修改】把 session 放在 stage_name 后面
         """
         now = datetime.now()
         date_str = now.strftime("%Y%m%d")
@@ -255,12 +255,12 @@ class HDF5StorageServer:
         safe_user_id = self._sanitize_name(user_id)
         safe_stage_name = self._sanitize_name(stage_name)
 
-        # 文件名包含: 受试者编号_session{N}_大场景_stage_日期_时间
+        # 文件名包含: 受试者编号_大场景_stage_session{N}_日期_时间
         if category2:
             safe_category2 = self._sanitize_name(category2)
-            filename = f"{safe_user_id}_session{session_number}_{safe_category2}_{safe_stage_name}_{date_str}_{time_str}.h5"
+            filename = f"{safe_user_id}_{safe_category2}_{safe_stage_name}_session{session_number}_{date_str}_{time_str}.h5"
         else:
-            filename = f"{safe_user_id}_session{session_number}_{safe_stage_name}_{date_str}_{time_str}.h5"
+            filename = f"{safe_user_id}_{safe_stage_name}_session{session_number}_{date_str}_{time_str}.h5"
         return os.path.join(dir_path, filename)
     
     def create_file(self, params):
