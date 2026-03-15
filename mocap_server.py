@@ -266,7 +266,8 @@ class NokovSDKReceiver(BaseMocapReceiver):
                 self._frame_buffer.append({
                     "markers": markers.copy(),
                     "frame": frame_no,
-                    "time": timestamp
+                    "time": timestamp,            # SDK 相对时间戳（动捕系统启动后的秒数）
+                    "sys_time": time.time()       # 系统 Unix 时间戳（与 EMG 对齐）
                 })
 
             current_time = time.time()
@@ -378,7 +379,8 @@ class SimulatorReceiver(BaseMocapReceiver):
                                 self._frame_buffer.append({
                                     "markers": markers.copy(),
                                     "frame": frame_no,
-                                    "time": timestamp
+                                    "time": timestamp,            # 模拟器时间戳
+                                    "sys_time": time.time()       # 系统 Unix 时间戳（与 EMG 对齐）
                                 })
 
                             current_time = time.time()

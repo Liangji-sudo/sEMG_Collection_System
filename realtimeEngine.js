@@ -685,14 +685,16 @@ class RealtimeEngine extends EventEmitter {
             // 【新增】只有当前stage需要动捕数据时才保存
             if (this.isCollecting && !this.collectionPaused && this.stageFileOpen && !this.isClosingStageFile && this.currentStageNeedMocap) {
                 // 获取批量帧数据
-                const frames = packet.frames;  // [{markers, frame, time}, ...]
+                const frames = packet.frames;  // [{markers, frame, time, sys_time}, ...]
 
                 if (frames && frames.length > 0) {
-                    // 为每帧添加系统时间戳（与蓝牙数据、prompt保持一致）
-                    const sysTime = getSysTimeNode();
+                    // 【修改】优先使用 mocap_server 传过来的 sys_time（更精确）
+                    // 如果没有 sys_time（兼容旧版），则使用本地时间估算
+                    const fallbackSysTime = getSysTimeNode();
                     const framesWithSysTime = frames.map((f, idx) => ({
                         ...f,
-                        sys_time: sysTime + idx * 0.005  // 每帧间隔5ms (200Hz)
+                        // 优先使用 mocap_server 的 sys_time，否则用本地估算
+                        sys_time: f.sys_time || (fallbackSysTime + idx * 0.005)
                     }));
 
                     // 批量发送所有帧到 storage
