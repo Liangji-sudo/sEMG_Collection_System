@@ -9,9 +9,10 @@ mocap_server.py - 动捕数据服务器
 - SDK模式：连接 Nokov 动捕 SDK (服务器IP: 10.1.1.198)
 - 模拟器模式：连接 mocap_simulator.py (ws://localhost:8768)
 
-Marker点命名（每只手10个，共20个）：
-- 左手：TH1_L, TH2_L, TH3_L, TH4_L, ID1_L, ID2_L, ID3_L, HB1_L, HB2_L, HB3_L
-- 右手：TH1_R, TH2_R, TH3_R, TH4_R, ID1_R, ID2_R, ID3_R, HB1_R, HB2_R, HB3_R
+Marker点命名（每只手10个，共20个，按接收顺序）：
+- 左手：ID1_L, ID2_L, ID3_L, HB1_L, HB2_L, HB3_L, TH1_L, TH2_L, TH3_L, TH4_L
+- 右手：ID1_R, ID2_R, ID3_R, HB1_R, HB2_R, HB3_R, TH1_R, TH2_R, TH3_R, TH4_R
+- 注意：服务器可能只发送前6个点（ID1-ID3, HB1-HB3），后4个TH点可能缺失
 
 数据通道（左右手各自独立计算）：
 - finger_joint_angle_L/R: 食指关节角度 (0-90°) - 连续手势1 (食指上抬)
@@ -64,9 +65,11 @@ SERVER_PORT = 8767
 # 数据发送频率
 SEND_RATE = 50  # Hz
 
-# Marker 名称映射（按顺序：左手10个 + 右手10个）
-MARKER_NAMES_LEFT = ['TH1_L', 'TH2_L', 'TH3_L', 'TH4_L', 'ID1_L', 'ID2_L', 'ID3_L', 'HB1_L', 'HB2_L', 'HB3_L']
-MARKER_NAMES_RIGHT = ['TH1_R', 'TH2_R', 'TH3_R', 'TH4_R', 'ID1_R', 'ID2_R', 'ID3_R', 'HB1_R', 'HB2_R', 'HB3_R']
+# Marker 名称映射（按接收顺序：左手10个 + 右手10个）
+# 顺序：ID1, ID2, ID3, HB1, HB2, HB3, TH1, TH2, TH3, TH4
+# 注意：服务器可能只发送前6个点（ID1-ID3, HB1-HB3），后4个TH点可能缺失
+MARKER_NAMES_LEFT = ['ID1_L', 'ID2_L', 'ID3_L', 'HB1_L', 'HB2_L', 'HB3_L', 'TH1_L', 'TH2_L', 'TH3_L', 'TH4_L']
+MARKER_NAMES_RIGHT = ['ID1_R', 'ID2_R', 'ID3_R', 'HB1_R', 'HB2_R', 'HB3_R', 'TH1_R', 'TH2_R', 'TH3_R', 'TH4_R']
 MARKER_NAMES = MARKER_NAMES_LEFT + MARKER_NAMES_RIGHT
 
 
