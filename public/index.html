@@ -3284,6 +3284,82 @@
             background: rgba(59, 130, 246, 0.05);
         }
 
+        /* 手势卡片自定义Tooltip */
+        .gesture-chip {
+            position: relative;
+        }
+
+        .gesture-chip-tooltip {
+            position: absolute;
+            bottom: calc(100% + 8px);
+            left: 50%;
+            transform: translateX(-50%);
+            background: #1f2937;
+            color: white;
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-size: 12px;
+            white-space: nowrap;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.2s ease;
+            z-index: 1000;
+            pointer-events: none;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            min-width: 150px;
+            text-align: left;
+        }
+
+        .gesture-chip-tooltip::after {
+            content: '';
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            border: 6px solid transparent;
+            border-top-color: #1f2937;
+        }
+
+        .gesture-chip:hover .gesture-chip-tooltip {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .gesture-chip-tooltip .tooltip-title {
+            font-weight: 600;
+            font-size: 13px;
+            margin-bottom: 6px;
+            color: #f9fafb;
+        }
+
+        .gesture-chip-tooltip .tooltip-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 3px;
+            color: #d1d5db;
+        }
+
+        .gesture-chip-tooltip .tooltip-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .gesture-chip-tooltip .tooltip-label {
+            color: #9ca3af;
+            flex-shrink: 0;
+        }
+
+        .gesture-chip-tooltip .tooltip-value {
+            color: #f3f4f6;
+        }
+
+        .gesture-chip-tooltip .tooltip-hint {
+            margin-top: 6px;
+            padding-top: 6px;
+            border-top: 1px solid #374151;
+            color: #9ca3af;
+            font-size: 11px;
+        }
+
         .config-gesture-item {
             display: flex;
             align-items: center;

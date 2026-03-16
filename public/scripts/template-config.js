@@ -640,9 +640,28 @@
                         </div>
                         <div class="task-gestures-grid" id="discreteGesturesGrid">
                             ${template.gestures.discrete.map((gesture, index) => `
-                                <div class="gesture-chip ${gesture.enabled ? 'enabled' : 'disabled'}" 
-                                     data-gesture-type="discrete" data-index="${index}"
-                                     title="点击${gesture.enabled ? '禁用' : '启用'}此手势">
+                                <div class="gesture-chip ${gesture.enabled ? 'enabled' : 'disabled'}"
+                                     data-gesture-type="discrete" data-index="${index}">
+                                    <div class="gesture-chip-tooltip">
+                                        <div class="tooltip-title">${gesture.icon} ${gesture.name}</div>
+                                        <div class="tooltip-row">
+                                            <span class="tooltip-label">ID:</span>
+                                            <span class="tooltip-value">${gesture.id}</span>
+                                        </div>
+                                        <div class="tooltip-row">
+                                            <span class="tooltip-label">类型:</span>
+                                            <span class="tooltip-value">${gesture.gestureType === 'sustained' ? '持续手势' : '瞬时手势'}</span>
+                                        </div>
+                                        ${gesture.gifFile ? `<div class="tooltip-row">
+                                            <span class="tooltip-label">GIF:</span>
+                                            <span class="tooltip-value">${gesture.gifFile}</span>
+                                        </div>` : ''}
+                                        <div class="tooltip-row">
+                                            <span class="tooltip-label">状态:</span>
+                                            <span class="tooltip-value">${gesture.enabled ? '✓ 已启用' : '✗ 已禁用'}</span>
+                                        </div>
+                                        <div class="tooltip-hint">点击${gesture.enabled ? '禁用' : '启用'}此手势</div>
+                                    </div>
                                     <span class="gesture-chip-toggle-indicator">
                                         <i class="fa ${gesture.enabled ? 'fa-check-circle' : 'fa-circle-o'}"></i>
                                     </span>
