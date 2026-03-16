@@ -181,16 +181,30 @@
          * @param {string} promptName - prompt名称
          * @param {number} startX - 起始X坐标
          * @param {number} index - 序列索引
-         * @param {Object} gestureConfig - 【新增】手势配置（包含gestureType等）
+         * @param {Object} gestureConfig - 【新增】手势配置（包含gestureType, duration等）
          */
         createPromptObject(promptName, startX, index, gestureConfig = null) {
             const def = this.getPromptDef(promptName);
             // 【新增】从配置获取手势类型，默认为瞬时
             const gestureType = gestureConfig?.gestureType || def.gestureType || 'instant';
-            // 【新增】获取持续时间，默认2秒
-            const sustainedDuration = this.sustainedDuration || 2.0;
-            // 【新增】计算长方形宽度：持续时间 * 滚动速度 * 60fps
-            const rectWidth = gestureType === 'sustained' ? sustainedDuration * this.config.scrollSpeed * 60 : 0;
+
+            // 【修复】获取持续时间：优先使用手势自身的duration，其次使用def中的duration，最后使用全局sustainedDuration
+            // 这样配置为1秒的手势，长方形长度就是1秒对应的距离
+            const gestureDuration = gestureConfig?.duration || def.originalGesture?.duration || this.sustainedDuration || 2.0;
+
+            // 【修复】计算长方形宽度：持续时间 * 滚动速度 * 60fps
+            // 确保持续性手势的长度与配置的时间一致
+            const rectWidth = gestureType === 'sustained' ? gestureDuration * this.config.scrollSpeed * 60 : 0;
+
+            if (gestureType === 'sustained') {
+                console.log(`[DiscreteGestureAnimation] 创建持续手势: ${promptName}`);
+                console.log(`  - gestureConfig?.duration: ${gestureConfig?.duration}`);
+                console.log(`  - def.originalGesture?.duration: ${def.originalGesture?.duration}`);
+                console.log(`  - this.sustainedDuration: ${this.sustainedDuration}`);
+                console.log(`  - 最终使用的duration: ${gestureDuration}秒`);
+                console.log(`  - scrollSpeed: ${this.config.scrollSpeed}px/帧`);
+                console.log(`  - 计算得到的rectWidth: ${rectWidth}px`);
+            }
 
             return {
                 name: promptName,
@@ -215,7 +229,7 @@
          * 【新增】开始单个手势的重复采集动画
          * 这是给 collection-controller.js 调用的接口
          * @param {Object} gesture - 手势配置 {id, name, icon, gestureType, ...}
-         * @param {Object} executionParams - 执行参数 {repeatPerGesture, sustainedDuration, ...}
+         * @param {Object} executionParams - 执行参数 {repeatPerGesture, sustainedDuration, scrollSpeed, ...}
          * @param {Function} onComplete - 完成回调
          */
         startGesture(gesture, executionParams, onComplete) {
@@ -231,6 +245,10 @@
                 this.init('.animation-area');
             }
 
+            // 【重构】从executionParams读取配置参数，实现：距离 = 速度 × 时间
+            const scrollSpeed = executionParams?.scrollSpeed || 2;
+            const intervalBetweenRepeat = executionParams?.intervalBetweenRepeat || 1.0;
+
             // 从executionParams获取重复次数和持续时间
             const repeatCount = executionParams?.repeatPerGesture || 5;
             // 【修改】优先使用手势自身的duration，否则使用执行参数中的默认值
@@ -238,8 +256,16 @@
             // 【新增】保存当前手势配置
             this.currentGestureConfig = gesture;
 
-            console.log('[DiscreteGestureAnimation] 持续时间:', this.sustainedDuration,
-                        '(来源:', gesture.duration ? '手势配置' : '执行参数默认值', ')');
+            // 【核心计算】手势间距 = 滚动速度 × 间隔时间 × 帧率(60fps)
+            this.config.scrollSpeed = scrollSpeed;
+            this.config.promptSpacing = scrollSpeed * intervalBetweenRepeat * 60;
+
+            console.log('[DiscreteGestureAnimation] 正常模式配置:');
+            console.log('  - 滚动速度:', this.config.scrollSpeed, 'px/帧');
+            console.log('  - 重复间隔:', intervalBetweenRepeat, '秒');
+            console.log('  - 计算得到的手势间距:', this.config.promptSpacing, 'px');
+            console.log('  - 持续手势时长:', this.sustainedDuration, '秒');
+            console.log('  - 重复次数:', repeatCount);
 
             // 【修复】直接使用gesture.name作为gestureId，确保显示用户定义的名称
             const gestureId = gesture.name;
@@ -991,10 +1017,24 @@
             this.onUpcomingGesture = onUpcomingGesture;
             this.currentStage = stageConfig;
 
-            // 【修复】乱序模式使用和正常模式相同的滚动速度
-            // 从配置文件加载，确保两种模式速度一致
-            this.loadConfig();  // 重新加载配置，确保使用ANIMATION.SCROLL_SPEED
-            console.log('[DiscreteGestureAnimation] 乱序模式滚动速度:', this.config.scrollSpeed, 'px/帧 (与正常模式一致)');
+            // 【重构】从executionParams读取配置参数，实现：距离 = 速度 × 时间
+            // scrollSpeed: 整体移动速度（px/帧），默认2
+            // shuffleInterval: 手势间隔时间（秒），默认1.0
+            // sustainedDuration: 持续性手势的持续时间（秒），默认2.0
+            const scrollSpeed = executionParams?.scrollSpeed || 2;
+            const shuffleInterval = executionParams?.shuffleInterval || 1.0;
+            this.sustainedDuration = executionParams?.sustainedDuration || 2.0;
+
+            // 【核心计算】手势间距 = 滚动速度 × 间隔时间 × 帧率(60fps)
+            // 这样配置1秒的间隔，动画实际运行1秒后下一个手势到达指示线
+            this.config.scrollSpeed = scrollSpeed;
+            this.config.promptSpacing = scrollSpeed * shuffleInterval * 60;
+
+            console.log('[DiscreteGestureAnimation] 乱序模式配置:');
+            console.log('  - 滚动速度:', this.config.scrollSpeed, 'px/帧');
+            console.log('  - 间隔时间:', shuffleInterval, '秒');
+            console.log('  - 计算得到的手势间距:', this.config.promptSpacing, 'px');
+            console.log('  - 持续手势时长:', this.sustainedDuration, '秒');
 
             // 清空并重新构建promptLibrary
             this.promptLibrary = {};

@@ -112,7 +112,8 @@
                 preparationTime: 3.0,          // Stage开始前准备时间（秒）
                 gestureDisplayTime: 2.0,       // 手势提示显示时间（秒）
                 sustainedDuration: 2.0,        // 持续性手势的持续时间（秒）
-                shuffleInterval: 1.0           // 【新增】乱序模式手势间隔（秒）
+                shuffleInterval: 1.0,          // 乱序模式手势间隔（秒）
+                scrollSpeed: 2                 // 【新增】整体移动速度（px/帧）
             },
             // 连续手势1采集参数（同心圆引导动画）
             continual_gesture_1: {
@@ -1601,6 +1602,13 @@
                                    value="${taskExec.shuffleInterval || 1.0}" min="0.5" max="10" step="0.5">
                             <span class="param-unit">秒</span>
                             <span class="param-hint">（乱序模式下每个手势经过采集线的时间间隔）</span>
+                        </div>
+                        <div class="config-param-item config-param-shuffle">
+                            <label><i class="fa fa-tachometer-alt"></i> 整体移动速度</label>
+                            <input type="number" data-task="${task.id}" data-param="scrollSpeed"
+                                   value="${taskExec.scrollSpeed || 2}" min="1" max="10" step="0.5">
+                            <span class="param-unit">px/帧</span>
+                            <span class="param-hint">（动画滚动速度，与时间配合计算距离）</span>
                         </div>
                     `;
                 } else if (task.id === 'continual_gesture_1' || task.id === 'continual_gesture_2') {
