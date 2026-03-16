@@ -80,6 +80,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this._spaceKeyEnabled = false;      // 是否启用空格键监听
             this._spaceKeyHandler = null;       // 空格键事件处理函数引用
 
+            // ===== 乱序模式相关状态 =====
+            this._shuffleMode = false;          // 当前Stage是否为乱序模式
+
             console.log('[Collection] 构造函数结束');
         }
 
@@ -427,11 +430,18 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
         /**
          * 【修复】更新手势/试次列表
+         * 【修改】乱序模式下隐藏手势库
          */
         updateGestureList() {
             const gestureList = document.getElementById('gestureList');
             if (!gestureList) {
                 console.warn('[Collection] 未找到 #gestureList 元素');
+                return;
+            }
+
+            // 【新增】乱序模式下隐藏手势库
+            if (this._shuffleMode && this._isRunning) {
+                gestureList.style.display = 'none';
                 return;
             }
 
@@ -463,18 +473,21 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this.gestures.forEach((gesture, index) => {
                 let status = 'pending';
                 let progressText = '';
-                
+
                 const isActivelyCollecting = this._isRunning && this.currentPhase === 'gesture';
-                
+
+                // 【修复】乱序模式下每个手势实例只执行1次
+                const repeatCount = this._shuffleMode ? 1 : this.currentExecutionParams.repeatPerGesture;
+
                 if (index < this.currentGestureIndex) {
                     status = 'completed';
                     progressText = `<span class="gesture-progress" style="font-size: 11px;">✓ 完成</span>`;
                 } else if (index === this.currentGestureIndex && isActivelyCollecting) {
                     status = 'current';
-                    progressText = `<span class="gesture-progress" style="font-size: 11px;">${this.gestureRepeatCount}/${this.currentExecutionParams.repeatPerGesture}</span>`;
+                    progressText = `<span class="gesture-progress" style="font-size: 11px;">${this.gestureRepeatCount}/${repeatCount}</span>`;
                 } else {
                     status = 'pending';
-                    progressText = `<span class="gesture-progress" style="font-size: 11px; color: #999;">${this.currentExecutionParams.repeatPerGesture}次</span>`;
+                    progressText = `<span class="gesture-progress" style="font-size: 11px; color: #999;">${repeatCount}次</span>`;
                 }
                 
                 const iconClass = status === 'completed' ? 'check-circle' : 
@@ -709,6 +722,11 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
          * 【新增】加载当前Stage对应的手势库
          * 如果Stage有配置gestures字段，则只加载该Stage指定的手势
          * 否则加载全局手势库
+         *
+         * 【新增】乱序模式：如果Stage配置了shuffleGestures=true，则会：
+         * 1. 先按照每个手势的重复次数生成完整的实例序列
+         * 2. 然后打乱顺序
+         * 3. 设置repeatPerGesture=1，让每个实例只执行一次
          */
         loadGesturesForCurrentStage() {
             const currentStage = this.stages[this.currentStageIndex];
@@ -718,19 +736,59 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             const allGestures = this.allGestures ||
                 (template.gestures?.discrete || []).filter(g => g.enabled);
 
+            let baseGestures = [];
             if (currentStage?.gestures && currentStage.gestures.length > 0) {
                 // Stage有自己的手势配置，根据ID筛选
                 const stageGestureIds = currentStage.gestures;
-                this.gestures = allGestures.filter(g => stageGestureIds.includes(g.id));
+                baseGestures = allGestures.filter(g => stageGestureIds.includes(g.id));
                 // 按配置顺序排序
-                this.gestures.sort((a, b) => {
+                baseGestures.sort((a, b) => {
                     return stageGestureIds.indexOf(a.id) - stageGestureIds.indexOf(b.id);
                 });
-                console.log(`[Collection] Stage "${currentStage.name}" 加载专属手势库: ${this.gestures.length}个`);
+                console.log(`[Collection] Stage "${currentStage.name}" 加载专属手势库: ${baseGestures.length}个`);
             } else {
                 // Stage没有配置手势，使用全局手势库
-                this.gestures = [...allGestures];
-                console.log(`[Collection] Stage "${currentStage?.name}" 使用全局手势库: ${this.gestures.length}个`);
+                baseGestures = [...allGestures];
+                console.log(`[Collection] Stage "${currentStage?.name}" 使用全局手势库: ${baseGestures.length}个`);
+            }
+
+            // 【新增】检查是否启用乱序模式
+            const shuffleGestures = currentStage?.shuffleGestures || false;
+
+            if (shuffleGestures && this.currentTaskId === 'discrete_gesture') {
+                // 乱序模式：生成完整的手势实例序列并打乱
+                const repeatCount = this.currentExecutionParams?.repeatPerGesture || 5;
+                const instanceSequence = [];
+
+                // 为每个手势生成N个实例
+                baseGestures.forEach(gesture => {
+                    for (let i = 0; i < repeatCount; i++) {
+                        // 创建手势实例的浅拷贝，添加实例索引标记
+                        instanceSequence.push({
+                            ...gesture,
+                            _instanceIndex: i,  // 标记这是该手势的第几个实例
+                            _shuffled: true     // 标记这是乱序模式的实例
+                        });
+                    }
+                });
+
+                // Fisher-Yates 洗牌算法打乱顺序
+                for (let i = instanceSequence.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [instanceSequence[i], instanceSequence[j]] = [instanceSequence[j], instanceSequence[i]];
+                }
+
+                this.gestures = instanceSequence;
+                this._shuffleMode = true;  // 标记当前为乱序模式
+
+                console.log(`[Collection] ★ 乱序模式已启用 ★`);
+                console.log(`[Collection] 原始手势: ${baseGestures.length}个, 每个重复${repeatCount}次`);
+                console.log(`[Collection] 生成乱序序列: ${instanceSequence.length}个实例`);
+                console.log(`[Collection] 序列预览: ${instanceSequence.slice(0, 10).map(g => g.name).join(', ')}...`);
+            } else {
+                // 正常模式
+                this.gestures = baseGestures;
+                this._shuffleMode = false;
             }
         }
 
@@ -1001,8 +1059,13 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             // 【新增】隐藏手势示范 GIF
             this.hideGestureGif();
 
+            // 【修改】停止动画时也要处理乱序模式
             if (window.discreteGestureAnimation) {
                 window.discreteGestureAnimation.stop();
+                // 【新增】如果是乱序模式，也调用专用的停止方法
+                if (window.discreteGestureAnimation._shuffleModeActive) {
+                    window.discreteGestureAnimation.stopShuffleMode();
+                }
             }
             if (window.continualGesture1Animation) {
                 window.continualGesture1Animation.stop();
@@ -1013,6 +1076,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             if (window.animationController) {
                 window.animationController.stop();
             }
+
+            // 【新增】重置乱序模式标志
+            this._shuffleMode = false;
 
             // 重新启用Session和Stage选择器
             const sessionSelect = document.getElementById('sessionSwitchSelect');
@@ -1209,7 +1275,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
         // ==================== 离散手势采集流程 ====================
 
         startDiscreteGestureCollection() {
-            console.log('[Collection] 开始离散手势顺序采集');
+            console.log('[Collection] 开始离散手势采集');
+            console.log('[Collection] 乱序模式:', this._shuffleMode ? '是' : '否');
 
             // 【修复】发送 stage_start 命令打开 H5 文件
             const currentStage = this.stages[this.currentStageIndex];
@@ -1224,10 +1291,112 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             console.log(`[Collection] Stage "${currentStage?.name}" needMocap: ${needMocap}`);
 
             this.currentPhase = 'prepare';
-            this.showPreparation(() => {
-                this.startNextGesture();
+
+            // 【新增】乱序模式使用专用的动画方法
+            if (this._shuffleMode) {
+                this.showPreparation(() => {
+                    this.startShuffleModeAnimation();
+                });
+            } else {
+                this.showPreparation(() => {
+                    this.startNextGesture();
+                });
+            }
+        }
+
+        /**
+         * 【新增】启动乱序模式动画
+         * 所有手势连续滚动显示，不进入休息时间
+         */
+        startShuffleModeAnimation() {
+            console.log('[Collection] ★★★ 启动乱序模式动画 ★★★');
+            console.log('[Collection] 乱序手势数量:', this.gestures.length);
+
+            const currentStage = this.stages[this.currentStageIndex];
+
+            // 构建Stage配置
+            const stageConfig = {
+                name: currentStage?.name || currentStage?.id || 'shuffle_stage',
+                label: currentStage?.name || '乱序采集',
+                instruction: currentStage?.instruction || '请跟随手势指示执行动作'
+            };
+
+            // 显示第一个手势的GIF
+            if (this.gestures.length > 0) {
+                this.showGestureGif(this.gestures[0]);
+            }
+
+            this.currentPhase = 'gesture';
+            this.updateGestureList();
+
+            if (window.discreteGestureAnimation) {
+                window.discreteGestureAnimation.startShuffleMode(
+                    this.gestures,                    // 乱序后的手势数组
+                    this.currentExecutionParams,       // 执行参数
+                    stageConfig,                       // Stage配置
+                    () => {
+                        // 完成回调
+                        this.onShuffleModeComplete();
+                    },
+                    (promptName, index, stageName, promptType) => {
+                        // Prompt触发回调
+                        this.onShufflePromptTriggered(promptName, index, stageName, promptType);
+                    },
+                    (upcomingGesture) => {
+                        // 即将到达的手势回调 - 更新左下角GIF示范
+                        this.showGestureGif(upcomingGesture);
+                    }
+                );
+            } else {
+                console.error('[Collection] 未找到离散手势动画模块');
+                this.showToast('动画模块未加载', 'error');
+            }
+        }
+
+        /**
+         * 【新增】乱序模式Prompt触发回调
+         */
+        onShufflePromptTriggered(promptName, index, stageName, promptType) {
+            console.log(`[Collection] 乱序模式Prompt触发: ${promptName}, index=${index}, type=${promptType}`);
+
+            // 更新计数
+            this.currentGestureIndex = index;
+            this.gestureRepeatCount = 1;
+
+            // 获取原始手势名称（去除shuffle_前缀）
+            const gesture = this.gestures[index];
+            const gestureName = gesture?.id || gesture?.name || promptName;
+
+            // 发送prompt信号到后端
+            let finalPromptName = gestureName;
+            if (promptType === 'start') {
+                finalPromptName = `${gestureName}_start`;
+            } else if (promptType === 'end') {
+                finalPromptName = `${gestureName}_end`;
+            }
+
+            this.sendToRealtimeEngine('prompt', {
+                name: finalPromptName,
+                stageName: stageName,
+                repeatIndex: index,
+                promptType: promptType,
+                timestamp: Date.now() / 1000
             });
         }
+
+        /**
+         * 【新增】乱序模式完成回调
+         */
+        onShuffleModeComplete() {
+            console.log('[Collection] ★★★ 乱序模式采集完成 ★★★');
+
+            // 隐藏手势GIF
+            this.hideGestureGif();
+
+            // 调用通用的完成处理
+            this.onAllGesturesComplete();
+        }
+
 
         showPreparation(callback) {
             const prepTime = this.currentExecutionParams.preparationTime;
@@ -1277,7 +1446,18 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this.showGestureGif(gesture);
 
             if (window.discreteGestureAnimation) {
-                window.discreteGestureAnimation.startGesture(gesture, this.currentExecutionParams, () => {
+                // 【新增】乱序模式下，每个实例只执行一次
+                let execParams = this.currentExecutionParams;
+                if (this._shuffleMode && gesture._shuffled) {
+                    // 创建执行参数副本，设置重复次数为1
+                    execParams = {
+                        ...this.currentExecutionParams,
+                        repeatPerGesture: 1
+                    };
+                    console.log(`[Collection] 乱序模式: 实例 ${this.currentGestureIndex + 1}/${this.gestures.length}, 手势: ${gesture.name}`);
+                }
+
+                window.discreteGestureAnimation.startGesture(gesture, execParams, () => {
                     this.onGestureAnimationComplete();
                 });
             } else {
@@ -1287,18 +1467,70 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
         onGestureAnimationComplete() {
             console.log(`[Collection] 手势 ${this.gestures[this.currentGestureIndex]?.name} 采集完成`);
-            
+
             this.currentGestureIndex++;
             this.updateProgress();
             this.updateGestureList();
-            
+
             if (this.currentGestureIndex >= this.gestures.length) {
                 this.onAllGesturesComplete();
             } else {
-                this.showRestPeriod(() => {
-                    this.startNextGesture();
-                });
+                // 【新增】乱序模式下使用较短的间隔时间
+                if (this._shuffleMode) {
+                    this.showShortInterval(() => {
+                        this.startNextGesture();
+                    });
+                } else {
+                    this.showRestPeriod(() => {
+                        this.startNextGesture();
+                    });
+                }
             }
+        }
+
+        /**
+         * 【新增】乱序模式下的短间隔（使用intervalBetweenRepeat）
+         */
+        showShortInterval(callback) {
+            const intervalTime = this.currentExecutionParams.intervalBetweenRepeat || 1.0;
+            const nextGesture = this.gestures[this.currentGestureIndex];
+
+            this.currentPhase = 'interval';
+
+            // 如果间隔时间很短（<=1秒），直接继续不显示倒计时
+            if (intervalTime <= 1) {
+                setTimeout(() => {
+                    callback();
+                }, intervalTime * 1000);
+                return;
+            }
+
+            // 显示短倒计时
+            this.updateGestureDisplay({
+                name: nextGesture?.name || '准备',
+                instruction: `下一个: ${nextGesture?.icon || '✋'} ${nextGesture?.name || ''}`,
+                showCountdown: true,
+                countdownValue: Math.ceil(intervalTime)
+            });
+
+            let countdown = Math.ceil(intervalTime);
+            const countdownEl = document.getElementById('countdown');
+            if (countdownEl) {
+                countdownEl.style.display = 'block';
+                countdownEl.textContent = countdown;
+            }
+
+            this.countdownTimer = setInterval(() => {
+                countdown--;
+                if (countdownEl) countdownEl.textContent = countdown;
+
+                if (countdown <= 0) {
+                    clearInterval(this.countdownTimer);
+                    this.countdownTimer = null;
+                    if (countdownEl) countdownEl.style.display = 'none';
+                    callback();
+                }
+            }, 1000);
         }
 
         doGestureRepeatSimple() {
@@ -1390,6 +1622,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             // 【新增】隐藏手势示范 GIF
             this.hideGestureGif();
+
+            // 【新增】重置乱序模式标志
+            this._shuffleMode = false;
 
             const currentStage = this.stages[this.currentStageIndex];
             this.sendToRealtimeEngine('stage_end', {

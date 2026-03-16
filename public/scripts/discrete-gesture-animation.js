@@ -693,12 +693,12 @@
             // 图标
             this.drawEmojiIcon(prompt.icon, x, by + badgeH / 2, color);
 
-            // 动作名称
-            ctx.font = '600 11px ui-sans-serif, system-ui';
+            // 动作名称（自动换行）
+            ctx.font = '600 14px ui-sans-serif, system-ui';
             ctx.fillStyle = color;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'top';
-            ctx.fillText(prompt.label, x, y + this.config.labelOffset);
+            this.drawWrappedLabel(prompt.label, x, y + this.config.labelOffset, 100, 16);
 
             ctx.restore();
         }
@@ -776,12 +776,12 @@
             // 图标
             this.drawEmojiIcon(prompt.icon, centerX, by + badgeH / 2, strokeColor);
 
-            // 动作名称（显示在长方形下方）
-            ctx.font = '600 11px ui-sans-serif, system-ui';
+            // 动作名称（显示在长方形下方，自动换行）
+            ctx.font = '600 14px ui-sans-serif, system-ui';
             ctx.fillStyle = strokeColor;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'top';
-            ctx.fillText(prompt.label, centerX, y + this.config.labelOffset);
+            this.drawWrappedLabel(prompt.label, centerX, y + this.config.labelOffset, 100, 16);
 
             // 【新增】在长方形内显示状态文字
             ctx.font = '700 14px ui-sans-serif, system-ui';
@@ -798,6 +798,35 @@
             }
 
             ctx.restore();
+        }
+
+        /**
+         * 【新增】绘制自动换行的标签文本
+         * @param {string} text - 要绘制的文本
+         * @param {number} x - 中心X坐标
+         * @param {number} y - 起始Y坐标
+         * @param {number} maxWidth - 最大宽度（超过则换行）
+         * @param {number} lineHeight - 行高
+         */
+        drawWrappedLabel(text, x, y, maxWidth = 100, lineHeight = 16) {
+            const ctx = this.ctx;
+
+            // 如果文本宽度没有超过最大宽度，直接绘制
+            const textWidth = ctx.measureText(text).width;
+            if (textWidth <= maxWidth) {
+                ctx.fillText(text, x, y);
+                return;
+            }
+
+            // 需要换行：尝试在中间位置分割
+            const chars = text.split('');
+            const midIndex = Math.ceil(chars.length / 2);
+            const line1 = chars.slice(0, midIndex).join('');
+            const line2 = chars.slice(midIndex).join('');
+
+            // 绘制两行
+            ctx.fillText(line1, x, y);
+            ctx.fillText(line2, x, y + lineHeight);
         }
 
         /**
@@ -926,9 +955,272 @@
             return {
                 executed: this.executedCount,
                 total: this.promptSequence.length,
-                percent: this.promptSequence.length > 0 ? 
+                percent: this.promptSequence.length > 0 ?
                     (this.executedCount / this.promptSequence.length * 100) : 0
             };
+        }
+
+        /**
+         * 【新增】乱序模式：连续滚动显示所有手势
+         * 所有手势同时在屏幕上滚动，每个手势经过采集点时持续约1秒
+         * 不进入休息时间，连续执行
+         *
+         * @param {Array} shuffledGestures - 乱序后的手势数组
+         * @param {Object} executionParams - 执行参数
+         * @param {Object} stageConfig - Stage配置
+         * @param {Function} onComplete - 完成回调
+         * @param {Function} onPromptTriggered - Prompt触发回调
+         * @param {Function} onUpcomingGesture - 【新增】即将到达的手势回调（用于更新左下角示范GIF）
+         */
+        startShuffleMode(shuffledGestures, executionParams, stageConfig, onComplete, onPromptTriggered, onUpcomingGesture) {
+            console.log('[DiscreteGestureAnimation] ★★★ 启动乱序模式 ★★★');
+            console.log('[DiscreteGestureAnimation] 手势数量:', shuffledGestures.length);
+
+            // 初始化Canvas
+            if (!this.canvas) {
+                if (!this.init('.animation-area')) {
+                    console.error('[DiscreteGestureAnimation] Canvas初始化失败');
+                    if (onComplete) onComplete();
+                    return;
+                }
+            }
+
+            // 保存回调
+            this.onComplete = onComplete;
+            this.onPromptTriggered = onPromptTriggered;
+            this.onUpcomingGesture = onUpcomingGesture;
+            this.currentStage = stageConfig;
+
+            // 【修复】乱序模式使用和正常模式相同的滚动速度
+            // 从配置文件加载，确保两种模式速度一致
+            this.loadConfig();  // 重新加载配置，确保使用ANIMATION.SCROLL_SPEED
+            console.log('[DiscreteGestureAnimation] 乱序模式滚动速度:', this.config.scrollSpeed, 'px/帧 (与正常模式一致)');
+
+            // 清空并重新构建promptLibrary
+            this.promptLibrary = {};
+
+            // 构建promptSequence，并将每个手势添加到promptLibrary
+            this.promptSequence = [];
+            shuffledGestures.forEach((gesture, index) => {
+                const gestureId = `shuffle_${index}_${gesture.id || gesture.name}`;
+
+                // 确保icon不为空
+                let icon = gesture.icon;
+                if (!icon || icon === '' || icon === 'undefined' || icon === 'null') {
+                    icon = '✋';
+                }
+
+                // 添加到promptLibrary
+                this.promptLibrary[gestureId] = {
+                    label: gesture.name,
+                    icon: icon,
+                    color: gesture.color || '#3b82f6',
+                    gestureType: gesture.gestureType || 'instant',
+                    originalGesture: gesture  // 保存原始手势对象（用于GIF显示）
+                };
+
+                this.promptSequence.push(gestureId);
+            });
+
+            console.log('[DiscreteGestureAnimation] 乱序序列长度:', this.promptSequence.length);
+
+            // 重置状态
+            this.prompts = [];
+            this.nextPromptIndex = 0;
+            this.executedCount = 0;
+            this.isRunning = true;
+            this._shuffleModeActive = true;
+            this._lastUpcomingGestureIndex = -1;  // 用于跟踪即将到达的手势
+
+            // 调整Canvas
+            this.resizeCanvas();
+            this.canvas.style.display = 'block';
+
+            // 创建初始的多个提示（乱序模式下同时显示多个）
+            this.createInitialShufflePrompts();
+
+            // 开始动画循环
+            this.animateShuffle();
+        }
+
+        /**
+         * 【新增】创建乱序模式的初始提示（同时显示多个）
+         * 【修复】正确计算持续性手势的位置：下一个手势从上一个手势的右边缘 + 间隔开始
+         */
+        createInitialShufflePrompts() {
+            // 计算屏幕上能显示多少个手势（估算）
+            const visibleCount = Math.ceil(this.config.canvasWidth / this.config.promptSpacing) + 4;
+
+            // 【修复】累积计算位置，考虑持续性手势的宽度
+            let currentX = this.config.canvasWidth + 50;
+
+            for (let i = 0; i < Math.min(visibleCount, this.promptSequence.length); i++) {
+                const promptName = this.promptSequence[i];
+                const gestureConfig = this.promptLibrary[promptName]?.originalGesture;
+                const prompt = this.createPromptObject(promptName, currentX, i, gestureConfig);
+                this.prompts.push(prompt);
+                this.nextPromptIndex = i + 1;
+
+                // 【关键】下一个手势的起始位置 = 当前手势的右边缘 + 间隔
+                // 对于持续性手势，右边缘 = x + rectWidth
+                // 对于瞬时手势，右边缘 = x（因为 rectWidth = 0）
+                currentX = currentX + (prompt.rectWidth || 0) + this.config.promptSpacing;
+            }
+
+            console.log('[DiscreteGestureAnimation] 初始创建', this.prompts.length, '个提示');
+        }
+
+        /**
+         * 【新增】乱序模式的动画循环
+         */
+        animateShuffle() {
+            if (!this.isRunning) return;
+
+            // 检查是否所有prompt都已经通过
+            if (this.executedCount >= this.promptSequence.length) {
+                const allGone = this.prompts.every(p => p.x < -150);
+                if (allGone || this.prompts.length === 0) {
+                    this.stopShuffleMode();
+                    if (this.onComplete) this.onComplete();
+                    return;
+                }
+            }
+
+            if (!this.config.canvasWidth || !this.config.canvasHeight) {
+                if (!this.resizeCanvas()) {
+                    this.animationId = requestAnimationFrame(() => this.animateShuffle());
+                    return;
+                }
+            }
+
+            // 清除画布
+            this.ctx.clearRect(0, 0, this.config.canvasWidth, this.config.canvasHeight);
+
+            // 移动所有提示
+            this.prompts.forEach(p => {
+                p.x -= this.config.scrollSpeed;
+            });
+
+            // 移除已经完全离开画布的提示
+            this.prompts = this.prompts.filter(p => {
+                const rightEdge = p.x + (p.rectWidth || 0);
+                return rightEdge > -50;
+            });
+
+            // 创建新提示（如果需要）
+            // 【修复】新手势的位置基于上一个手势的右边缘 + 间隔来计算
+            if (this.nextPromptIndex < this.promptSequence.length) {
+                const last = this.prompts[this.prompts.length - 1];
+                const lastRightEdge = last ? (last.x + (last.rectWidth || 0)) : 0;
+                // 当上一个手势的右边缘即将进入画布时，创建新手势
+                if (!last || lastRightEdge < this.config.canvasWidth + 50) {
+                    const promptName = this.promptSequence[this.nextPromptIndex];
+                    // 【关键修复】新手势的起始位置 = 上一个手势的右边缘 + 间隔
+                    const startX = last ? (lastRightEdge + this.config.promptSpacing) : (this.config.canvasWidth + 50);
+                    const gestureConfig = this.promptLibrary[promptName]?.originalGesture;
+                    const prompt = this.createPromptObject(promptName, startX, this.nextPromptIndex, gestureConfig);
+                    this.prompts.push(prompt);
+                    this.nextPromptIndex++;
+                }
+            }
+
+            // 更新提示状态
+            this.updatePrompts();
+
+            // 【新增】检测即将到达的手势，通知更新GIF
+            this.checkUpcomingGesture();
+
+            // 绘制
+            this.drawShuffleStageInfo();
+            this.drawIndicator();
+            this.prompts.forEach(p => this.drawPrompt(p));
+            this.drawProgress();
+
+            // 继续下一帧
+            this.animationId = requestAnimationFrame(() => this.animateShuffle());
+        }
+
+        /**
+         * 【新增】检测即将到达指示线的手势，并通知回调
+         */
+        checkUpcomingGesture() {
+            if (!this.onUpcomingGesture) return;
+
+            // 找到即将到达指示线的下一个手势（还没通过的，且最接近指示线的）
+            let upcomingPrompt = null;
+            let minDistance = Infinity;
+
+            this.prompts.forEach(p => {
+                if (!p.isPassed) {
+                    const distance = p.x - this.config.indicatorX;
+                    // 只考虑还在指示线右边的手势
+                    if (distance > -50 && distance < minDistance) {
+                        minDistance = distance;
+                        upcomingPrompt = p;
+                    }
+                }
+            });
+
+            if (upcomingPrompt && upcomingPrompt.index !== this._lastUpcomingGestureIndex) {
+                this._lastUpcomingGestureIndex = upcomingPrompt.index;
+                const gestureDef = this.promptLibrary[upcomingPrompt.name];
+                if (gestureDef && gestureDef.originalGesture) {
+                    console.log('[DiscreteGestureAnimation] 即将到达的手势:', gestureDef.originalGesture.name);
+                    this.onUpcomingGesture(gestureDef.originalGesture);
+                }
+            }
+        }
+
+        /**
+         * 【新增】绘制乱序模式的Stage信息（简化版，不显示具体姿势）
+         */
+        drawShuffleStageInfo() {
+            const ctx = this.ctx;
+            const stageConfig = this.currentStage;
+
+            ctx.save();
+
+            // 左上角显示乱序采集模式
+            ctx.fillStyle = 'rgba(30, 64, 175, 0.95)';
+            ctx.font = '700 24px ui-sans-serif, system-ui, -apple-system';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            ctx.fillText(`🎲 乱序采集模式`, 20, 20);
+
+            // 显示Stage名称和指导文字
+            if (stageConfig) {
+                ctx.fillStyle = 'rgba(107, 114, 128, 0.9)';
+                ctx.font = '500 16px ui-sans-serif, system-ui';
+                ctx.fillText(`Stage: ${stageConfig.name || stageConfig.label}`, 20, 52);
+
+                if (stageConfig.instruction) {
+                    ctx.fillText(stageConfig.instruction, 20, 76);
+                }
+            }
+
+            ctx.restore();
+        }
+
+        /**
+         * 【新增】停止乱序模式动画
+         */
+        stopShuffleMode() {
+            console.log('[DiscreteGestureAnimation] 停止乱序模式');
+            this.isRunning = false;
+            this._shuffleModeActive = false;
+
+            if (this.animationId) {
+                cancelAnimationFrame(this.animationId);
+                this.animationId = null;
+            }
+
+            if (this.ctx && this.config.canvasWidth && this.config.canvasHeight) {
+                this.ctx.clearRect(0, 0, this.config.canvasWidth, this.config.canvasHeight);
+            }
+
+            if (this.canvas) {
+                this.canvas.style.display = 'none';
+            }
         }
     }
 

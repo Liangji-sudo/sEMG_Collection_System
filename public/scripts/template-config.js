@@ -111,7 +111,8 @@
                 restBetweenGestures: 30.0,     // 手势间休息时间（秒）
                 preparationTime: 3.0,          // Stage开始前准备时间（秒）
                 gestureDisplayTime: 2.0,       // 手势提示显示时间（秒）
-                sustainedDuration: 2.0         // 【新增】持续性手势的持续时间（秒）
+                sustainedDuration: 2.0,        // 持续性手势的持续时间（秒）
+                shuffleInterval: 1.0           // 【新增】乱序模式手势间隔（秒）
             },
             // 连续手势1采集参数（同心圆引导动画）
             continual_gesture_1: {
@@ -820,6 +821,9 @@
             // 【新增】动捕勾选框状态
             const needMocap = item.needMocap || false;
 
+            // 【新增】乱序勾选框状态
+            const shuffleGestures = item.shuffleGestures || false;
+
             return `
                 <div class="config-item config-item-stage" data-index="${index}">
                     <div class="config-item-drag">
@@ -843,6 +847,15 @@
                                style="margin: 0; cursor: pointer;">
                         <i class="fa fa-video" style="color: ${needMocap ? '#4caf50' : '#999'};"></i>
                         <span style="color: ${needMocap ? '#2e7d32' : '#666'};">动捕</span>
+                    </label>
+                    <!-- 【新增】乱序勾选框 -->
+                    <label class="stage-shuffle-checkbox" title="勾选后该子场景的手势将随机打乱顺序执行"
+                           style="display: flex; align-items: center; gap: 4px; padding: 4px 8px; background: ${shuffleGestures ? '#fff3e0' : '#f5f5f5'}; border: 1px solid ${shuffleGestures ? '#ff9800' : '#ddd'}; border-radius: 4px; cursor: pointer; font-size: 11px; white-space: nowrap;">
+                        <input type="checkbox" data-category="category3" data-index="${index}"
+                               data-field="shuffleGestures" ${shuffleGestures ? 'checked' : ''}
+                               style="margin: 0; cursor: pointer;">
+                        <i class="fa fa-random" style="color: ${shuffleGestures ? '#ff9800' : '#999'};"></i>
+                        <span style="color: ${shuffleGestures ? '#e65100' : '#666'};">乱序</span>
                     </label>
                     <button class="stage-gestures-btn" data-stage-index="${index}" title="配置该子场景的手势库"
                             style="display: flex; align-items: center; gap: 4px; padding: 6px 10px; background: ${btnBg}; color: ${btnColor}; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; white-space: nowrap;">
@@ -911,8 +924,8 @@
                     }
                     this.isDirty = true;
 
-                    // 【新增】如果是needMocap字段变化，重新渲染以更新UI样式
-                    if (field === 'needMocap') {
+                    // 【新增】如果是needMocap或shuffleGestures字段变化，重新渲染以更新UI样式
+                    if (field === 'needMocap' || field === 'shuffleGestures') {
                         this.renderCategoriesTab();
                     }
                 });
@@ -1581,6 +1594,13 @@
                                    value="${taskExec.sustainedDuration || 2.0}" min="0.5" max="10" step="0.5">
                             <span class="param-unit">秒</span>
                             <span class="param-hint">（持续手势从_start到_end的时间）</span>
+                        </div>
+                        <div class="config-param-item config-param-shuffle">
+                            <label><i class="fa fa-random"></i> 乱序模式手势间隔</label>
+                            <input type="number" data-task="${task.id}" data-param="shuffleInterval"
+                                   value="${taskExec.shuffleInterval || 1.0}" min="0.5" max="10" step="0.5">
+                            <span class="param-unit">秒</span>
+                            <span class="param-hint">（乱序模式下每个手势经过采集线的时间间隔）</span>
                         </div>
                     `;
                 } else if (task.id === 'continual_gesture_1' || task.id === 'continual_gesture_2') {
