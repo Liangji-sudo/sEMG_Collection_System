@@ -991,10 +991,17 @@
             this.onUpcomingGesture = onUpcomingGesture;
             this.currentStage = stageConfig;
 
-            // 【修复】乱序模式使用和正常模式相同的滚动速度
-            // 从配置文件加载，确保两种模式速度一致
-            this.loadConfig();  // 重新加载配置，确保使用ANIMATION.SCROLL_SPEED
-            console.log('[DiscreteGestureAnimation] 乱序模式滚动速度:', this.config.scrollSpeed, 'px/帧 (与正常模式一致)');
+            // 【修复】先加载默认配置，再根据 shuffleInterval 参数调整滚动速度
+            this.loadConfig();  // 加载默认配置（包括 promptSpacing 等）
+
+            // 【关键】使用 shuffleInterval 参数计算滚动速度
+            // shuffleInterval: 乱序模式下每个手势经过采集线的时间间隔（秒）
+            // 计算：手势间距 / (帧率 * 间隔时间) = 滚动速度
+            // 假设60fps，间距为120px，间隔1秒 => scrollSpeed = 120 / (60 * 1) = 2
+            const shuffleInterval = executionParams?.shuffleInterval || 1.0;
+            this.config.scrollSpeed = this.config.promptSpacing / (60 * shuffleInterval);
+            console.log('[DiscreteGestureAnimation] 乱序模式间隔:', shuffleInterval, '秒');
+            console.log('[DiscreteGestureAnimation] 计算得到滚动速度:', this.config.scrollSpeed, 'px/帧');
 
             // 清空并重新构建promptLibrary
             this.promptLibrary = {};
