@@ -15,7 +15,7 @@ Marker点命名（每只手10个，共20个）：
 
 数据通道（左右手各自独立计算）：
 - finger_joint_angle_L/R: 食指关节角度 (0-90°) - 连续手势1 (食指上抬)
-  计算方法：用 ID1, ID2, ID3 和 HB1, HB2, HB3 计算食指与手掌法线的夹角
+  计算方法：用 ID3 到 HB2 的连线方向，与 HB1, HB2, HB3 平面法向量的夹角
 - thumb_index_distance_L/R: 拇指食指距离 (mm) - 连续手势2 (捏合)
   计算方法：用 TH1 和 ID1 的距离
 
@@ -97,7 +97,7 @@ def fit_plane_normal(p1, p2, p3):
 def calculate_finger_joint_angle(markers, hand='L'):
     """计算食指上抬角度（连续手势1）
 
-    使用 ID1, ID2, ID3 计算食指方向，HB1, HB2, HB3 计算手掌法线
+    使用 ID3 到 HB2 的连线方向，与 HB1, HB2, HB3 平面法向量的夹角
     返回: 0° = 食指竖直（与手掌垂直）, 90° = 食指平放（与手掌平行）
 
     Args:
@@ -106,22 +106,27 @@ def calculate_finger_joint_angle(markers, hand='L'):
     """
     suffix = f'_{hand}'
 
-    id1 = np.array(markers.get(f"ID1{suffix}", [0, 0, 0]))
-    id2 = np.array(markers.get(f"ID2{suffix}", [0, 0, 0]))
     id3 = np.array(markers.get(f"ID3{suffix}", [0, 0, 0]))
     hb1 = np.array(markers.get(f"HB1{suffix}", [0, 0, 0]))
     hb2 = np.array(markers.get(f"HB2{suffix}", [0, 0, 0]))
     hb3 = np.array(markers.get(f"HB3{suffix}", [0, 0, 0]))
 
     # 检查坐标是否有效
-    all_points = [id1, id2, id3, hb1, hb2, hb3]
+    all_points = [id3, hb1, hb2, hb3]
     if any(any(abs(v) > 100000 for v in p) for p in all_points):
         return None  # 无效数据
 
-    index_dir = fit_line_direction(id1, id2, id3)
+    # 计算 ID3 到 HB2 的方向向量
+    finger_dir = id3 - hb2
+    norm = np.linalg.norm(finger_dir)
+    if norm < 1e-6:
+        return None  # 两点重合，无法计算
+    finger_dir = finger_dir / norm
+
+    # 计算手掌平面法向量
     palm_normal = fit_plane_normal(hb1, hb2, hb3)
 
-    cos_angle = abs(np.dot(index_dir, palm_normal))
+    cos_angle = abs(np.dot(finger_dir, palm_normal))
     cos_angle = np.clip(cos_angle, -1, 1)
     angle_with_normal = math.degrees(math.acos(cos_angle))
 
