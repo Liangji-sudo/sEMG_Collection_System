@@ -334,6 +334,12 @@ class RealtimeEngine extends EventEmitter {
     onPromptEnd(promptName, promptIndex) {}
 
     onPrompt(name, stageName, timestamp) {
+        // 【新增】测试模式下不保存 prompt
+        if (this.isTestMode) {
+            console.log(`[realtimeEngine] 测试模式：跳过保存 prompt (${name})`);
+            return;
+        }
+
         const promptTime = timestamp || Date.now();
         // 【修复】不再设置 pending_prompt，直接保存
         // 之前的问题：设置了 pending_prompt 后立即保存，但没有清除
