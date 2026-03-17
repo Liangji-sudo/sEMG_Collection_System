@@ -757,7 +757,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             if (shuffleGestures && this.currentTaskId === 'discrete_gesture') {
                 // 乱序模式：生成完整的手势实例序列并打乱
-                const repeatCount = this.currentExecutionParams?.repeatPerGesture || 5;
+                // 【修改】测试模式下每个手势只出现2次
+                const repeatCount = this._isTestMode ? 2 : (this.currentExecutionParams?.repeatPerGesture || 5);
                 const instanceSequence = [];
 
                 // 为每个手势生成N个实例
@@ -782,6 +783,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 this._shuffleMode = true;  // 标记当前为乱序模式
 
                 console.log(`[Collection] ★ 乱序模式已启用 ★`);
+                console.log(`[Collection] 测试模式: ${this._isTestMode ? '是' : '否'}`);
                 console.log(`[Collection] 原始手势: ${baseGestures.length}个, 每个重复${repeatCount}次`);
                 console.log(`[Collection] 生成乱序序列: ${instanceSequence.length}个实例`);
                 console.log(`[Collection] 序列预览: ${instanceSequence.slice(0, 10).map(g => g.name).join(', ')}...`);
@@ -1455,6 +1457,13 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                         repeatPerGesture: 1
                     };
                     console.log(`[Collection] 乱序模式: 实例 ${this.currentGestureIndex + 1}/${this.gestures.length}, 手势: ${gesture.name}`);
+                } else if (this._isTestMode) {
+                    // 【新增】测试模式下，顺序模式每个手势只执行2次
+                    execParams = {
+                        ...this.currentExecutionParams,
+                        repeatPerGesture: 2
+                    };
+                    console.log(`[Collection] 测试模式(顺序): 手势 ${gesture.name} 只执行2次`);
                 }
 
                 window.discreteGestureAnimation.startGesture(gesture, execParams, () => {
@@ -1790,7 +1799,16 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             
             if (animationModule) {
                 // 【关键修复】传递执行参数给动画模块的start函数
-                console.log('[Collection] 传递执行参数给动画模块:', this.currentExecutionParams);
+                // 【新增】测试模式下限制 trialsPerStage 为 2
+                let execParams = this.currentExecutionParams;
+                if (this._isTestMode) {
+                    execParams = {
+                        ...this.currentExecutionParams,
+                        trialsPerStage: 2
+                    };
+                    console.log('[Collection] 测试模式: trialsPerStage 限制为 2');
+                }
+                console.log('[Collection] 传递执行参数给动画模块:', execParams);
 
                 // 【修复】发送 stage_start 命令打开 H5 文件
                 // 【新增】连续手势采集必须记录动捕数据，needMocap 始终为 true
@@ -1813,7 +1831,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                     (trialIndex) => {
                         this.onContinualTrialComplete(trialIndex);
                     },
-                    this.currentExecutionParams  // 【关键】传入执行参数
+                    execParams  // 【修改】使用可能被测试模式修改的参数
                 );
 
                 console.log('[Collection] 连续手势动画已启动');
