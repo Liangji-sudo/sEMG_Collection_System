@@ -1232,8 +1232,14 @@
             let minDistance = Infinity;
 
             this.prompts.forEach(p => {
-                if (!p.isPassed) {
-                    const distance = p.x - this.config.indicatorX;
+                // 【修改】对于持续性手势，需要等 endTriggered 后才算完成
+                // 对于瞬时手势，使用 isPassed
+                const isCompleted = p.gestureType === 'sustained' ? p.endTriggered : p.isPassed;
+
+                if (!isCompleted) {
+                    // 【修改】对于持续性手势，使用右边缘位置来计算距离
+                    const promptRightEdge = p.gestureType === 'sustained' ? (p.x + p.rectWidth) : p.x;
+                    const distance = promptRightEdge - this.config.indicatorX;
                     // 只考虑还在指示线右边的手势
                     if (distance > -50 && distance < minDistance) {
                         minDistance = distance;
