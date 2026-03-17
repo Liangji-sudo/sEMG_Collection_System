@@ -128,6 +128,12 @@ class CalibrateTool(QMainWindow):
         self.imu2a_data = None
         self.imu2b_data = None
 
+        # Prompt标签数据
+        self.prompt_names = None
+        self.prompt_times = None  # 相对时间（秒）
+        self.current_prompt_idx = 0  # 当前prompt索引
+        self.emg_start_time = None  # EMG数据起始时间戳
+
         # 滤波器
         self.emg_filter_2k = EMGFilter(sample_rate=2000)
         self.emg_filter_250 = EMGFilter(sample_rate=250)
@@ -180,6 +186,22 @@ class CalibrateTool(QMainWindow):
         self.chk_filter.setChecked(True)
         self.chk_filter.stateChanged.connect(self.update_plots)
         control_layout.addWidget(self.chk_filter)
+
+        # Prompt跳转按钮
+        control_layout.addWidget(QLabel('  |  '))
+        self.btn_prev_prompt = QPushButton('◀ 上一个Prompt')
+        self.btn_prev_prompt.clicked.connect(self.goto_prev_prompt)
+        self.btn_prev_prompt.setEnabled(False)
+        control_layout.addWidget(self.btn_prev_prompt)
+
+        self.lbl_prompt_info = QLabel('Prompt: -/-')
+        self.lbl_prompt_info.setMinimumWidth(120)
+        control_layout.addWidget(self.lbl_prompt_info)
+
+        self.btn_next_prompt = QPushButton('下一个Prompt ▶')
+        self.btn_next_prompt.clicked.connect(self.goto_next_prompt)
+        self.btn_next_prompt.setEnabled(False)
+        control_layout.addWidget(self.btn_next_prompt)
 
         main_layout.addLayout(control_layout)
 
@@ -295,6 +317,7 @@ class CalibrateTool(QMainWindow):
             # 读取数据
             self.load_emg_data()
             self.load_imu_data()
+            self.load_prompt_data()
 
             # 计算并保存全局的Y轴范围
             self.calculate_y_limits()
@@ -321,6 +344,7 @@ class CalibrateTool(QMainWindow):
         self.emg2_data = None
         self.emg1_sample_rate = 2000  # 默认采样率
         self.emg2_sample_rate = 2000
+        self.emg_start_time = None
 
         # 尝试不同的数据集名称（按优先级排序）
         emg1_names = ['emg1_2khz_adc', 'emg1_2khz', 'emg1_250hz_adc', 'emg1_250hz', 'emg1']
@@ -328,7 +352,12 @@ class CalibrateTool(QMainWindow):
 
         for name in emg1_names:
             if name in self.h5_file:
-                self.emg1_data = self._extract_emg_channels(self.h5_file[name][:])
+                raw_data = self.h5_file[name][:]
+                self.emg1_data = self._extract_emg_channels(raw_data)
+                # 提取起始时间戳
+                if raw_data.dtype.names is not None and 'time' in raw_data.dtype.names:
+                    self.emg_start_time = raw_data['time'][0]
+                    print(f'[CalibrateTool] EMG起始时间戳: {self.emg_start_time}')
                 if '250hz' in name:
                     self.emg1_sample_rate = 250
                 print(f'[CalibrateTool] 已加载 {name}: shape={self.emg1_data.shape if self.emg1_data is not None else "None"}')
@@ -416,6 +445,46 @@ class CalibrateTool(QMainWindow):
             return data[:, :3]
 
         return np.array(data)
+
+    def load_prompt_data(self):
+        """加载Prompt标签数据"""
+        self.prompt_names = None
+        self.prompt_times = None
+
+        try:
+            if 'prompts' in self.h5_file:
+                prompts_group = self.h5_file['prompts']
+                if 'names' in prompts_group and 'times' in prompts_group:
+                    # 读取names（可能是字符串数组）
+                    names_data = prompts_group['names'][:]
+                    # 处理字节字符串
+                    if names_data.dtype.kind == 'S' or names_data.dtype.kind == 'O':
+                        self.prompt_names = [n.decode('utf-8') if isinstance(n, bytes) else str(n) for n in names_data]
+                    else:
+                        self.prompt_names = [str(n) for n in names_data]
+
+                    # 读取times（绝对时间戳数组）
+                    raw_times = prompts_group['times'][:]
+
+                    # 转换为相对时间（相对于EMG起始时间）
+                    if self.emg_start_time is not None:
+                        self.prompt_times = raw_times - self.emg_start_time
+                        print(f'[CalibrateTool] Prompt时间已转换为相对时间 (起始时间: {self.emg_start_time})')
+                    else:
+                        self.prompt_times = raw_times
+                        print(f'[CalibrateTool] 警告: 未找到EMG起始时间，使用原始时间戳')
+
+                    print(f'[CalibrateTool] 已加载 {len(self.prompt_names)} 个Prompt标签')
+                    for i, (name, time) in enumerate(zip(self.prompt_names[:5], self.prompt_times[:5])):
+                        print(f'  [{i}] {name}: {time:.3f}s')
+                    if len(self.prompt_names) > 5:
+                        print(f'  ... 共 {len(self.prompt_names)} 个')
+
+                    # 重置prompt索引并更新UI
+                    self.current_prompt_idx = 0
+                    self._update_prompt_info()
+        except Exception as e:
+            print(f'[CalibrateTool] 加载Prompt数据失败: {e}')
 
     def calculate_y_limits(self):
         """计算全局Y轴范围（用于固定纵轴）"""
@@ -600,6 +669,9 @@ class CalibrateTool(QMainWindow):
         if self.emg1_ylim:
             self.ax_emg1.set_ylim(self.emg1_ylim)
 
+        # 绘制Prompt标签
+        self.draw_prompt_markers(self.ax_emg1, time_start, time_end)
+
         # 绘制EMG2
         if self.emg2_data is not None and len(self.emg2_data) > 0:
             # 取更大范围的数据用于滤波（加padding）
@@ -639,6 +711,9 @@ class CalibrateTool(QMainWindow):
         # 固定Y轴范围
         if self.emg2_ylim:
             self.ax_emg2.set_ylim(self.emg2_ylim)
+
+        # 绘制Prompt标签
+        self.draw_prompt_markers(self.ax_emg2, time_start, time_end)
 
         self.fig_emg.tight_layout()
         self.canvas_emg.draw_idle()  # 使用 draw_idle 提升响应性
@@ -697,11 +772,100 @@ class CalibrateTool(QMainWindow):
             if self.imu_ylim:
                 ax.set_ylim(self.imu_ylim)
 
+            # 绘制Prompt标签
+            self.draw_prompt_markers(ax, time_start, time_start + self.window_size / emg_sample_rate)
+
         self.ax_imu2a.set_xlabel('时间 (秒)')
         self.ax_imu2b.set_xlabel('时间 (秒)')
 
         self.fig_imu.tight_layout()
         self.canvas_imu.draw_idle()  # 使用 draw_idle 提升响应性
+
+    def draw_prompt_markers(self, ax, time_start, time_end):
+        """在图表上绘制Prompt标签
+
+        Args:
+            ax: matplotlib axes对象
+            time_start: 显示窗口开始时间（秒）
+            time_end: 显示窗口结束时间（秒）
+        """
+        if self.prompt_names is None or self.prompt_times is None:
+            return
+
+        # 获取当前Y轴范围
+        ylim = ax.get_ylim()
+
+        # 遍历所有prompt，绘制在当前时间窗口内的
+        for name, time in zip(self.prompt_names, self.prompt_times):
+            if time_start <= time <= time_end:
+                # 绘制垂直线
+                ax.axvline(x=time, color='red', linestyle='--', linewidth=1, alpha=0.7)
+                # 在顶部添加标签文字（水平显示）
+                ax.text(time, ylim[1], name, rotation=0, verticalalignment='bottom',
+                       horizontalalignment='left', fontsize=7, color='red', alpha=0.9)
+
+    def goto_prev_prompt(self):
+        """跳转到上一个Prompt"""
+        if self.prompt_times is None or len(self.prompt_times) == 0:
+            return
+
+        if self.current_prompt_idx > 0:
+            self.current_prompt_idx -= 1
+            self._jump_to_prompt(self.current_prompt_idx)
+
+    def goto_next_prompt(self):
+        """跳转到下一个Prompt"""
+        if self.prompt_times is None or len(self.prompt_times) == 0:
+            return
+
+        if self.current_prompt_idx < len(self.prompt_times) - 1:
+            self.current_prompt_idx += 1
+            self._jump_to_prompt(self.current_prompt_idx)
+
+    def _jump_to_prompt(self, idx):
+        """跳转到指定索引的Prompt位置"""
+        if self.prompt_times is None or idx < 0 or idx >= len(self.prompt_times):
+            return
+
+        # 获取prompt时间（秒）
+        prompt_time = self.prompt_times[idx]
+
+        # 转换为采样点位置（EMG 2kHz）
+        sample_rate = getattr(self, 'emg1_sample_rate', 2000)
+        sample_pos = int(prompt_time * sample_rate)
+
+        # 将prompt放在窗口中间偏左的位置
+        target_pos = sample_pos - self.window_size // 4
+
+        # 限制范围
+        max_pos = self.slider.maximum()
+        target_pos = max(0, min(target_pos, max_pos))
+
+        # 更新滑块位置（会触发update_plots）
+        self.slider.setValue(target_pos)
+
+        # 更新prompt信息显示
+        self._update_prompt_info()
+
+    def _update_prompt_info(self):
+        """更新Prompt信息显示"""
+        if self.prompt_times is None or len(self.prompt_times) == 0:
+            self.lbl_prompt_info.setText('Prompt: -/-')
+            self.btn_prev_prompt.setEnabled(False)
+            self.btn_next_prompt.setEnabled(False)
+            return
+
+        total = len(self.prompt_times)
+        current = self.current_prompt_idx + 1
+        name = self.prompt_names[self.current_prompt_idx] if self.prompt_names else ''
+
+        # 截断过长的名称
+        if len(name) > 15:
+            name = name[:12] + '...'
+
+        self.lbl_prompt_info.setText(f'Prompt: {current}/{total} ({name})')
+        self.btn_prev_prompt.setEnabled(self.current_prompt_idx > 0)
+        self.btn_next_prompt.setEnabled(self.current_prompt_idx < total - 1)
 
     def closeEvent(self, event):
         """关闭窗口时清理资源"""
