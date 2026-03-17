@@ -121,11 +121,14 @@
                 stageTimeout: 120,             // Stage超时时间（秒）
                 preparationTime: 3.0,          // Stage开始前准备时间（秒）
                 restBetweenTrials: 1,          // 【新增】试次间隔休息时间（秒）
-                expandDuration: 3.0,           // 扩张阶段时长（秒）
+                expandDuration: 3.0,           // 扩张阶段时长（秒）- 基准时长
                 holdDuration: 1.0,             // 保持阶段时长（秒）
-                contractDuration: 3.0,         // 收缩阶段时长（秒）
+                contractDuration: 3.0,         // 收缩阶段时长（秒）- 基准时长
                 guideBandWidth: 10,            // 引导区域宽度（像素，半径±此值）
-                maxRadius: 150                 // 同心圆最大半径（像素）
+                maxRadius: 150,                // 同心圆最大半径（像素）
+                // 【新增】速度变化配置
+                speedLevels: [0.5, 1.0, 1.5, 2.0],  // 速度等级（倍率：0.5=慢速2倍时间，2.0=快速一半时间）
+                trialSpeedSequence: []         // 每个Trial的速度等级索引（1-based），空=全部使用1.0倍率
             },
             // 连续手势2采集参数（同心圆引导动画）
             continual_gesture_2: {
@@ -133,11 +136,14 @@
                 stageTimeout: 120,             // Stage超时时间（秒）
                 preparationTime: 3.0,          // Stage开始前准备时间（秒）
                 restBetweenTrials: 1,          // 【新增】试次间隔休息时间（秒）
-                expandDuration: 3.0,           // 扩张阶段时长（秒）
+                expandDuration: 3.0,           // 扩张阶段时长（秒）- 基准时长
                 holdDuration: 1.0,             // 保持阶段时长（秒）
-                contractDuration: 3.0,         // 收缩阶段时长（秒）
+                contractDuration: 3.0,         // 收缩阶段时长（秒）- 基准时长
                 guideBandWidth: 10,            // 引导区域宽度（像素）
-                maxRadius: 150                 // 同心圆最大半径（像素）
+                maxRadius: 150,                // 同心圆最大半径（像素）
+                // 【新增】速度变化配置
+                speedLevels: [0.5, 1.0, 1.5, 2.0],  // 速度等级
+                trialSpeedSequence: []         // 每个Trial的速度等级索引
             },
             // 连续手势3采集参数（手掌反转引导）
             continual_gesture_3: {
@@ -1675,6 +1681,40 @@
                             <span class="param-unit">像素</span>
                             <span class="param-hint">（圆的最大尺寸）</span>
                         </div>
+
+                        <!-- 【新增】速度变化配置区域 -->
+                        <div class="config-section-divider">
+                            <span class="divider-title">速度变化配置</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label>速度等级（倍率）</label>
+                            <input type="text" data-task="${task.id}" data-param="speedLevels" data-type="array"
+                                   value="${(taskExec.speedLevels || [0.5, 1.0, 1.5, 2.0]).join(', ')}"
+                                   class="wide-input">
+                            <span class="param-hint">（逗号分隔，如: 0.5, 1.0, 1.5, 2.0。倍率越大速度越快）</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label>Trial速度序列</label>
+                            <input type="text" data-task="${task.id}" data-param="trialSpeedSequence" data-type="array"
+                                   value="${(taskExec.trialSpeedSequence || []).join(', ')}"
+                                   class="wide-input"
+                                   placeholder="留空=全部使用1.0倍速">
+                            <span class="param-hint">（逗号分隔，每个Trial对应的速度等级序号，如: 1, 1, 2, 2, 3, 3, 4, 4, 3, 2）</span>
+                        </div>
+                        <div class="speed-sequence-helper" data-task="${task.id}">
+                            <button type="button" class="btn-small btn-outline" onclick="window.templateConfigManager.generateSpeedSequence('${task.id}', 'gradual')">
+                                渐进加速
+                            </button>
+                            <button type="button" class="btn-small btn-outline" onclick="window.templateConfigManager.generateSpeedSequence('${task.id}', 'wave')">
+                                快慢交替
+                            </button>
+                            <button type="button" class="btn-small btn-outline" onclick="window.templateConfigManager.generateSpeedSequence('${task.id}', 'random')">
+                                随机速度
+                            </button>
+                            <button type="button" class="btn-small btn-outline" onclick="window.templateConfigManager.generateSpeedSequence('${task.id}', 'clear')">
+                                清空（全用1.0x）
+                            </button>
+                        </div>
                     `;
                 } else if (task.id === 'continual_gesture_3') {
                     // 连续手势3（手掌反转引导）的特有参数
@@ -1754,15 +1794,31 @@
                 input.addEventListener('change', (e) => {
                     const taskId = e.target.dataset.task;
                     const param = e.target.dataset.param;
-                    const value = parseFloat(e.target.value);
-                    
+                    const dataType = e.target.dataset.type;  // 【新增】获取数据类型
+
+                    let value;
+                    if (dataType === 'array') {
+                        // 【新增】处理数组类型输入（逗号分隔的数字）
+                        const strValue = e.target.value.trim();
+                        if (strValue === '') {
+                            value = [];
+                        } else {
+                            value = strValue.split(',').map(s => {
+                                const num = parseFloat(s.trim());
+                                return isNaN(num) ? 0 : num;
+                            }).filter(n => n !== 0 || strValue.includes('0'));
+                        }
+                    } else {
+                        value = parseFloat(e.target.value);
+                    }
+
                     if (taskId && param) {
                         if (!this.currentTemplate.execution[taskId]) {
                             this.currentTemplate.execution[taskId] = {};
                         }
                         this.currentTemplate.execution[taskId][param] = value;
                         this.isDirty = true;
-                        
+
                         // 更新时间估算
                         const estimation = document.getElementById('timeEstimationContent');
                         if (estimation) {
@@ -2017,6 +2073,72 @@
                 category4: this.currentTemplate.category4.filter(c => c.enabled),
                 gestures: this.currentTemplate.gestures.discrete.filter(g => g.enabled)
             };
+        }
+
+        /**
+         * 【新增】生成速度序列
+         * @param {string} taskId - 任务ID（continual_gesture_1 或 continual_gesture_2）
+         * @param {string} pattern - 模式：'gradual'渐进 | 'wave'快慢交替 | 'random'随机 | 'clear'清空
+         */
+        generateSpeedSequence(taskId, pattern) {
+            const taskExec = this.currentTemplate.execution[taskId];
+            if (!taskExec) return;
+
+            const trialsPerStage = taskExec.trialsPerStage || 5;
+            const speedLevels = taskExec.speedLevels || [0.5, 1.0, 1.5, 2.0];
+            const numLevels = speedLevels.length;
+
+            let sequence = [];
+
+            switch (pattern) {
+                case 'gradual':
+                    // 渐进加速：从慢到快
+                    for (let i = 0; i < trialsPerStage; i++) {
+                        // 均匀分布在速度等级上
+                        const levelIndex = Math.min(Math.floor(i * numLevels / trialsPerStage) + 1, numLevels);
+                        sequence.push(levelIndex);
+                    }
+                    break;
+
+                case 'wave':
+                    // 快慢交替：慢-快-慢-快...
+                    for (let i = 0; i < trialsPerStage; i++) {
+                        sequence.push(i % 2 === 0 ? 1 : numLevels);
+                    }
+                    break;
+
+                case 'random':
+                    // 随机速度
+                    for (let i = 0; i < trialsPerStage; i++) {
+                        sequence.push(Math.floor(Math.random() * numLevels) + 1);
+                    }
+                    break;
+
+                case 'clear':
+                    // 清空（全部使用默认1.0倍速）
+                    sequence = [];
+                    break;
+            }
+
+            // 更新配置
+            taskExec.trialSpeedSequence = sequence;
+            this.isDirty = true;
+
+            // 更新输入框显示
+            const input = document.querySelector(`input[data-task="${taskId}"][data-param="trialSpeedSequence"]`);
+            if (input) {
+                input.value = sequence.join(', ');
+            }
+
+            // 显示提示
+            const patternNames = {
+                'gradual': '渐进加速',
+                'wave': '快慢交替',
+                'random': '随机速度',
+                'clear': '已清空'
+            };
+            this.showToast(`速度序列已设为: ${patternNames[pattern]}`, 'success');
+            console.log(`[TemplateConfig] ${taskId} 速度序列已生成:`, sequence);
         }
 
         /**

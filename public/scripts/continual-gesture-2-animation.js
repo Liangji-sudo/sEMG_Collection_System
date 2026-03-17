@@ -155,15 +155,17 @@
                 this.restBetweenTrials = templateConfig.restBetweenTrials || 1;  // 【新增】试次间隔休息时间
                 this.preparationTime = (templateConfig.preparationTime || 3) * 1000;
 
-                // 同心圆动画特有配置
+                // 同心圆动画特有配置 - 【修改】保存基准时长
                 if (templateConfig.expandDuration !== undefined) {
-                    this.expandDuration = templateConfig.expandDuration * 1000;
+                    this.baseExpandDuration = templateConfig.expandDuration * 1000;
+                    this.expandDuration = this.baseExpandDuration;
                 }
                 if (templateConfig.holdDuration !== undefined) {
                     this.holdDuration = templateConfig.holdDuration * 1000;
                 }
                 if (templateConfig.contractDuration !== undefined) {
-                    this.contractDuration = templateConfig.contractDuration * 1000;
+                    this.baseContractDuration = templateConfig.contractDuration * 1000;
+                    this.contractDuration = this.baseContractDuration;
                 }
                 if (templateConfig.guideBandWidth !== undefined) {
                     this.guideBandWidth = templateConfig.guideBandWidth;
@@ -172,18 +174,29 @@
                     this.maxRadius = templateConfig.maxRadius;
                 }
 
+                // 【新增】速度变化配置
+                this.speedLevels = templateConfig.speedLevels || [0.5, 1.0, 1.5, 2.0];
+                this.trialSpeedSequence = templateConfig.trialSpeedSequence || [];
+
                 console.log('[ContinualGesture2Animation] 配置加载完成:', {
                     maxTrials: this.maxTrials,
                     stageTimeout: this.stageTimeout,
-                    restBetweenTrials: this.restBetweenTrials,  // 【新增】
-                    expandDuration: this.expandDuration,
+                    restBetweenTrials: this.restBetweenTrials,
+                    baseExpandDuration: this.baseExpandDuration,
                     holdDuration: this.holdDuration,
-                    contractDuration: this.contractDuration,
+                    baseContractDuration: this.baseContractDuration,
                     guideBandWidth: this.guideBandWidth,
-                    maxRadius: this.maxRadius
+                    maxRadius: this.maxRadius,
+                    speedLevels: this.speedLevels,
+                    trialSpeedSequence: this.trialSpeedSequence
                 });
             } else {
                 console.log('[ContinualGesture2Animation] 未找到配置，使用默认值');
+                // 设置默认的基准值
+                this.baseExpandDuration = this.expandDuration;
+                this.baseContractDuration = this.contractDuration;
+                this.speedLevels = [0.5, 1.0, 1.5, 2.0];
+                this.trialSpeedSequence = [];
             }
         }
 
@@ -399,12 +412,16 @@
         startTrial() {
             console.log(`[ContinualGesture2Animation] 开始Trial ${this.trial + 1}/${this.maxTrials}`);
 
+            // 【新增】根据速度序列计算当前Trial的实际时间参数
+            this.applySpeedMultiplier();
+
             // 【新增】发送 prompt: start
             if (window.collectionController) {
                 window.collectionController.sendToRealtimeEngine('prompt', {
                     name: 'start',
                     stageName: this.currentStage?.name || 'unknown',
                     trialIndex: this.trial,
+                    speedMultiplier: this.currentSpeedMultiplier || 1.0,  // 【新增】记录速度倍率
                     timestamp: Date.now() / 1000  // 【修改】转换为秒，与ble_server时间戳一致
                 });
             }
@@ -415,6 +432,37 @@
             this.trackingData_L = [];
             this.trackingData_R = [];
             this.trackingData = [];
+        }
+
+        /**
+         * 【新增】根据速度序列应用速度倍率
+         */
+        applySpeedMultiplier() {
+            // 默认倍率为1.0（正常速度）
+            let multiplier = 1.0;
+
+            // 如果配置了速度序列
+            if (this.trialSpeedSequence && this.trialSpeedSequence.length > 0) {
+                // 获取当前trial对应的速度等级索引（序列是1-based索引）
+                const sequenceIndex = this.trial % this.trialSpeedSequence.length;
+                const speedLevelIndex = this.trialSpeedSequence[sequenceIndex];
+
+                // 从速度等级数组中获取倍率（索引是1-based，需要减1）
+                if (speedLevelIndex >= 1 && speedLevelIndex <= this.speedLevels.length) {
+                    multiplier = this.speedLevels[speedLevelIndex - 1];
+                }
+            }
+
+            this.currentSpeedMultiplier = multiplier;
+
+            // 应用倍率：倍率越大，时间越短（速度越快）
+            // 基准时间 / 倍率 = 实际时间
+            this.expandDuration = this.baseExpandDuration / multiplier;
+            this.contractDuration = this.baseContractDuration / multiplier;
+
+            console.log(`[ContinualGesture2Animation] Trial ${this.trial + 1} 速度倍率: ${multiplier}x`);
+            console.log(`  - expandDuration: ${this.baseExpandDuration}ms -> ${this.expandDuration}ms`);
+            console.log(`  - contractDuration: ${this.baseContractDuration}ms -> ${this.contractDuration}ms`);
         }
 
         /**

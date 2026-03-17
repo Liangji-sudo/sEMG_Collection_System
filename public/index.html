@@ -3697,6 +3697,66 @@
             white-space: nowrap;
         }
 
+        /* 【新增】速度配置区域样式 */
+        .config-section-divider {
+            grid-column: 1 / -1;
+            display: flex;
+            align-items: center;
+            margin: 16px 0 8px 0;
+            padding: 0;
+        }
+
+        .config-section-divider .divider-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #3b82f6;
+            padding: 0 12px;
+            background: linear-gradient(90deg, transparent, #f9fafb 10%, #f9fafb 90%, transparent);
+        }
+
+        .config-section-divider::before,
+        .config-section-divider::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, #e5e7eb, transparent);
+        }
+
+        .config-param-item input.wide-input {
+            width: 200px;
+            text-align: left;
+        }
+
+        .speed-sequence-helper {
+            grid-column: 1 / -1;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            padding: 8px 16px;
+            background: #f0f9ff;
+            border-radius: 8px;
+            margin-top: -8px;
+        }
+
+        .speed-sequence-helper .btn-small {
+            padding: 6px 12px;
+            font-size: 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .speed-sequence-helper .btn-outline {
+            background: white;
+            border: 1px solid #3b82f6;
+            color: #3b82f6;
+        }
+
+        .speed-sequence-helper .btn-outline:hover {
+            background: #3b82f6;
+            color: white;
+        }
+
         /* 时间估算 */
         .estimation-grid {
             display: grid;
