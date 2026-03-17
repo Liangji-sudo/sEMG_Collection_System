@@ -700,8 +700,8 @@
             ctx.lineTo(x, y + this.config.promptLength / 2);
             ctx.stroke();
 
-            // 绘制气泡
-            const badgeW = 70;
+            // 绘制气泡（根据emoji数量动态调整宽度）
+            const badgeW = this.calculateBadgeWidth(prompt.icon);
             const badgeH = 70;
             const badgeR = 14;
             const gap = 12;
@@ -782,8 +782,8 @@
             ctx.lineTo(x + rectWidth, y + rectHeight / 2 + 5);
             ctx.stroke();
 
-            // 绘制气泡（在长方形中央上方）
-            const badgeW = 80;
+            // 绘制气泡（在长方形中央上方，根据emoji数量动态调整宽度）
+            const badgeW = this.calculateBadgeWidth(prompt.icon);
             const badgeH = 70;
             const badgeR = 14;
             const gap = 12;
@@ -856,40 +856,81 @@
         }
 
         /**
-         * 绘制emoji图标（兼容Electron）
+         * 计算emoji数量（用于动态调整badge宽度）
+         * 使用更通用的方法来检测所有类型的emoji
+         */
+        countEmojis(str) {
+            if (!str) return 0;
+
+            // 使用 Intl.Segmenter 来正确分割emoji（包括组合emoji）
+            // 这是最准确的方法，能正确处理变体选择符、ZWJ序列等
+            if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+                try {
+                    const segmenter = new Intl.Segmenter('en', { granularity: 'grapheme' });
+                    const segments = [...segmenter.segment(str)];
+                    return segments.length;
+                } catch (e) {
+                    // 如果Segmenter失败，使用后备方案
+                }
+            }
+
+            // 后备方案：使用展开运算符分割字符
+            // 这能正确处理大多数emoji，但可能对某些组合emoji不准确
+            const segments = [...str];
+            return segments.length;
+        }
+
+        /**
+         * 计算badge宽度（根据emoji数量动态调整）
+         */
+        calculateBadgeWidth(icon) {
+            const emojiCount = this.countEmojis(icon);
+            const baseWidth = 70;
+            const extraWidthPerEmoji = 40;  // 与emoji渲染宽度一致
+            // 1个emoji: 70, 2个emoji: 110, 3个emoji: 150
+            return emojiCount > 1 ? baseWidth + (emojiCount - 1) * extraWidthPerEmoji : baseWidth;
+        }
+
+        /**
+         * 绘制emoji图标（兼容Electron，支持多emoji）
          */
         drawEmojiIcon(icon, x, y, color) {
             const ctx = this.ctx;
-            
-            // 检测是否为emoji
-            const isEmoji = /[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\u{1F600}-\u{1F64F}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{1F900}-\u{1F9FF}]|[\u{1FA00}-\u{1FA6F}]|[\u{2300}-\u{23FF}]|[\u{2B50}]|[\u{270A}-\u{270D}]|[\u{1F44D}-\u{1F44F}]|[\u{1F91A}-\u{1F91F}]|[\u{1F90C}-\u{1F90F}]|[\u{261D}]|[\u{1F446}-\u{1F449}]|[\u{1F590}]|[\u{1F595}-\u{1F596}]|[\u270C]/u.test(icon);
-            
+
+            // 使用更通用的emoji检测
+            const isEmoji = /\p{Emoji_Presentation}|\p{Extended_Pictographic}/u.test(icon);
+
             ctx.save();
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            
+
             if (isEmoji) {
+                // 计算emoji数量，动态调整canvas大小
+                const emojiCount = this.countEmojis(icon);
+                const singleSize = 40;
+                const width = singleSize * emojiCount;
+                const height = singleSize;
+
                 // 对于emoji，创建临时canvas来绘制
                 const tempCanvas = document.createElement('canvas');
                 const tempCtx = tempCanvas.getContext('2d');
-                const size = 40;
-                tempCanvas.width = size;
-                tempCanvas.height = size;
-                
-                tempCtx.font = `${size - 8}px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
+                tempCanvas.width = width;
+                tempCanvas.height = height;
+
+                tempCtx.font = `${singleSize - 8}px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
                 tempCtx.textAlign = 'center';
                 tempCtx.textBaseline = 'middle';
-                tempCtx.fillText(icon, size / 2, size / 2);
-                
+                tempCtx.fillText(icon, width / 2, height / 2);
+
                 // 将临时canvas绘制到主canvas
-                ctx.drawImage(tempCanvas, x - size / 2, y - size / 2, size, size);
+                ctx.drawImage(tempCanvas, x - width / 2, y - height / 2, width, height);
             } else {
                 // 非emoji使用普通方式绘制
                 ctx.fillStyle = color;
                 ctx.font = '900 32px ui-sans-serif, system-ui, -apple-system';
                 ctx.fillText(icon, x, y);
             }
-            
+
             ctx.restore();
         }
 
