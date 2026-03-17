@@ -3398,6 +3398,19 @@
             font-size: 20px;
         }
 
+        /* 手势库页面的图标可点击修改 */
+        .config-gesture-item .gesture-icon {
+            cursor: pointer;
+            padding: 2px 4px;
+            border-radius: 4px;
+            transition: background-color 0.2s, transform 0.2s;
+        }
+
+        .config-gesture-item .gesture-icon:hover {
+            background-color: rgba(59, 130, 246, 0.1);
+            transform: scale(1.1);
+        }
+
         .gesture-name-input {
             flex: 1;
             padding: 6px 10px;

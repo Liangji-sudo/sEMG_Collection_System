@@ -1289,7 +1289,7 @@
                             <div class="config-gesture-item ${gesture.enabled ? 'enabled' : 'disabled'} ${gesture.gestureType === 'sustained' ? 'gesture-sustained' : 'gesture-instant'}">
                                 <label class="gesture-checkbox">
                                     <input type="checkbox" data-index="${index}" ${gesture.enabled ? 'checked' : ''}>
-                                    <span class="gesture-icon">${gesture.icon}</span>
+                                    <span class="gesture-icon" data-index="${index}" title="点击修改图标">${gesture.icon}</span>
                                 </label>
                                 <div class="gesture-type-badge" title="${gesture.gestureType === 'sustained' ? '持续手势' : '瞬时手势'}">
                                     <i class="fa ${gesture.gestureType === 'sustained' ? 'fa-arrows-alt-h' : 'fa-bolt'}"></i>
@@ -1396,6 +1396,24 @@
                     this.currentTemplate.gestures.discrete[index].name = newName;
                     this.currentTemplate.gestures.discrete[index].id = newName;
                     this.isDirty = true;
+                });
+            });
+
+            // 点击图标修改emoji
+            container.querySelectorAll('.gesture-icon[data-index]').forEach(iconSpan => {
+                iconSpan.style.cursor = 'pointer';
+                iconSpan.addEventListener('click', async (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const index = parseInt(e.target.dataset.index);
+                    const currentIcon = this.currentTemplate.gestures.discrete[index].icon;
+                    const newIcon = await this.showPrompt('请输入新的手势图标（emoji）：', currentIcon);
+                    if (newIcon && newIcon.trim() && newIcon !== currentIcon) {
+                        this.currentTemplate.gestures.discrete[index].icon = newIcon.trim();
+                        this.isDirty = true;
+                        this.renderGesturesTab();
+                        this.showToast('图标已更新', 'success');
+                    }
                 });
             });
 
