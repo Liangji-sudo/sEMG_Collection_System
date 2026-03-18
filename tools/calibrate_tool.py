@@ -213,7 +213,7 @@ class CalibrateTool(QMainWindow):
         emg_layout = QVBoxLayout(emg_widget)
         emg_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.fig_emg = Figure(figsize=(16, 5), dpi=100)
+        self.fig_emg = Figure(figsize=(16, 10), dpi=100)
         self.canvas_emg = FigureCanvas(self.fig_emg)
         self.toolbar_emg = NavigationToolbar(self.canvas_emg, self)
         emg_layout.addWidget(self.toolbar_emg)
@@ -259,35 +259,89 @@ class CalibrateTool(QMainWindow):
 
     def init_plots(self):
         """初始化图表"""
-        # EMG图表：2行（EMG1, EMG2），每行16通道
-        self.ax_emg1 = self.fig_emg.add_subplot(211)
-        self.ax_emg2 = self.fig_emg.add_subplot(212)
+        # EMG图表：左右两列，每列16行（EMG1和EMG2）
+        # 使用 GridSpec 实现更灵活的布局
+        from matplotlib.gridspec import GridSpec
 
-        self.ax_emg1.set_title('EMG1 (16通道)', fontsize=10)
-        self.ax_emg2.set_title('EMG2 (16通道)', fontsize=10)
-        self.ax_emg1.set_ylabel('μV')
-        self.ax_emg2.set_ylabel('μV')
-        self.ax_emg2.set_xlabel('采样点')
+        gs = GridSpec(16, 2, figure=self.fig_emg, hspace=0, wspace=0.1)
 
-        self.fig_emg.tight_layout()
+        self.ax_emg1_channels = []
+        self.ax_emg2_channels = []
 
-        # IMU图表：4行（imu1a, imu1b, imu2a, imu2b）
-        self.ax_imu1a = self.fig_imu.add_subplot(221)
-        self.ax_imu1b = self.fig_imu.add_subplot(222)
-        self.ax_imu2a = self.fig_imu.add_subplot(223)
-        self.ax_imu2b = self.fig_imu.add_subplot(224)
+        for i in range(16):
+            # EMG1 左列
+            ax1 = self.fig_emg.add_subplot(gs[i, 0])
+            self.ax_emg1_channels.append(ax1)
+            ax1.set_ylabel(f'{i}', fontsize=7, rotation=0, labelpad=10)
+            ax1.tick_params(axis='y', labelsize=5, length=2)
+            ax1.tick_params(axis='x', labelsize=5)
+            # 去掉边框，只保留左边和底部
+            ax1.spines['top'].set_visible(False)
+            ax1.spines['right'].set_visible(False)
+            if i < 15:
+                ax1.set_xticklabels([])
+                ax1.spines['bottom'].set_visible(False)
+                ax1.tick_params(axis='x', length=0)
 
-        self.ax_imu1a.set_title('IMU1A (加速度)', fontsize=10)
-        self.ax_imu1b.set_title('IMU1B (加速度)', fontsize=10)
-        self.ax_imu2a.set_title('IMU2A (加速度)', fontsize=10)
-        self.ax_imu2b.set_title('IMU2B (加速度)', fontsize=10)
+            # EMG2 右列
+            ax2 = self.fig_emg.add_subplot(gs[i, 1])
+            self.ax_emg2_channels.append(ax2)
+            ax2.tick_params(axis='y', labelsize=5, length=2)
+            ax2.tick_params(axis='x', labelsize=5)
+            ax2.set_yticklabels([])  # 右列不显示y轴标签
+            # 去掉边框
+            ax2.spines['top'].set_visible(False)
+            ax2.spines['right'].set_visible(False)
+            ax2.spines['left'].set_visible(False)
+            if i < 15:
+                ax2.set_xticklabels([])
+                ax2.spines['bottom'].set_visible(False)
+                ax2.tick_params(axis='x', length=0)
 
-        for ax in [self.ax_imu1a, self.ax_imu1b, self.ax_imu2a, self.ax_imu2b]:
-            ax.set_ylabel('g')
-        self.ax_imu2a.set_xlabel('采样点')
-        self.ax_imu2b.set_xlabel('采样点')
+        # 设置标题
+        self.ax_emg1_channels[0].set_title('EMG1 (16通道)', fontsize=10, pad=5)
+        self.ax_emg2_channels[0].set_title('EMG2 (16通道)', fontsize=10, pad=5)
 
-        self.fig_imu.tight_layout()
+        # 设置底部x轴标签
+        self.ax_emg1_channels[-1].set_xlabel('时间 (秒)', fontsize=8)
+        self.ax_emg2_channels[-1].set_xlabel('时间 (秒)', fontsize=8)
+
+        # IMU图表：使用GridSpec，每个IMU 3行（X/Y/Z），共4列
+        from matplotlib.gridspec import GridSpec as GridSpecIMU
+        gs_imu = GridSpecIMU(3, 4, figure=self.fig_imu, hspace=0.05, wspace=0.15)
+
+        # IMU1A (列0), IMU1B (列1), IMU2A (列2), IMU2B (列3)
+        self.ax_imu_channels = {
+            'imu1a': [], 'imu1b': [], 'imu2a': [], 'imu2b': []
+        }
+        imu_names = ['imu1a', 'imu1b', 'imu2a', 'imu2b']
+        imu_titles = ['IMU1A', 'IMU1B', 'IMU2A', 'IMU2B']
+        axis_labels = ['X', 'Y', 'Z']
+        axis_colors = ['#d62728', '#2ca02c', '#1f77b4']  # 红、绿、蓝
+
+        for col, (imu_name, imu_title) in enumerate(zip(imu_names, imu_titles)):
+            for row in range(3):
+                ax = self.fig_imu.add_subplot(gs_imu[row, col])
+                self.ax_imu_channels[imu_name].append(ax)
+
+                # 设置样式
+                ax.tick_params(axis='y', labelsize=6, length=2)
+                ax.tick_params(axis='x', labelsize=6)
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+
+                if row == 0:
+                    ax.set_title(imu_title, fontsize=9, pad=3)
+                if row < 2:
+                    ax.set_xticklabels([])
+                    ax.spines['bottom'].set_visible(False)
+                    ax.tick_params(axis='x', length=0)
+                else:
+                    ax.set_xlabel('时间(秒)', fontsize=7)
+
+                # 左侧显示轴标签
+                if col == 0:
+                    ax.set_ylabel(axis_labels[row], fontsize=8, rotation=0, labelpad=10, color=axis_colors[row])
 
     def open_file(self):
         """打开H5文件"""
@@ -601,8 +655,9 @@ class CalibrateTool(QMainWindow):
         Args:
             fast_mode: 快速模式，降采样绘制以提升流畅度
         """
-        self.ax_emg1.clear()
-        self.ax_emg2.clear()
+        # 清除所有通道的图表
+        for ax in self.ax_emg1_channels + self.ax_emg2_channels:
+            ax.clear()
 
         start = self.current_pos
         end = start + self.window_size
@@ -610,9 +665,6 @@ class CalibrateTool(QMainWindow):
         # LSB转换系数
         lsb_uv = calculate_lsb_uv()
         use_filter = self.chk_filter.isChecked()
-
-        # 颜色映射
-        colors = plt.cm.tab20(np.linspace(0, 1, 16))
 
         # 计算时间轴（秒），相对于数据开始的时间
         sample_rate = getattr(self, 'emg1_sample_rate', 2000)
@@ -625,56 +677,43 @@ class CalibrateTool(QMainWindow):
         # 快速模式：降采样以提升绘制速度
         downsample = 4 if fast_mode else 1
 
-        # 绘制EMG1
+        # 绘制EMG1的16个通道（左列）
+        # 使用不同颜色区分通道
+        colors = plt.cm.tab20(np.linspace(0, 1, 16))
+
         if self.emg1_data is not None and len(self.emg1_data) > 0:
-            # 取更大范围的数据用于滤波（加padding）
             pad_start = max(0, start - filter_padding)
             pad_end = min(len(self.emg1_data), end + filter_padding)
             data_padded = self.emg1_data[pad_start:pad_end]
 
             if len(data_padded) > 0:
-                # 转换为μV
                 data_uv_padded = data_padded * lsb_uv
 
-                # 应用滤波
                 if use_filter and len(data_uv_padded) > 50:
                     try:
                         data_uv_padded = self.emg_filter_2k.filter(data_uv_padded)
                     except Exception as e:
                         print(f'[CalibrateTool] EMG1滤波失败: {e}')
 
-                # 从滤波后的数据中截取实际显示窗口
                 actual_start = start - pad_start
                 actual_end = actual_start + (end - start)
                 data_uv = data_uv_padded[actual_start:actual_end]
 
-                # 快速模式：降采样
                 if downsample > 1:
                     data_uv = data_uv[::downsample]
 
-                # 时间轴（秒）
                 x = np.linspace(time_start, time_start + len(data_uv) * downsample / sample_rate, len(data_uv))
-                for ch in range(min(16, data_uv.shape[1] if data_uv.ndim > 1 else 1)):
+
+                num_channels = min(16, data_uv.shape[1] if data_uv.ndim > 1 else 1)
+                for ch in range(num_channels):
+                    ax = self.ax_emg1_channels[ch]
                     if data_uv.ndim > 1:
-                        self.ax_emg1.plot(x, data_uv[:, ch], color=colors[ch],
-                                         linewidth=0.5, alpha=0.8, label=f'Ch{ch}')
+                        ax.plot(x, data_uv[:, ch], color=colors[ch], linewidth=0.5)
                     else:
-                        self.ax_emg1.plot(x, data_uv, color=colors[0],
-                                         linewidth=0.5, alpha=0.8)
+                        ax.plot(x, data_uv, color=colors[0], linewidth=0.5)
 
-        self.ax_emg1.set_title(f'EMG1 (16通道) - {"滤波后" if use_filter else "原始"}', fontsize=10)
-        self.ax_emg1.set_ylabel('μV')
-        self.ax_emg1.grid(True, alpha=0.3)
-        # 固定Y轴范围
-        if self.emg1_ylim:
-            self.ax_emg1.set_ylim(self.emg1_ylim)
-
-        # 绘制Prompt标签
-        self.draw_prompt_markers(self.ax_emg1, time_start, time_end)
-
-        # 绘制EMG2
+        # 绘制EMG2的16个通道（右列）
         if self.emg2_data is not None and len(self.emg2_data) > 0:
-            # 取更大范围的数据用于滤波（加padding）
             pad_start = max(0, start - filter_padding)
             pad_end = min(len(self.emg2_data), end + filter_padding)
             data_padded = self.emg2_data[pad_start:pad_end]
@@ -688,35 +727,65 @@ class CalibrateTool(QMainWindow):
                     except Exception as e:
                         print(f'[CalibrateTool] EMG2滤波失败: {e}')
 
-                # 从滤波后的数据中截取实际显示窗口
                 actual_start = start - pad_start
                 actual_end = actual_start + (end - start)
                 data_uv = data_uv_padded[actual_start:actual_end]
 
-                # 快速模式：降采样
                 if downsample > 1:
                     data_uv = data_uv[::downsample]
 
-                # 时间轴（秒）
                 x = np.linspace(time_start, time_start + len(data_uv) * downsample / sample_rate, len(data_uv))
-                for ch in range(min(16, data_uv.shape[1] if data_uv.ndim > 1 else 1)):
+
+                num_channels = min(16, data_uv.shape[1] if data_uv.ndim > 1 else 1)
+                for ch in range(num_channels):
+                    ax = self.ax_emg2_channels[ch]
                     if data_uv.ndim > 1:
-                        self.ax_emg2.plot(x, data_uv[:, ch], color=colors[ch],
-                                         linewidth=0.5, alpha=0.8)
+                        ax.plot(x, data_uv[:, ch], color=colors[ch], linewidth=0.5)
+                    else:
+                        ax.plot(x, data_uv, color=colors[0], linewidth=0.5)
 
-        self.ax_emg2.set_title(f'EMG2 (16通道) - {"滤波后" if use_filter else "原始"}', fontsize=10)
-        self.ax_emg2.set_ylabel('μV')
-        self.ax_emg2.set_xlabel('时间 (秒)')
-        self.ax_emg2.grid(True, alpha=0.3)
-        # 固定Y轴范围
-        if self.emg2_ylim:
-            self.ax_emg2.set_ylim(self.emg2_ylim)
+        # 设置每个通道的属性
+        for i in range(16):
+            ax1 = self.ax_emg1_channels[i]
+            ax2 = self.ax_emg2_channels[i]
 
-        # 绘制Prompt标签
-        self.draw_prompt_markers(self.ax_emg2, time_start, time_end)
+            # EMG1 左列
+            ax1.set_ylabel(f'{i}', fontsize=7, rotation=0, labelpad=10)
+            ax1.tick_params(axis='y', labelsize=5, length=2)
+            ax1.tick_params(axis='x', labelsize=5)
+            ax1.set_xlim(time_start, time_end)
+            ax1.spines['top'].set_visible(False)
+            ax1.spines['right'].set_visible(False)
+            if i < 15:
+                ax1.set_xticklabels([])
+                ax1.spines['bottom'].set_visible(False)
+                ax1.tick_params(axis='x', length=0)
 
-        self.fig_emg.tight_layout()
-        self.canvas_emg.draw_idle()  # 使用 draw_idle 提升响应性
+            # EMG2 右列
+            ax2.tick_params(axis='y', labelsize=5, length=2)
+            ax2.tick_params(axis='x', labelsize=5)
+            ax2.set_yticklabels([])
+            ax2.set_xlim(time_start, time_end)
+            ax2.spines['top'].set_visible(False)
+            ax2.spines['right'].set_visible(False)
+            ax2.spines['left'].set_visible(False)
+            if i < 15:
+                ax2.set_xticklabels([])
+                ax2.spines['bottom'].set_visible(False)
+                ax2.tick_params(axis='x', length=0)
+
+            # 绘制Prompt标签（只在第一个通道显示文字）
+            self.draw_prompt_markers(ax1, time_start, time_end, show_text=(i == 0))
+            self.draw_prompt_markers(ax2, time_start, time_end, show_text=(i == 0))
+
+        # 设置标题和标签
+        title_suffix = "滤波后" if use_filter else "原始"
+        self.ax_emg1_channels[0].set_title(f'EMG1 (16通道) - {title_suffix}', fontsize=10, pad=5)
+        self.ax_emg2_channels[0].set_title(f'EMG2 (16通道) - {title_suffix}', fontsize=10, pad=5)
+        self.ax_emg1_channels[-1].set_xlabel('时间 (秒)', fontsize=8)
+        self.ax_emg2_channels[-1].set_xlabel('时间 (秒)', fontsize=8)
+
+        self.canvas_emg.draw_idle()
 
     def update_imu_plot(self, fast_mode=False):
         """更新IMU图表
@@ -724,8 +793,10 @@ class CalibrateTool(QMainWindow):
         Args:
             fast_mode: 快速模式，降采样绘制以提升流畅度
         """
-        for ax in [self.ax_imu1a, self.ax_imu1b, self.ax_imu2a, self.ax_imu2b]:
-            ax.clear()
+        # 清除所有IMU通道
+        for imu_name in self.ax_imu_channels:
+            for ax in self.ax_imu_channels[imu_name]:
+                ax.clear()
 
         start = self.current_pos
         # EMG采样率
@@ -735,59 +806,74 @@ class CalibrateTool(QMainWindow):
 
         # 计算时间轴（秒）
         time_start = start / emg_sample_rate
+        time_end = time_start + self.window_size / emg_sample_rate
 
         # IMU采样率较低，按比例调整索引
         imu_ratio = imu_sample_rate / emg_sample_rate
         imu_start = int(start * imu_ratio)
         imu_end = int((start + self.window_size) * imu_ratio)
 
-        colors = ['r', 'g', 'b']
-        labels = ['X', 'Y', 'Z']
+        axis_colors = ['#d62728', '#2ca02c', '#1f77b4']  # X红、Y绿、Z蓝
+        axis_labels = ['X', 'Y', 'Z']
 
-        imu_data_list = [
-            (self.imu1a_data, self.ax_imu1a, 'IMU1A'),
-            (self.imu1b_data, self.ax_imu1b, 'IMU1B'),
-            (self.imu2a_data, self.ax_imu2a, 'IMU2A'),
-            (self.imu2b_data, self.ax_imu2b, 'IMU2B'),
-        ]
+        imu_data_map = {
+            'imu1a': self.imu1a_data,
+            'imu1b': self.imu1b_data,
+            'imu2a': self.imu2a_data,
+            'imu2b': self.imu2b_data,
+        }
+        imu_titles = {'imu1a': 'IMU1A', 'imu1b': 'IMU1B', 'imu2a': 'IMU2A', 'imu2b': 'IMU2B'}
 
-        for imu_data, ax, title in imu_data_list:
+        for col_idx, imu_name in enumerate(['imu1a', 'imu1b', 'imu2a', 'imu2b']):
+            imu_data = imu_data_map[imu_name]
+            axes = self.ax_imu_channels[imu_name]
+
             if imu_data is not None and len(imu_data) > 0:
                 data = imu_data[imu_start:imu_end]
                 if len(data) > 0:
-                    # 时间轴（秒）
                     x = np.linspace(time_start, time_start + len(data) / imu_sample_rate, len(data))
-                    for i in range(min(3, data.shape[1] if data.ndim > 1 else 1)):
+                    num_axes = min(3, data.shape[1] if data.ndim > 1 else 1)
+                    for i in range(num_axes):
+                        ax = axes[i]
                         if data.ndim > 1:
-                            ax.plot(x, data[:, i], color=colors[i],
-                                   linewidth=0.8, label=labels[i])
+                            ax.plot(x, data[:, i], color=axis_colors[i], linewidth=0.8)
                         else:
-                            ax.plot(x, data, color=colors[0], linewidth=0.8)
-                    ax.legend(loc='upper right', fontsize=8)
+                            ax.plot(x, data, color=axis_colors[0], linewidth=0.8)
 
-            ax.set_title(f'{title} (加速度)', fontsize=10)
-            ax.set_ylabel('g')
-            ax.grid(True, alpha=0.3)
-            # 固定Y轴范围
-            if self.imu_ylim:
-                ax.set_ylim(self.imu_ylim)
+            # 设置每个轴的属性
+            for row, ax in enumerate(axes):
+                ax.set_xlim(time_start, time_end)
+                ax.tick_params(axis='y', labelsize=6, length=2)
+                ax.tick_params(axis='x', labelsize=6)
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
 
-            # 绘制Prompt标签
-            self.draw_prompt_markers(ax, time_start, time_start + self.window_size / emg_sample_rate)
+                if row == 0:
+                    ax.set_title(imu_titles[imu_name], fontsize=9, pad=3)
+                if row < 2:
+                    ax.set_xticklabels([])
+                    ax.spines['bottom'].set_visible(False)
+                    ax.tick_params(axis='x', length=0)
+                else:
+                    ax.set_xlabel('时间(秒)', fontsize=7)
 
-        self.ax_imu2a.set_xlabel('时间 (秒)')
-        self.ax_imu2b.set_xlabel('时间 (秒)')
+                # 左侧显示轴标签
+                if col_idx == 0:
+                    ax.set_ylabel(axis_labels[row], fontsize=8, rotation=0, labelpad=10, color=axis_colors[row])
 
-        self.fig_imu.tight_layout()
-        self.canvas_imu.draw_idle()  # 使用 draw_idle 提升响应性
+                # 绘制Prompt标签（只在第一行显示文字）
+                self.draw_prompt_markers(ax, time_start, time_end, show_text=(row == 0))
 
-    def draw_prompt_markers(self, ax, time_start, time_end):
+        self.canvas_imu.draw_idle()
+
+    def draw_prompt_markers(self, ax, time_start, time_end, show_text=True):
         """在图表上绘制Prompt标签
 
         Args:
             ax: matplotlib axes对象
             time_start: 显示窗口开始时间（秒）
             time_end: 显示窗口结束时间（秒）
+            show_text: 是否显示文字标签
         """
         if self.prompt_names is None or self.prompt_times is None:
             return
@@ -800,9 +886,17 @@ class CalibrateTool(QMainWindow):
             if time_start <= time <= time_end:
                 # 绘制垂直线
                 ax.axvline(x=time, color='red', linestyle='--', linewidth=1, alpha=0.7)
-                # 在顶部添加标签文字（水平显示）
-                ax.text(time, ylim[1], name, rotation=0, verticalalignment='bottom',
-                       horizontalalignment='left', fontsize=7, color='red', alpha=0.9)
+                # 在顶部添加标签文字
+                if show_text:
+                    # 长文本换行处理（每8个字符换行）
+                    max_chars = 8
+                    if len(name) > max_chars:
+                        wrapped_name = '\n'.join([name[i:i+max_chars] for i in range(0, len(name), max_chars)])
+                    else:
+                        wrapped_name = name
+                    ax.text(time, ylim[1], wrapped_name, rotation=0, verticalalignment='bottom',
+                           horizontalalignment='left', fontsize=11, color='red', alpha=0.9,
+                           fontweight='bold')
 
     def goto_prev_prompt(self):
         """跳转到上一个Prompt"""
