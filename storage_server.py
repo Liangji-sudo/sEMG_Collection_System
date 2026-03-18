@@ -90,40 +90,44 @@ IMU_100HZ_DTYPE = np.dtype([
     ("time", "<f8")         # 时间戳
 ])
 
-# 【修改】MOCAP数据集类型：每只手10个marker点的3D坐标 + 帧号 + 时间戳
-# 左手marker: TH1_L, TH2_L, TH3_L, TH4_L, ID1_L, ID2_L, ID3_L, HB1_L, HB2_L, HB3_L
-# 右手marker: TH1_R, TH2_R, TH3_R, TH4_R, ID1_R, ID2_R, ID3_R, HB1_R, HB2_R, HB3_R
-MOCAP_MARKER_NAMES_L = ["TH1_L", "TH2_L", "TH3_L", "TH4_L", "ID1_L", "ID2_L", "ID3_L", "HB1_L", "HB2_L", "HB3_L"]
-MOCAP_MARKER_NAMES_R = ["TH1_R", "TH2_R", "TH3_R", "TH4_R", "ID1_R", "ID2_R", "ID3_R", "HB1_R", "HB2_R", "HB3_R"]
+# 【修改】MOCAP数据集类型：每只手12个marker点的3D坐标 + 帧号 + 时间戳
+# 左手marker: IN1_L, IN2_L, IN3_L, HB1_L, HB2_L, HB3_L, TH1_L, TH2_L, TH3_L, TH4_L, MD1_L, MD2_L
+# 右手marker: IN1_R, IN2_R, IN3_R, HB1_R, HB2_R, HB3_R, TH1_R, TH2_R, TH3_R, TH4_R, MD1_R, MD2_R
+MOCAP_MARKER_NAMES_L = ["IN1_L", "IN2_L", "IN3_L", "HB1_L", "HB2_L", "HB3_L", "TH1_L", "TH2_L", "TH3_L", "TH4_L", "MD1_L", "MD2_L"]
+MOCAP_MARKER_NAMES_R = ["IN1_R", "IN2_R", "IN3_R", "HB1_R", "HB2_R", "HB3_R", "TH1_R", "TH2_R", "TH3_R", "TH4_R", "MD1_R", "MD2_R"]
 
 # 左手MOCAP数据类型
 MOCAP_L_DTYPE = np.dtype([
-    ("TH1_L", "<f4", (3,)),   # 拇指指尖 [x, y, z]
-    ("TH2_L", "<f4", (3,)),   # 拇指第一关节
-    ("TH3_L", "<f4", (3,)),   # 拇指第二关节
-    ("TH4_L", "<f4", (3,)),   # 拇指根部
-    ("ID1_L", "<f4", (3,)),   # 食指指尖
-    ("ID2_L", "<f4", (3,)),   # 食指第一关节
-    ("ID3_L", "<f4", (3,)),   # 食指第二关节
+    ("IN1_L", "<f4", (3,)),   # 食指指尖 [x, y, z]
+    ("IN2_L", "<f4", (3,)),   # 食指第一关节
+    ("IN3_L", "<f4", (3,)),   # 食指第二关节
     ("HB1_L", "<f4", (3,)),   # 手背点1
     ("HB2_L", "<f4", (3,)),   # 手背点2
     ("HB3_L", "<f4", (3,)),   # 手背点3
+    ("TH1_L", "<f4", (3,)),   # 拇指指尖
+    ("TH2_L", "<f4", (3,)),   # 拇指第一关节
+    ("TH3_L", "<f4", (3,)),   # 拇指第二关节
+    ("TH4_L", "<f4", (3,)),   # 拇指根部
+    ("MD1_L", "<f4", (3,)),   # 中指点1
+    ("MD2_L", "<f4", (3,)),   # 中指点2
     ("frame", "<i4"),         # 帧号
     ("time", "<f8")           # 时间戳
 ])
 
 # 右手MOCAP数据类型
 MOCAP_R_DTYPE = np.dtype([
-    ("TH1_R", "<f4", (3,)),   # 拇指指尖 [x, y, z]
-    ("TH2_R", "<f4", (3,)),   # 拇指第一关节
-    ("TH3_R", "<f4", (3,)),   # 拇指第二关节
-    ("TH4_R", "<f4", (3,)),   # 拇指根部
-    ("ID1_R", "<f4", (3,)),   # 食指指尖
-    ("ID2_R", "<f4", (3,)),   # 食指第一关节
-    ("ID3_R", "<f4", (3,)),   # 食指第二关节
+    ("IN1_R", "<f4", (3,)),   # 食指指尖 [x, y, z]
+    ("IN2_R", "<f4", (3,)),   # 食指第一关节
+    ("IN3_R", "<f4", (3,)),   # 食指第二关节
     ("HB1_R", "<f4", (3,)),   # 手背点1
     ("HB2_R", "<f4", (3,)),   # 手背点2
     ("HB3_R", "<f4", (3,)),   # 手背点3
+    ("TH1_R", "<f4", (3,)),   # 拇指指尖
+    ("TH2_R", "<f4", (3,)),   # 拇指第一关节
+    ("TH3_R", "<f4", (3,)),   # 拇指第二关节
+    ("TH4_R", "<f4", (3,)),   # 拇指根部
+    ("MD1_R", "<f4", (3,)),   # 中指点1
+    ("MD2_R", "<f4", (3,)),   # 中指点2
     ("frame", "<i4"),         # 帧号
     ("time", "<f8")           # 时间戳
 ])
@@ -517,7 +521,7 @@ class HDF5StorageServer:
                 "mocap_L", shape=(0,), dtype=MOCAP_L_DTYPE,
                 chunks=(500,), maxshape=(None,), compression="gzip"
             )
-            mocap_L_ds.attrs["description"] = "Left hand motion capture marker data (10 markers x 3D coordinates)"
+            mocap_L_ds.attrs["description"] = "Left hand motion capture marker data (12 markers x 3D coordinates)"
             mocap_L_ds.attrs["markers"] = str(MOCAP_MARKER_NAMES_L)
             mocap_L_ds.attrs["coordinate_unit"] = "mm"
 
@@ -526,7 +530,7 @@ class HDF5StorageServer:
                 "mocap_R", shape=(0,), dtype=MOCAP_R_DTYPE,
                 chunks=(500,), maxshape=(None,), compression="gzip"
             )
-            mocap_R_ds.attrs["description"] = "Right hand motion capture marker data (10 markers x 3D coordinates)"
+            mocap_R_ds.attrs["description"] = "Right hand motion capture marker data (12 markers x 3D coordinates)"
             mocap_R_ds.attrs["markers"] = str(MOCAP_MARKER_NAMES_R)
             mocap_R_ds.attrs["coordinate_unit"] = "mm"
 

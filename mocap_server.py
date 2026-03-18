@@ -9,16 +9,16 @@ mocap_server.py - 动捕数据服务器
 - SDK模式：连接 Nokov 动捕 SDK (服务器IP: 10.1.1.198)
 - 模拟器模式：连接 mocap_simulator.py (ws://localhost:8768)
 
-Marker点命名（每只手10个，共20个，按接收顺序）：
-- 左手：ID1_L, ID2_L, ID3_L, HB1_L, HB2_L, HB3_L, TH1_L, TH2_L, TH3_L, TH4_L
-- 右手：ID1_R, ID2_R, ID3_R, HB1_R, HB2_R, HB3_R, TH1_R, TH2_R, TH3_R, TH4_R
-- 注意：服务器可能只发送前6个点（ID1-ID3, HB1-HB3），后4个TH点可能缺失
+Marker点命名（每只手12个，共24个，按接收顺序）：
+- 左手：IN1_L, IN2_L, IN3_L, HB1_L, HB2_L, HB3_L, TH1_L, TH2_L, TH3_L, TH4_L, MD1_L, MD2_L
+- 右手：IN1_R, IN2_R, IN3_R, HB1_R, HB2_R, HB3_R, TH1_R, TH2_R, TH3_R, TH4_R, MD1_R, MD2_R
+- 注意：IN1/IN2/IN3 对应食指，MD1/MD2 对应中指
 
 数据通道（左右手各自独立计算）：
 - finger_joint_angle_L/R: 食指关节角度 (0-90°) - 连续手势1 (食指上抬)
-  计算方法：用 ID3 到 HB2 的连线方向，与 HB1, HB2, HB3 平面法向量的夹角
+  计算方法：用 IN3 到 HB2 的连线方向，与 HB1, HB2, HB3 平面法向量的夹角
 - thumb_index_distance_L/R: 拇指食指距离 (mm) - 连续手势2 (捏合)
-  计算方法：用 TH1 和 ID1 的距离
+  计算方法：用 TH1 和 IN1 的距离
 
 WebSocket端口: 8767 (供 realtimeEngine.js 连接)
 
@@ -65,11 +65,11 @@ SERVER_PORT = 8767
 # 数据发送频率
 SEND_RATE = 50  # Hz
 
-# Marker 名称映射（按接收顺序：左手10个 + 右手10个）
-# 顺序：ID1, ID2, ID3, HB1, HB2, HB3, TH1, TH2, TH3, TH4
-# 注意：服务器可能只发送前6个点（ID1-ID3, HB1-HB3），后4个TH点可能缺失
-MARKER_NAMES_LEFT = ['ID1_L', 'ID2_L', 'ID3_L', 'HB1_L', 'HB2_L', 'HB3_L', 'TH1_L', 'TH2_L', 'TH3_L', 'TH4_L']
-MARKER_NAMES_RIGHT = ['ID1_R', 'ID2_R', 'ID3_R', 'HB1_R', 'HB2_R', 'HB3_R', 'TH1_R', 'TH2_R', 'TH3_R', 'TH4_R']
+# Marker 名称映射（按接收顺序：左手12个 + 右手12个）
+# 顺序：IN1, IN2, IN3, HB1, HB2, HB3, TH1, TH2, TH3, TH4, MD1, MD2
+# 注意：IN1/IN2/IN3 对应食指（原ID1/ID2/ID3），MD1/MD2 是新增的中指marker点
+MARKER_NAMES_LEFT = ['IN1_L', 'IN2_L', 'IN3_L', 'HB1_L', 'HB2_L', 'HB3_L', 'TH1_L', 'TH2_L', 'TH3_L', 'TH4_L', 'MD1_L', 'MD2_L']
+MARKER_NAMES_RIGHT = ['IN1_R', 'IN2_R', 'IN3_R', 'HB1_R', 'HB2_R', 'HB3_R', 'TH1_R', 'TH2_R', 'TH3_R', 'TH4_R', 'MD1_R', 'MD2_R']
 MARKER_NAMES = MARKER_NAMES_LEFT + MARKER_NAMES_RIGHT
 
 
@@ -100,7 +100,7 @@ def fit_plane_normal(p1, p2, p3):
 def calculate_finger_joint_angle(markers, hand='L'):
     """计算食指上抬角度（连续手势1）
 
-    使用 ID3 到 HB2 的连线方向，与 HB1, HB2, HB3 平面法向量的夹角
+    使用 IN3 到 HB2 的连线方向，与 HB1, HB2, HB3 平面法向量的夹角
     返回: 0° = 食指竖直（与手掌垂直）, 90° = 食指平放（与手掌平行）
 
     Args:
@@ -109,18 +109,18 @@ def calculate_finger_joint_angle(markers, hand='L'):
     """
     suffix = f'_{hand}'
 
-    id3 = np.array(markers.get(f"ID3{suffix}", [0, 0, 0]))
+    in3 = np.array(markers.get(f"IN3{suffix}", [0, 0, 0]))
     hb1 = np.array(markers.get(f"HB1{suffix}", [0, 0, 0]))
     hb2 = np.array(markers.get(f"HB2{suffix}", [0, 0, 0]))
     hb3 = np.array(markers.get(f"HB3{suffix}", [0, 0, 0]))
 
     # 检查坐标是否有效
-    all_points = [id3, hb1, hb2, hb3]
+    all_points = [in3, hb1, hb2, hb3]
     if any(any(abs(v) > 100000 for v in p) for p in all_points):
         return None  # 无效数据
 
-    # 计算 ID3 到 HB2 的方向向量
-    finger_dir = id3 - hb2
+    # 计算 IN3 到 HB2 的方向向量
+    finger_dir = in3 - hb2
     norm = np.linalg.norm(finger_dir)
     if norm < 1e-6:
         return None  # 两点重合，无法计算
@@ -142,7 +142,7 @@ def calculate_finger_joint_angle(markers, hand='L'):
 def calculate_thumb_index_distance(markers, hand='L'):
     """计算拇指食指距离（连续手势2）
 
-    使用 TH1 和 ID1 的距离
+    使用 TH1 和 IN1 的距离
 
     Args:
         markers: marker数据字典
@@ -151,13 +151,13 @@ def calculate_thumb_index_distance(markers, hand='L'):
     suffix = f'_{hand}'
 
     th1 = np.array(markers.get(f"TH1{suffix}", [0, 0, 0]))
-    id1 = np.array(markers.get(f"ID1{suffix}", [0, 0, 0]))
+    in1 = np.array(markers.get(f"IN1{suffix}", [0, 0, 0]))
 
     # 检查坐标是否有效
-    if any(abs(v) > 100000 for v in th1) or any(abs(v) > 100000 for v in id1):
+    if any(abs(v) > 100000 for v in th1) or any(abs(v) > 100000 for v in in1):
         return None  # 无效数据
 
-    distance = np.linalg.norm(th1 - id1)
+    distance = np.linalg.norm(th1 - in1)
     return distance
 
 
