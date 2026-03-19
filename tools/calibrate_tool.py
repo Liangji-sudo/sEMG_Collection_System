@@ -35,10 +35,11 @@ from matplotlib.figure import Figure
 
 
 # ============== EMG滤波参数（与ble_server.py保持一致）==============
-BASE_LSB_24BIT = 0.476837          # 24-bit 基础 LSB
-HARDWARE_FRONTEND_GAIN = 5.9       # 硬件前端增益
+# 【修正】与供应商代码保持一致
+BASE_LSB_24BIT = 0.2861            # 2.4V ref / 2^23 * 1e6 (μV)
+HARDWARE_FRONTEND_GAIN = 10        # 硬件前端增益
 DEFAULT_GAIN = 12                  # 默认增益
-SAMPLE_RATE = 2000                 # EMG采样率 2kHz (同步后)
+SAMPLE_RATE = 2000                 # EMG采样率 2kHz (同步后的SD卡数据)
 SAMPLE_RATE_BLE = 250              # BLE传输采样率 250Hz
 
 # 滤波器参数
