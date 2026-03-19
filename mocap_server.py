@@ -65,12 +65,27 @@ SERVER_PORT = 8767
 # 数据发送频率
 SEND_RATE = 50  # Hz
 
-# Marker 名称映射（按接收顺序：左手12个 + 右手12个）
+# Marker 名称映射
 # 顺序：IN1, IN2, IN3, HB1, HB2, HB3, TH1, TH2, TH3, TH4, MD1, MD2
 # 注意：IN1/IN2/IN3 对应食指（原ID1/ID2/ID3），MD1/MD2 是新增的中指marker点
-MARKER_NAMES_LEFT = ['IN1_L', 'IN2_L', 'IN3_L', 'HB1_L', 'HB2_L', 'HB3_L', 'TH1_L', 'TH2_L', 'TH3_L', 'TH4_L', 'MD1_L', 'MD2_L']
-MARKER_NAMES_RIGHT = ['IN1_R', 'IN2_R', 'IN3_R', 'HB1_R', 'HB2_R', 'HB3_R', 'TH1_R', 'TH2_R', 'TH3_R', 'TH4_R', 'MD1_R', 'MD2_R']
+MARKER_BASE_NAMES = ['IN1', 'IN2', 'IN3', 'HB1', 'HB2', 'HB3', 'TH1', 'TH2', 'TH3', 'TH4', 'MD1', 'MD2']
+MARKER_NAMES_LEFT = [f'{name}_L' for name in MARKER_BASE_NAMES]
+MARKER_NAMES_RIGHT = [f'{name}_R' for name in MARKER_BASE_NAMES]
 MARKER_NAMES = MARKER_NAMES_LEFT + MARKER_NAMES_RIGHT
+
+# MarkerSet 名称识别规则（用于判断左右手）
+# 左手: 名称包含 "L-" 或以 "_L" 结尾
+# 右手: 名称包含 "R-" 或以 "_R" 结尾
+def get_hand_suffix_from_markerset_name(set_name):
+    """根据 MarkerSet 名称判断左右手后缀"""
+    if not set_name:
+        return None
+    name_upper = set_name.upper()
+    if 'L-' in name_upper or name_upper.endswith('_L') or name_upper.startswith('L_'):
+        return '_L'
+    elif 'R-' in name_upper or name_upper.endswith('_R') or name_upper.startswith('R_'):
+        return '_R'
+    return None
 
 
 # ==================== 手势计算函数 ====================
@@ -255,18 +270,33 @@ class NokovSDKReceiver(BaseMocapReceiver):
             self.latest_timestamp = timestamp
 
             markers = {}
-            marker_index = 0
 
+            # 【修正】根据 MarkerSet 名称判断左右手，而不是按接收顺序
             for iMarkerSet in range(frameData.nMarkerSets):
                 markerset = frameData.MocapData[iMarkerSet]
+
+                # 获取 MarkerSet 名称（如 "R-YC" 或 "L-YC"）
+                try:
+                    set_name = markerset.szName.decode('utf-8')
+                except:
+                    set_name = str(markerset.szName)
+
+                # 根据名称判断左右手
+                suffix = get_hand_suffix_from_markerset_name(set_name)
+
+                if suffix is None:
+                    # 无法识别左右手，打印警告并跳过
+                    print(f"[NokovSDK] 警告: 无法识别 MarkerSet '{set_name}' 的左右手，跳过")
+                    continue
+
+                # 为该 MarkerSet 的每个 marker 分配正确的名称
                 for iMarker in range(markerset.nMarkers):
-                    if marker_index < len(MARKER_NAMES):
-                        marker_name = MARKER_NAMES[marker_index]
+                    if iMarker < len(MARKER_BASE_NAMES):
+                        marker_name = MARKER_BASE_NAMES[iMarker] + suffix
                         x = markerset.Markers[iMarker][0]
                         y = markerset.Markers[iMarker][1]
                         z = markerset.Markers[iMarker][2]
                         markers[marker_name] = [x, y, z]
-                        marker_index += 1
 
             self.latest_markers = markers
 
