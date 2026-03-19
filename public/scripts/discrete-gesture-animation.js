@@ -720,11 +720,11 @@
             this.drawEmojiIcon(prompt.icon, x, by + badgeH / 2, color);
 
             // 动作名称（自动换行）
-            ctx.font = '600 14px ui-sans-serif, system-ui';
+            ctx.font = '600 18px ui-sans-serif, system-ui';
             ctx.fillStyle = color;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'top';
-            this.drawWrappedLabel(prompt.label, x, y + this.config.labelOffset, 100, 16);
+            this.drawWrappedLabel(prompt.label, x, y + this.config.labelOffset, 130, 22);
 
             ctx.restore();
         }
@@ -803,14 +803,14 @@
             this.drawEmojiIcon(prompt.icon, centerX, by + badgeH / 2, strokeColor);
 
             // 动作名称（显示在长方形下方，自动换行）
-            ctx.font = '600 14px ui-sans-serif, system-ui';
+            ctx.font = '600 18px ui-sans-serif, system-ui';
             ctx.fillStyle = strokeColor;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'top';
-            this.drawWrappedLabel(prompt.label, centerX, y + this.config.labelOffset, 100, 16);
+            this.drawWrappedLabel(prompt.label, centerX, y + this.config.labelOffset, 130, 22);
 
             // 【新增】在长方形内显示状态文字
-            ctx.font = '700 14px ui-sans-serif, system-ui';
+            ctx.font = '700 18px ui-sans-serif, system-ui';
             ctx.textBaseline = 'middle';
             if (prompt.isInProgress) {
                 ctx.fillStyle = '#ef4444';
