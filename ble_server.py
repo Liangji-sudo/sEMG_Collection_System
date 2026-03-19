@@ -82,7 +82,7 @@ CMD_MAP = {
 # ================= 默认配置 =================
 # 【修改】默认使用2kHz采样率，与SD卡存储一致
 DEFAULT_CONFIG = {
-    'sample_rate': 2000,      # 【修改】2kHz采样率
+    'sample_rate': 2000,      # 【修改】2kHz采样率（ADC采样率，用于SD卡存储）
     'gain': 12,
     'gain_index': 6,          # 增益索引：6 对应增益12
     'is_16bit': False,        # 24-bit模式
@@ -95,8 +95,12 @@ DEFAULT_CONFIG = {
 SCALE_ACCEL = 16.0 / 32768.0
 SCALE_GYRO = 2000.0 / 32768.0
 SCALE_MAG = 0.15
-BASE_LSB_24BIT = 0.476837
-HARDWARE_FRONTEND_GAIN = 5.9
+# 【修正】与供应商代码保持一致
+BASE_LSB_24BIT = 0.2861        # 2.4V ref / 2^23 * 1e6 (μV)
+HARDWARE_FRONTEND_GAIN = 10    # 硬件前端增益
+
+# ================= BLE传输配置 =================
+BLE_SAMPLE_RATE = 250          # BLE实际传输频率（固定250Hz，与供应商一致）
 
 # ================= 滤波器配置 =================
 # 【重要】参考供应商滤波参数，优化实时显示效果
@@ -280,30 +284,31 @@ emg_filter_dev2 = None
 def init_filters():
     """初始化全局滤波器"""
     global emg_filter_dev1, emg_filter_dev2
-    
+
     if not FILTER_ENABLED:
         log("[滤波器] 滤波功能已禁用")
         return
-    
+
     if not HAS_SCIPY:
         log("[滤波器] scipy未安装，无法初始化滤波器")
         return
-    
+
+    # 【修正】使用BLE实际传输频率250Hz，而不是ADC采样率2kHz
     emg_filter_dev1 = EMGRealtimeFilter(
-        fs=DEFAULT_CONFIG['sample_rate'],
+        fs=BLE_SAMPLE_RATE,  # 250Hz
         num_channels=16,
         enable_bandpass=FILTER_BANDPASS_ENABLED,
         enable_notch=FILTER_NOTCH_ENABLED
     )
-    
+
     emg_filter_dev2 = EMGRealtimeFilter(
-        fs=DEFAULT_CONFIG['sample_rate'],
+        fs=BLE_SAMPLE_RATE,  # 250Hz
         num_channels=16,
         enable_bandpass=FILTER_BANDPASS_ENABLED,
         enable_notch=FILTER_NOTCH_ENABLED
     )
-    
-    log("[滤波器] 双设备滤波器初始化完成")
+
+    log(f"[滤波器] 双设备滤波器初始化完成 (fs={BLE_SAMPLE_RATE}Hz)")
 
 # ================= 连接配置 =================
 CONNECT_TIMEOUT = 30.0

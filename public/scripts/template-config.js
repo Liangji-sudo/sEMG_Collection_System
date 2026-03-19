@@ -2058,10 +2058,38 @@
             // 添加字段
             const addBtn = document.getElementById('addFieldBtn');
             if (addBtn) {
-                addBtn.addEventListener('click', () => {
+                addBtn.addEventListener('click', async () => {
+                    // 弹窗让用户输入字段ID
+                    const fieldId = await this.showPrompt(
+                        '请输入字段ID（英文，用于数据存储，如 wrist_size）',
+                        ''
+                    );
+                    if (!fieldId) return;  // 用户取消
+
+                    // 验证ID格式：只允许英文字母、数字和下划线
+                    const idPattern = /^[a-zA-Z][a-zA-Z0-9_]*$/;
+                    if (!idPattern.test(fieldId)) {
+                        this.showToast('字段ID必须以英文字母开头，只能包含字母、数字和下划线', 'error');
+                        return;
+                    }
+
+                    // 检查ID是否已存在
+                    const existingIds = this.currentTemplate.subjectFields.map(f => f.id);
+                    if (existingIds.includes(fieldId)) {
+                        this.showToast('该字段ID已存在，请使用其他ID', 'error');
+                        return;
+                    }
+
+                    // 弹窗让用户输入字段显示名称
+                    const fieldLabel = await this.showPrompt(
+                        '请输入字段显示名称（如 腕围）',
+                        ''
+                    );
+                    if (!fieldLabel) return;  // 用户取消
+
                     this.currentTemplate.subjectFields.push({
-                        id: `field_${Date.now()}`,
-                        label: '新字段',
+                        id: fieldId,
+                        label: fieldLabel,
                         type: 'text',
                         required: false,
                         placeholder: ''
