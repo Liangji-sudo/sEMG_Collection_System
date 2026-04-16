@@ -9,10 +9,10 @@ mocap_server.py - 动捕数据服务器
 - SDK模式：连接 Nokov 动捕 SDK (服务器IP: 10.1.1.198)
 - 模拟器模式：连接 mocap_simulator.py (ws://localhost:8768)
 
-Marker点命名（每只手12个，共24个，按接收顺序）：
-- 左手：IN1_L, IN2_L, IN3_L, HB1_L, HB2_L, HB3_L, TH1_L, TH2_L, TH3_L, TH4_L, MD1_L, MD2_L
-- 右手：IN1_R, IN2_R, IN3_R, HB1_R, HB2_R, HB3_R, TH1_R, TH2_R, TH3_R, TH4_R, MD1_R, MD2_R
-- 注意：IN1/IN2/IN3 对应食指，MD1/MD2 对应中指
+Marker点命名（每只手10个，共20个，按接收顺序）：
+- 左手：IN1_L, IN2_L, IN3_L, HB1_L, HB2_L, HB3_L, TH1_L, TH2_L, TH3_L, TH4_L
+- 右手：IN1_R, IN2_R, IN3_R, HB1_R, HB2_R, HB3_R, TH1_R, TH2_R, TH3_R, TH4_R
+- 注意：IN1/IN2/IN3 对应食指，TH1/TH2/TH3/TH4 对应拇指，HB1/HB2/HB3 对应手背
 
 数据通道（左右手各自独立计算）：
 - finger_joint_angle_L/R: 食指关节角度 (0-90°) - 连续手势1 (食指上抬)
@@ -66,24 +66,30 @@ SERVER_PORT = 8767
 SEND_RATE = 50  # Hz
 
 # Marker 名称映射
-# 顺序：IN1, IN2, IN3, HB1, HB2, HB3, TH1, TH2, TH3, TH4, MD1, MD2
-# 注意：IN1/IN2/IN3 对应食指（原ID1/ID2/ID3），MD1/MD2 是新增的中指marker点
-MARKER_BASE_NAMES = ['IN1', 'IN2', 'IN3', 'HB1', 'HB2', 'HB3', 'TH1', 'TH2', 'TH3', 'TH4', 'MD1', 'MD2']
+# 顺序：IN1, IN2, IN3, HB1, HB2, HB3, TH1, TH2, TH3, TH4
+# 注意：IN1/IN2/IN3 对应食指，TH1/TH2/TH3/TH4 对应拇指，HB1/HB2/HB3 对应手背
+MARKER_BASE_NAMES = ['IN1', 'IN2', 'IN3', 'HB1', 'HB2', 'HB3', 'TH1', 'TH2', 'TH3', 'TH4']
 MARKER_NAMES_LEFT = [f'{name}_L' for name in MARKER_BASE_NAMES]
 MARKER_NAMES_RIGHT = [f'{name}_R' for name in MARKER_BASE_NAMES]
 MARKER_NAMES = MARKER_NAMES_LEFT + MARKER_NAMES_RIGHT
 
 # MarkerSet 名称识别规则（用于判断左右手）
-# 左手: 名称包含 "L-" 或以 "_L" 结尾
-# 右手: 名称包含 "R-" 或以 "_R" 结尾
+# 左手: 名称包含 "L-" 或以 "-L" / "_L" 结尾
+# 右手: 名称包含 "R-" 或以 "-R" / "_R" 结尾
 def get_hand_suffix_from_markerset_name(set_name):
-    """根据 MarkerSet 名称判断左右手后缀"""
+    """根据 MarkerSet 名称判断左右手后缀
+
+    支持的命名格式示例：
+    - "WH-L", "WH-R" (以 -L/-R 结尾)
+    - "L-YC", "R-YC" (以 L-/R- 开头)
+    - "hand_L", "hand_R" (以 _L/_R 结尾)
+    """
     if not set_name:
         return None
     name_upper = set_name.upper()
-    if 'L-' in name_upper or name_upper.endswith('_L') or name_upper.startswith('L_'):
+    if 'L-' in name_upper or name_upper.endswith('_L') or name_upper.endswith('-L') or name_upper.startswith('L_'):
         return '_L'
-    elif 'R-' in name_upper or name_upper.endswith('_R') or name_upper.startswith('R_'):
+    elif 'R-' in name_upper or name_upper.endswith('_R') or name_upper.endswith('-R') or name_upper.startswith('R_'):
         return '_R'
     return None
 
