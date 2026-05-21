@@ -92,15 +92,29 @@ DEFAULT_CONFIG = {
 }
 
 # ================= 转换系数 =================
-SCALE_ACCEL = 16.0 / 32768.0
-SCALE_GYRO = 2000.0 / 32768.0
-SCALE_MAG = 0.15
+SCALE_ACCEL = 32.0 / 32768.0              # V2 默认: LSM6DSV32X ±32g
+SCALE_ACCEL_V1 = 16.0 / 32768.0           # V1: ICM-20948 ±16g
+SCALE_GYRO = 2000.0 / 32768.0             # V1/V2 相同
+SCALE_MAG = 0.15                           # 仅 V1 使用, V2 无磁力计
 # 【修正】与供应商代码保持一致
 BASE_LSB_24BIT = 0.2861        # 2.4V ref / 2^23 * 1e6 (μV)
 HARDWARE_FRONTEND_GAIN = 10    # 硬件前端增益
 
-# ================= BLE传输配置 =================
-BLE_SAMPLE_RATE = 250          # BLE实际传输频率（固定250Hz，与供应商一致）
+# ================= IMU 配置 =================
+BYTES_PER_IMU = 18              # 单 IMU 数据长度 (Acc6+Gyro6+Reserved6)
+MAX_NUM_IMUS_V1 = 2             # V1 固定 2 个 IMU (ICM-20948)
+MAX_NUM_IMUS_V2 = 3             # V2 最多 3 个 IMU (LSM6DSV32X)
+
+# ================= 通道映射 =================
+# 物理通道 → 逻辑显示顺序 (1-indexed, 对齐供应商上位机)
+CHANNELS_MAP_V1 = [14, 15, 16, 3, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+CHANNELS_MAP_V2 = [15, 16, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+
+# ================= V2 新增: 设备状态特征 =================
+STATUS_CHAR_UUID = "9e5c100d-afc2-4e4b-b132-f2c0032f7a0e"
+STATUS_PACKET_SNAPSHOT = 0x01
+STATUS_PACKET_EVENT = 0x02
+STATUS_SNAPSHOT_FORMAT = "<BBBBHBBHBBIIIIIII16s16s"
 
 # ================= 滤波器配置 =================
 # 【重要】参考供应商滤波参数，优化实时显示效果
@@ -333,36 +347,48 @@ PRIORITY_LOW = 2       # 传感器数据
 class DeviceState:
     """单个 BLE 设备的状态"""
     device_id: int
-    
+
     client: Optional[BleakClient] = None
     device: Any = None
     mac: Optional[str] = None
     name: Optional[str] = None
     rssi: Optional[int] = None
-    
+
     is_streaming: bool = False
     total_frames: int = 0
     lost_frames: int = 0
     last_frame_index: int = -1
     last_data_time: float = 0.0  # 【新增】最后收到数据的时间戳
     sd_filename: Optional[str] = None  # 【新增】当前采集的SD卡bin文件名前缀
-    
+
     config: Dict = field(default_factory=lambda: DEFAULT_CONFIG.copy())
     data_buffer: deque = field(default_factory=lambda: deque(maxlen=500))
     connect_task: Any = None
-    
+
+    # ===== V2 新增: 设备状态字段 =====
+    hw_version: str = "V1"                     # 硬件版本: "V1" 或 "V2"
+    firmware_version: str = ""                  # 固件版本字符串 (STATUS_CHAR)
+    hardware_version: str = ""                  # 硬件版本字符串 (STATUS_CHAR)
+    num_imus: int = 2                           # 检测到的 IMU 数量
+    channel_map: List[int] = field(default_factory=lambda: CHANNELS_MAP_V1)
+    status_flags: int = 0                       # 设备状态标志位
+    storage_state: int = 0                      # SD 卡状态
+    sd_free_kb: int = 0                         # SD 卡剩余空间
+
     def reset_stats(self):
         self.total_frames = 0
         self.lost_frames = 0
         self.last_frame_index = -1
         self.data_buffer.clear()
         self.sd_filename = None  # 【新增】重置SD卡文件名
-        
+
         # 重置对应设备的滤波器状态
         if FILTER_ENABLED and HAS_SCIPY:
             emg_filter = emg_filter_dev1 if self.device_id == 1 else emg_filter_dev2
             if emg_filter:
                 emg_filter.reset()
+        # 【注意】hw_version / channel_map / num_imus 不重置，
+        # 由连接时的 V1/V2 检测确定，reset_stats 不应改变版本判定
     
     def is_connected(self) -> bool:
         if self.client is None:
@@ -383,6 +409,10 @@ class DeviceState:
             'streaming': self.is_streaming,
             'total': self.total_frames,
             'lost': self.lost_frames,
+            'hw_version': self.hw_version,
+            'num_imus': self.num_imus,
+            'firmware_version': self.firmware_version,
+            'hardware_version': self.hardware_version,
         }
 
 
@@ -464,100 +494,159 @@ def get_packet_params(config: dict) -> dict:
 
 # ================= 数据解析 =================
 
+def parse_imu_v1(data: bytearray, emg_len: int) -> list:
+    """
+    解析 V1 IMU 数据 (ICM-20948, 固定 2 个 IMU, 各 18 bytes)
+    Accel/Gyro: Big Endian, Mag: Little Endian
+    """
+    imu_start = 4 + emg_len
+    imu_len = 36  # 2 × 18
+    imu_bytes = data[imu_start: imu_start + imu_len]
+
+    def parse_chip(b):
+        ag = struct.unpack('>6h', b[0:12])
+        m = struct.unpack('<3h', b[12:18])
+        return [
+            [x * SCALE_ACCEL_V1 for x in ag[0:3]],
+            [x * SCALE_GYRO for x in ag[3:6]],
+            [x * SCALE_MAG for x in m[0:3]],
+        ]
+
+    return [
+        parse_chip(imu_bytes[0:18]),
+        parse_chip(imu_bytes[18:36]),
+    ]
+
+
+def parse_imu_v2(data: bytearray, emg_len: int, num_imus: int) -> list:
+    """
+    解析 V2 IMU 数据 (LSM6DSV32X, 可变 0-3 个 IMU, 各 18 bytes)
+    Accel/Gyro: 全部 Little Endian, 无磁力计
+    """
+    imu_start = 4 + emg_len
+    imus = []
+    for i in range(num_imus):
+        offset = imu_start + i * BYTES_PER_IMU
+        b = data[offset: offset + BYTES_PER_IMU]
+        ag = struct.unpack('<6h', b[0:12])       # V2: Little Endian
+        imus.append([
+            [x * SCALE_ACCEL for x in ag[0:3]],   # Accel X/Y/Z
+            [x * SCALE_GYRO for x in ag[3:6]],    # Gyro X/Y/Z
+        ])
+    return imus
+
+
 def parse_packet(data: bytearray, dev: DeviceState) -> Optional[dict]:
     params = get_packet_params(dev.config)
-    
-    if len(data) != params['total_len']:
-        log(f"[Dev{dev.device_id}] 包长错误: {len(data)} != {params['total_len']}")
-        return None
-    
+
+    emg_len = params['emg_len']
+    payload_len = len(data) - 4
+
+    # ===== 包长校验 (V1 固定 / V2 动态) =====
+    if dev.hw_version == "V2":
+        if payload_len < emg_len:
+            log(f"[Dev{dev.device_id}] 包过短: {len(data)}, 期望至少 {4 + emg_len}")
+            return None
+        imu_byte_count = payload_len - emg_len
+        if imu_byte_count % BYTES_PER_IMU != 0:
+            log(f"[Dev{dev.device_id}] IMU 数据异常: {imu_byte_count} bytes (非 18 的倍数)")
+            return None
+        num_imus = imu_byte_count // BYTES_PER_IMU
+        if num_imus > MAX_NUM_IMUS_V2:
+            log(f"[Dev{dev.device_id}] IMU 数量超限: {num_imus} > {MAX_NUM_IMUS_V2}")
+            return None
+        if num_imus != dev.num_imus:
+            dev.num_imus = num_imus
+            log(f"[Dev{dev.device_id}] IMU 数量已更新: {num_imus}")
+    else:
+        if len(data) != params['total_len']:
+            log(f"[Dev{dev.device_id}] 包长错误: {len(data)} != {params['total_len']}")
+            return None
+        num_imus = MAX_NUM_IMUS_V1  # V1 固定 2 个 IMU
+
     try:
         config = dev.config
         lsb_uv = calculate_lsb_uv(config)
         bps = params['bps']
         fpkt = params['fpkt']
-        emg_len = params['emg_len']
-        imu_len = params['imu_len']
-        
+
         start_frame = struct.unpack('<I', data[0:4])[0]
-        
+
+        # ===== EMG 解析 (物理顺序) =====
         emg_raw = []
         emg_uv = []
         raw_bytes = data[4: 4 + emg_len]
         stride = 16 * bps
-        
+
         for i in range(fpkt):
             offset = i * stride
             raw_row = []
             uv_row = []
-            
+
             for ch in range(16):
                 ch_offset = offset + ch * bps
                 chunk = raw_bytes[ch_offset: ch_offset + bps]
                 val = int.from_bytes(chunk, 'big', signed=True)
                 raw_row.append(val)
                 uv_row.append(val * lsb_uv)
-            
+
             emg_raw.append(raw_row)
             emg_uv.append(uv_row)
-        
+
+        # ===== 通道映射 (对齐供应商上位机显示顺序) =====
+        emg_raw_mapped = []
+        emg_uv_mapped = []
+        for row_raw, row_uv in zip(emg_raw, emg_uv):
+            mapped_raw = [row_raw[i - 1] for i in dev.channel_map]
+            mapped_uv = [row_uv[i - 1] for i in dev.channel_map]
+            emg_raw_mapped.append(mapped_raw)
+            emg_uv_mapped.append(mapped_uv)
+
+        # ===== IMU 解析 (按版本分叉) =====
         imu = None
-        if config['imu_enabled'] and imu_len > 0:
-            imu_start = 4 + emg_len
-            imu_bytes = data[imu_start: imu_start + imu_len]
-            
-            def parse_imu(b):
-                ag = struct.unpack('>6h', b[0:12])
-                m = struct.unpack('<3h', b[12:18])
-                return [
-                    [x * SCALE_ACCEL for x in ag[0:3]],
-                    [x * SCALE_GYRO for x in ag[3:6]],
-                    [x * SCALE_MAG for x in m[0:3]],
-                ]
-            
-            imu = [
-                parse_imu(imu_bytes[0:18]),
-                parse_imu(imu_bytes[18:36]),
-            ]
-        
+        if config['imu_enabled'] and num_imus > 0:
+            if dev.hw_version == "V2":
+                imu = parse_imu_v2(data, emg_len, num_imus)
+            else:
+                imu = parse_imu_v1(data, emg_len)
+
         dev.total_frames += fpkt
-        
+
         if dev.last_frame_index >= 0:
             expected = dev.last_frame_index + 1
             if start_frame != expected and start_frame > expected:
                 dev.lost_frames += start_frame - expected
-        
+
         dev.last_frame_index = start_frame + fpkt - 1
 
         # ===== 生成每帧的BLE帧号 =====
-        # 用于后续与SD卡bin文件同步
-        # 映射关系: SD卡帧号 = BLE帧号 * 8 + 7 (2kHz采样时)
         frame_ids = [start_frame + i for i in range(fpkt)]
 
         # ===== 应用滤波 =====
-        emg_uv_filtered = emg_uv  # 默认使用原始数据
-        
+        emg_uv_filtered = emg_uv_mapped  # 默认使用已映射的原始数据
+
         if FILTER_ENABLED and HAS_SCIPY:
-            # 根据设备ID选择对应的滤波器
             emg_filter = emg_filter_dev1 if dev.device_id == 1 else emg_filter_dev2
-            
+
             if emg_filter and emg_filter.enabled:
                 try:
-                    emg_uv_filtered = emg_filter.filter_batch(emg_uv)
+                    emg_uv_filtered = emg_filter.filter_batch(emg_uv_mapped)
                 except Exception as e:
                     log(f"[Dev{dev.device_id}] 滤波错误: {e}")
-                    emg_uv_filtered = emg_uv  # 滤波失败时使用原始数据
-        
+                    emg_uv_filtered = emg_uv_mapped
+
         return {
             'f': start_frame,
             'n': fpkt,
-            'frame_ids': frame_ids,  # 每帧的BLE帧号，用于同步
-            'raw': emg_raw,
-            'uv': emg_uv_filtered,  # 使用滤波后的数据
+            'frame_ids': frame_ids,
+            'raw': emg_raw_mapped,
+            'uv': emg_uv_filtered,
             'imu': imu,
+            'num_imus': num_imus,
+            'hw_version': dev.hw_version,
             's': [dev.total_frames, dev.lost_frames],
         }
-        
+
     except Exception as e:
         log(f"[Dev{dev.device_id}] 解析错误: {e}")
         return None
@@ -568,6 +657,39 @@ def parse_packet(data: bytearray, dev: DeviceState) -> Optional[dict]:
 # 【诊断】用于跟踪notification回调的调用情况
 _last_callback_time = {}
 _callback_interval_warning_printed = {}
+
+
+def create_status_handler(dev: DeviceState):
+    """V2 设备状态通知回调 — 仅更新本地状态，不影响控制流"""
+
+    def handler(sender: int, data: bytearray):
+        try:
+            if not data or len(data) < 1:
+                return
+            packet_type = data[0]
+
+            expected_size = struct.calcsize(STATUS_SNAPSHOT_FORMAT)
+            if packet_type == STATUS_PACKET_SNAPSHOT and len(data) >= expected_size:
+                s = struct.unpack(STATUS_SNAPSHOT_FORMAT, data[:expected_size])
+                # 同步 IMU 数量 (仅当固件上报值在有效范围内)
+                fw_num_imus = s[6]
+                if 0 <= fw_num_imus <= MAX_NUM_IMUS_V2:
+                    dev.num_imus = fw_num_imus
+                dev.status_flags = s[7]
+                dev.storage_state = s[9]
+                dev.sd_free_kb = s[10]
+                dev.firmware_version = s[17].split(b'\x00')[0].decode('ascii', errors='ignore')
+                dev.hardware_version = s[18].split(b'\x00')[0].decode('ascii', errors='ignore')
+
+            elif packet_type == STATUS_PACKET_EVENT:
+                # 事件记录（后续可扩展透传给前端用于诊断）
+                pass
+
+        except Exception as e:
+            log(f"[Dev{dev.device_id}] 状态解析错误: {e}")
+
+    return handler
+
 
 def create_notification_handler(dev: DeviceState):
     def handler(sender: int, data: bytearray):
@@ -610,10 +732,10 @@ def create_notification_handler(dev: DeviceState):
                     emg_timestamps.append(frame_ts)
                 parsed['emg_t'] = emg_timestamps
 
-                # IMU时间戳（每包1帧IMU，随BLE包接收，约27.8Hz）
-                # IMU使用BLE包的时间戳
+                # IMU时间戳（每包 N 个 IMU，随 BLE 包接收，约 27.8Hz）
+                # V1: 2 个 IMU, V2: 0-3 个 IMU
                 if parsed.get('imu'):
-                    imu_timestamps = [ts]
+                    imu_timestamps = [ts] * len(parsed['imu'])
                     parsed['imu_t'] = imu_timestamps
                 
                 dev.data_buffer.append(parsed)
@@ -873,6 +995,21 @@ async def scan_devices(ws):
         })
 
 
+async def send_control_command(dev: DeviceState, payload: bytes, timeout: float = 3.0):
+    """V1/V2 统一的控制命令写入封装
+
+    V2 设备使用 Write with Response + 超时保护
+    V1 设备使用 Write without Response
+    """
+    if dev.hw_version == "V2":
+        await asyncio.wait_for(
+            dev.client.write_gatt_char(CONTROL_CHAR_UUID, payload, response=True),
+            timeout=timeout,
+        )
+    else:
+        await dev.client.write_gatt_char(CONTROL_CHAR_UUID, payload, response=False)
+
+
 async def connect_device(ws, device_id: int, mac_or_name: str):
     """连接设备"""
     dev = state.get_device(device_id)
@@ -940,41 +1077,47 @@ async def connect_device(ws, device_id: int, mac_or_name: str):
 
                 log(f"[Dev{device_id}] 连接成功: {mac}")
 
+                # ===================== V1/V2 检测 (方法A: STATUS_CHAR 特征) ======
+                # 必须在配置命令之前检测，确保 V2 设备后续走 send_control_command() 的 response=True 分支
+                try:
+                    await dev.client.start_notify(
+                        STATUS_CHAR_UUID,
+                        create_status_handler(dev)
+                    )
+                    dev.hw_version = "V2"
+                    dev.channel_map = CHANNELS_MAP_V2
+                    dev.num_imus = 0  # 等待 Snapshot 更新实际值
+                    log(f"[Dev{device_id}] 检测到 V2 设备，已订阅状态通知")
+                except Exception as e:
+                    dev.hw_version = "V1"
+                    dev.channel_map = CHANNELS_MAP_V1
+                    dev.num_imus = MAX_NUM_IMUS_V1
+                    log(f"[Dev{device_id}] V1 设备 (STATUS_CHAR 不可用: {e})")
+                # ===================== V1/V2 检测结束 =====================
+
                 # ===================== 连接成功后发送配置命令 =====================
-                # 在连接成功后立即配置ESP32，而不是在start_stream时配置
-                # 这样可以避免配置命令和START命令之间的时序问题
                 try:
                     # 1. 发送采样率配置 (2kHz = 0x12)
                     sample_rate_cmd = bytes([CMD_MAP['2kHz']])
-                    await dev.client.write_gatt_char(
-                        CONTROL_CHAR_UUID,
-                        sample_rate_cmd,
-                        response=False
-                    )
+                    await send_control_command(dev, sample_rate_cmd)
                     log(f"[Dev{device_id}] 已发送采样率配置: 2kHz (0x12)")
                     await asyncio.sleep(0.1)  # 等待ESP32处理
 
                     # 2. 发送复合配置命令 (0xC0 + [gain_index, mode, shift, imu_en])
-                    # gain_index=6 (增益12), mode=0 (24-bit), shift=4, imu_enabled=1
                     config = dev.config
                     config_cmd = bytes([
                         CMD_MAP['CONFIG'],
-                        config['gain_index'],      # 6 = 增益12
-                        0 if not config['is_16bit'] else 1,  # 0 = 24-bit模式
-                        config['shift'],           # 4
-                        1 if config['imu_enabled'] else 0,   # 1 = IMU启用
+                        config['gain_index'],
+                        0 if not config['is_16bit'] else 1,
+                        config['shift'],
+                        1 if config['imu_enabled'] else 0,
                     ])
-                    await dev.client.write_gatt_char(
-                        CONTROL_CHAR_UUID,
-                        config_cmd,
-                        response=False
-                    )
+                    await send_control_command(dev, config_cmd)
                     log(f"[Dev{device_id}] 已发送复合配置: Gain={config['gain_index']}, Mode={'16bit' if config['is_16bit'] else '24bit'}, Shift={config['shift']}, IMU={config['imu_enabled']}")
                     await asyncio.sleep(0.1)  # 等待ESP32处理
 
                 except Exception as e:
                     log(f"[Dev{device_id}] 配置命令发送失败: {e}")
-                    # 配置失败不影响连接状态，继续执行
                 # ===================== 配置命令结束 =====================
 
                 await send_to_control(ws, action, {
@@ -1035,6 +1178,16 @@ async def disconnect_device(ws, device_id: int, silent=False):
         dev.rssi = None
         dev.connect_task = None
         dev.sd_filename = None  # 【修复】断开连接时清除SD卡文件名
+
+        # 重置 V2 字段到默认值
+        dev.hw_version = "V1"
+        dev.channel_map = CHANNELS_MAP_V1
+        dev.num_imus = MAX_NUM_IMUS_V1
+        dev.firmware_version = ""
+        dev.hardware_version = ""
+        dev.status_flags = 0
+        dev.storage_state = 0
+        dev.sd_free_kb = 0
 
         log(f"[Dev{device_id}] 已断开: {mac}")
         
@@ -1105,11 +1258,7 @@ async def start_stream(ws, device_id: int):
             filename_str = filename_str[:31]
 
         filename_cmd = bytes([CMD_MAP['SET_FILENAME']]) + filename_str.encode('ascii')
-        await dev.client.write_gatt_char(
-            CONTROL_CHAR_UUID,
-            filename_cmd,
-            response=False
-        )
+        await send_control_command(dev, filename_cmd)
         log(f"[Dev{device_id}] 已发送SD卡文件名: {filename_str} ({'左手' if device_id == 1 else '右手'})")
 
         # 【新增】保存文件名到设备状态，用于后续传递给storage_server
@@ -1126,11 +1275,10 @@ async def start_stream(ws, device_id: int):
         await dev.client.start_notify(EMG_DATA_CHAR_UUID, handler)
         log(f"[Dev{device_id}] 已订阅数据通知")
 
-        await dev.client.write_gatt_char(
-            CONTROL_CHAR_UUID,
-            bytes([CMD_MAP['START']]),
-            response=False
-        )
+        if dev.hw_version == "V2":
+            await asyncio.sleep(0.25)  # V2 START_NOTIFY_SETTLE_DELAY_S
+
+        await send_control_command(dev, bytes([CMD_MAP['START']]))
         log(f"[Dev{device_id}] 已发送 START 命令")
 
         dev.is_streaming = True
@@ -1173,11 +1321,7 @@ async def stop_stream(ws, device_id: int, silent=False):
     
     try:
         if dev.client and dev.is_connected():
-            await dev.client.write_gatt_char(
-                CONTROL_CHAR_UUID,
-                bytes([CMD_MAP['STOP']]),
-                response=False
-            )
+            await send_control_command(dev, bytes([CMD_MAP['STOP']]))
             log(f"[Dev{device_id}] 已发送 STOP")
             
             await dev.client.stop_notify(EMG_DATA_CHAR_UUID)
