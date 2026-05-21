@@ -277,6 +277,7 @@ class StatisticsPanel(QFrame):
         self.setFrameStyle(QFrame.StyledPanel)
         layout = QGridLayout(self)
         layout.setSpacing(8)
+        layout.setContentsMargins(10, 10, 10, 10)
 
         self.labels = {}
         # 定义字段及其颜色分组
@@ -327,8 +328,10 @@ class StatisticsPanel(QFrame):
             row = i // 2
             col = (i % 2) * 2
             name_label = QLabel(f'{name}:')
+            name_label.setMinimumHeight(20)
             name_label.setStyleSheet('font-weight: bold; color: #495057;')
             value_label = QLabel('-')
+            value_label.setMinimumHeight(20)
             # 根据字段类型设置不同颜色
             if key == 'sync_status':
                 value_label.setStyleSheet('color: #666;')  # 同步状态初始灰色，动态更新
@@ -526,7 +529,7 @@ class ViewerTab(QWidget):
 
         # 统计信息面板
         self.stats_panel = StatisticsPanel()
-        self.stats_panel.setMaximumHeight(380)  # 增加高度以容纳Session和任务信息字段
+        self.stats_panel.setMaximumHeight(460)  # 容纳V2新增IMU字段，避免高DPI/中文字体裁切
         layout.addWidget(self.stats_panel)
 
         # 主分割器 - 可拖动

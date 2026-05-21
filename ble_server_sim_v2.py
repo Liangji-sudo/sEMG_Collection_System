@@ -87,7 +87,8 @@ SEND_INTERVAL = 0.036                   # 每包约 36ms (9帧/250Hz)
 # ==================== 批量发送配置 ====================
 BATCH_MIN = 2
 BATCH_MAX = 5
-BATCH_PROBABILITY = 0.5                 # 50% 概率发送批量包（其余发送单包）
+BATCH_PROBABILITY = 0.5                 # Used only when STRESS_BATCH_MODE is True
+STRESS_BATCH_MODE = False               # False: real-like 1 packet / 36ms; True: burst batches
 
 # ==================== 优先级 ====================
 PRIORITY_CONTROL = 0
@@ -159,7 +160,7 @@ class MockDataGeneratorV2:
     def _generate_emg_frame(self) -> List[float]:
         """生成一帧 16 通道 EMG μV 数据 (物理通道顺序)"""
         frame = [self._generate_emg_channel(ch) for ch in range(16)]
-        self._t += 1.0 / 2000.0  # 每帧 0.5ms (2kHz)
+        self._t += FRAME_INTERVAL  # BLE stream frame interval: 250Hz
         return frame
 
     def _apply_channel_map(self, frames: List[List[float]]) -> List[List[float]]:
@@ -299,6 +300,7 @@ class DeviceState:
     lost_frames: int = 0
     last_frame_index: int = -1
     last_data_time: float = 0.0
+    connect_task: Any = None
 
     # V2 设备信息
     hw_version: str = "V2"
@@ -478,7 +480,7 @@ def data_sender_thread():
                 dev2_data = None
 
                 # ---- 决定本周期是否发送批量包 ----
-                use_batch = random.random() < BATCH_PROBABILITY
+                use_batch = STRESS_BATCH_MODE and random.random() < BATCH_PROBABILITY
                 batch_size = random.randint(BATCH_MIN, BATCH_MAX) if use_batch else 1
 
                 # ---- Dev1 ----
@@ -972,7 +974,9 @@ async def main():
     log(f"  - IMU: {NUM_IMUS_V2} chips (LSM6DSV32X), acc+gyr only, 无磁力计")
     log(f"  - 前端显示: 第 0 个 IMU 的 Acc/Gyr (不显示 Mag); HDF5 imu*_all_ble 保存 3 行")
     log(f"  - hw_version: V2, num_imus: {NUM_IMUS_V2}")
-    log(f"  - 批量包: {BATCH_PROBABILITY*100:.0f}% 概率发送 {BATCH_MIN}-{BATCH_MAX} 个包/批")
+    log(f"  - 批量包压力测试: {'开启' if STRESS_BATCH_MODE else '关闭'}")
+    if STRESS_BATCH_MODE:
+        log(f"  - 批量包: {BATCH_PROBABILITY*100:.0f}% 概率发送 {BATCH_MIN}-{BATCH_MAX} 个包/批")
     log(f"  - 发送间隔: {SEND_INTERVAL*1000:.0f}ms (9帧/包, 250Hz)")
     log("=" * 60)
     log("模拟设备 (V2):")

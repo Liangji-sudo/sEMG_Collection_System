@@ -9,6 +9,16 @@ const realtimeEngine = require('./realtimeEngine');
 const path = require('path');
 const { getPythonCommand } = require('./pythonPath');
 
+// BLE服务脚本切换:
+// - 'ble_server'        真实腕带
+// - 'ble_server_sim_v2' V2模拟器（无设备测试上层链路）
+const BLE_SERVER_SCRIPT = 'ble_server';
+const PYTHON_ENV = {
+    ...process.env,
+    PYTHONIOENCODING: 'utf-8',
+    PYTHONUTF8: '1'
+};
+
 class DeviceSync extends EventEmitter {
     constructor() {
         super();
@@ -38,8 +48,8 @@ class DeviceSync extends EventEmitter {
                 console.log('[deviceSync] 正在启动ble_server......');
 
                 // 自动判断使用 Python 脚本还是打包后的 exe
-                const { command, args } = getPythonCommand('ble_server');
-                this.pythonProcess = spawn(command, args);
+                const { command, args } = getPythonCommand(BLE_SERVER_SCRIPT);
+                this.pythonProcess = spawn(command, args, { env: PYTHON_ENV });
 
                 this.pythonProcess.on('spawn', () => {
                     console.log('[deviceSync] ble_server已启动');
@@ -95,7 +105,7 @@ class DeviceSync extends EventEmitter {
                 : ['-s', '10.1.1.198'];
 
             const { command, args } = getPythonCommand('mocap_server', mocapArgs);
-            this.mocapProcess = spawn(command, args);
+            this.mocapProcess = spawn(command, args, { env: PYTHON_ENV });
 
             this.mocapProcess.on('spawn', () => {
                 console.log('[deviceSync] mocap_server已启动 (端口: 8767)');
