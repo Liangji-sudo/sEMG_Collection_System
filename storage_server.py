@@ -90,6 +90,20 @@ IMU_100HZ_DTYPE = np.dtype([
     ("time", "<f8")         # 时间戳
 ])
 
+# 【新增】V1/V2 通用 IMU BLE 数据集类型: 支持可变数量 IMU、有/无磁力计
+# V1: 固定 2 个 IMU, has_mag=true, mag 有效
+# V2: 可变 0-3 个 IMU, has_mag=false, mag 填充 NaN
+IMU_ALL_BLE_DTYPE = np.dtype([
+    ("imu_index", "<u1"),    # IMU 索引 (0-based, 对应物理 I2C 地址)
+    ("acc", "<f4", (3,)),    # 加速度计 [ax, ay, az]
+    ("gyr", "<f4", (3,)),   # 陀螺仪 [gx, gy, gz]
+    ("has_mag", "<u1"),      # 是否有磁力计数据 (V1=1, V2=0)
+    ("mag", "<f4", (3,)),   # 磁力计 [mx, my, mz] (V2 填充 NaN)
+    ("frame_id", "<u4"),    # BLE 帧号
+    ("sd_frame_id", "<u4"), # 对应的 SD 卡帧号
+    ("time", "<f8")         # 时间戳
+])
+
 # 【修改】MOCAP数据集类型：每只手12个marker点的3D坐标 + 帧号 + 时间戳
 # 左手marker: IN1_L, IN2_L, IN3_L, HB1_L, HB2_L, HB3_L, TH1_L, TH2_L, TH3_L, TH4_L, MD1_L, MD2_L
 # 右手marker: IN1_R, IN2_R, IN3_R, HB1_R, HB2_R, HB3_R, TH1_R, TH2_R, TH3_R, TH4_R, MD1_R, MD2_R
@@ -194,6 +208,8 @@ class HDF5StorageServer:
             "imu1b_frames": 0,
             "imu2a_frames": 0,
             "imu2b_frames": 0,
+            "imu1_all_frames": 0,   # 【新增】V1/V2 通用
+            "imu2_all_frames": 0,   # 【新增】V1/V2 通用
             "mocap_L_frames": 0,  # 【修改】左手动捕帧数
             "mocap_R_frames": 0,  # 【修改】右手动捕帧数
             "prompts": 0
@@ -469,6 +485,25 @@ class HDF5StorageServer:
             imu2b_ble_ds.attrs["sample_rate"] = "~27.8Hz (one per BLE packet)"
             imu2b_ble_ds.attrs["description"] = "IMU-B data from device 2 BLE packets"
 
+            # 【新增】V1/V2 通用 IMU 数据集 (支持可变数量、有/无磁力计)
+            imu1_all_ble_ds = self.f.create_dataset(
+                "imu1_all_ble", shape=(0,), dtype=IMU_ALL_BLE_DTYPE,
+                chunks=(500,), maxshape=(None,), compression="gzip"
+            )
+            imu1_all_ble_ds.attrs["device"] = "device_1"
+            imu1_all_ble_ds.attrs["supports_variable_imus"] = True
+            imu1_all_ble_ds.attrs["v2_no_magnetometer"] = True
+            imu1_all_ble_ds.attrs["description"] = "Device 1 all IMU data (V1/V2 unified, variable count)"
+
+            imu2_all_ble_ds = self.f.create_dataset(
+                "imu2_all_ble", shape=(0,), dtype=IMU_ALL_BLE_DTYPE,
+                chunks=(500,), maxshape=(None,), compression="gzip"
+            )
+            imu2_all_ble_ds.attrs["device"] = "device_2"
+            imu2_all_ble_ds.attrs["supports_variable_imus"] = True
+            imu2_all_ble_ds.attrs["v2_no_magnetometer"] = True
+            imu2_all_ble_ds.attrs["description"] = "Device 2 all IMU data (V1/V2 unified, variable count)"
+
             # ===================== 创建IMU 100Hz数据集（同步后写入，初始为空） =====================
             # 设备1的两个IMU
             imu1a_100hz_ds = self.f.create_dataset(
@@ -555,6 +590,8 @@ class HDF5StorageServer:
                 "imu1b_frames": 0,
                 "imu2a_frames": 0,
                 "imu2b_frames": 0,
+                "imu1_all_frames": 0,   # 【新增】
+                "imu2_all_frames": 0,   # 【新增】
                 "mocap_L_frames": 0,  # 【修改】
                 "mocap_R_frames": 0,  # 【修改】
                 "prompts": 0
@@ -614,6 +651,26 @@ class HDF5StorageServer:
                 if data.get("imu2b") and data.get("imu2_t"):
                     frame_id = data.get("emg2_frame_ids", [0])[0] if data.get("emg2_frame_ids") else None
                     self._append_imu("imu2b", data["imu2b"], data["imu2_t"], frame_id)
+
+                # 【新增】V1/V2 通用 IMU 数据写入
+                if data.get("imu1_all") and data.get("imu1_t"):
+                    frame_id = data.get("emg1_frame_ids", [0])[0] if data.get("emg1_frame_ids") else None
+                    hw_version = data.get("imu1_hw_version", "V1")
+                    self._append_imu_all("imu1_all", data["imu1_all"], data["imu1_t"], frame_id, hw_version)
+                if data.get("imu2_all") and data.get("imu2_t"):
+                    frame_id = data.get("emg2_frame_ids", [0])[0] if data.get("emg2_frame_ids") else None
+                    hw_version = data.get("imu2_hw_version", "V1")
+                    self._append_imu_all("imu2_all", data["imu2_all"], data["imu2_t"], frame_id, hw_version)
+
+                # 【新增】存储 V1/V2 元数据到 HDF5 attrs
+                if data.get("imu1_hw_version"):
+                    self.f.attrs["imu1_hw_version"] = data["imu1_hw_version"]
+                if data.get("imu2_hw_version"):
+                    self.f.attrs["imu2_hw_version"] = data["imu2_hw_version"]
+                if data.get("imu1_num_imus") is not None:
+                    self.f.attrs["imu1_num_imus"] = data["imu1_num_imus"]
+                if data.get("imu2_num_imus") is not None:
+                    self.f.attrs["imu2_num_imus"] = data["imu2_num_imus"]
 
                 # 【修改】批量追加MOCAP（左右手分开）
                 if data.get("mocap_frames"):
@@ -728,7 +785,10 @@ class HDF5StorageServer:
                 data_ble = np.empty(1, dtype=IMU_BLE_DTYPE)
                 data_ble[0]["acc"] = np.array(imu_data.get("acc", [0, 0, 0])[:3], dtype=np.float32)
                 data_ble[0]["gyr"] = np.array(imu_data.get("gyr", [0, 0, 0])[:3], dtype=np.float32)
-                data_ble[0]["mag"] = np.array(imu_data.get("mag", [0, 0, 0])[:3], dtype=np.float32)
+                mag_raw = imu_data.get("mag")
+                if mag_raw is None:
+                    mag_raw = [0, 0, 0]
+                data_ble[0]["mag"] = np.array(mag_raw[:3], dtype=np.float32)
                 data_ble[0]["frame_id"] = ble_frame_id
                 data_ble[0]["sd_frame_id"] = sd_frame_id
                 data_ble[0]["time"] = timestamps[0] if timestamps else 0
@@ -742,6 +802,65 @@ class HDF5StorageServer:
             self.stats[f"{dataset_name}_frames"] += 1
 
             return 1
+
+        except Exception as e:
+            debug_log(f"❌ 追加{dataset_name}失败: {e}")
+            return 0
+
+    def _append_imu_all(self, dataset_name, imu_list, timestamps, frame_id=None, hw_version="V1"):
+        """追加 V1/V2 通用 IMU 数据到 imu*_all_ble 数据集
+
+        支持可变数量 IMU (V1 固定 2, V2 可变 0-3)，
+        V1 有磁力计 (has_mag=true)，V2 没有 (has_mag=false, mag 填 NaN)。
+
+        Args:
+            dataset_name: "imu1_all" 或 "imu2_all"
+            imu_list: [ {index, acc, gyr, mag}, ... ]
+            timestamps: 时间戳列表
+            frame_id: BLE 帧号
+            hw_version: "V1" 或 "V2"
+        """
+        try:
+            if not imu_list or len(imu_list) == 0:
+                return 0
+
+            ds_name = f"{dataset_name}_ble"
+            if ds_name not in self.f:
+                return 0
+
+            ds = self.f[ds_name]
+            ble_frame_id = frame_id if frame_id is not None else 0
+            sd_frame_id = ble_frame_id * 8 + 7
+            timestamp = timestamps[0] if timestamps else 0.0
+            num_imus = len(imu_list)
+
+            data_ble = np.empty(num_imus, dtype=IMU_ALL_BLE_DTYPE)
+            for i, imu in enumerate(imu_list):
+                idx = imu.get("index", i)
+                acc = np.array(imu.get("acc", [0, 0, 0])[:3], dtype=np.float32)
+                gyr = np.array(imu.get("gyr", [0, 0, 0])[:3], dtype=np.float32)
+                mag_val = imu.get("mag")
+                has_mag = 1 if (hw_version == "V1" and mag_val is not None) else 0
+                if has_mag:
+                    mag = np.array(mag_val[:3] if mag_val else [0, 0, 0], dtype=np.float32)
+                else:
+                    mag = np.array([np.nan, np.nan, np.nan], dtype=np.float32)
+
+                data_ble[i]["imu_index"] = idx
+                data_ble[i]["acc"] = acc
+                data_ble[i]["gyr"] = gyr
+                data_ble[i]["has_mag"] = has_mag
+                data_ble[i]["mag"] = mag
+                data_ble[i]["frame_id"] = ble_frame_id
+                data_ble[i]["sd_frame_id"] = sd_frame_id
+                data_ble[i]["time"] = timestamp
+
+            current_len = ds.shape[0]
+            ds.resize(current_len + num_imus, axis=0)
+            ds[current_len:current_len + num_imus] = data_ble
+
+            self.stats[f"{dataset_name}_frames"] += num_imus
+            return num_imus
 
         except Exception as e:
             debug_log(f"❌ 追加{dataset_name}失败: {e}")
@@ -852,6 +971,8 @@ class HDF5StorageServer:
                 self.f.attrs["total_imu1b_frames"] = self.stats["imu1b_frames"]
                 self.f.attrs["total_imu2a_frames"] = self.stats["imu2a_frames"]
                 self.f.attrs["total_imu2b_frames"] = self.stats["imu2b_frames"]
+                self.f.attrs["total_imu1_all_frames"] = self.stats["imu1_all_frames"]
+                self.f.attrs["total_imu2_all_frames"] = self.stats["imu2_all_frames"]
                 self.f.attrs["total_prompts"] = self.stats["prompts"]
                 
                 self.f.close()
@@ -863,7 +984,9 @@ class HDF5StorageServer:
             debug_log(f"✅ 文件已关闭: {rel_path}")
             debug_log(f"📊 统计: EMG1={self.stats['emg1_frames']}, EMG2={self.stats['emg2_frames']}, "
                      f"IMU1A={self.stats['imu1a_frames']}, IMU1B={self.stats['imu1b_frames']}, "
+                     f"IMU1_ALL={self.stats['imu1_all_frames']}, "
                      f"IMU2A={self.stats['imu2a_frames']}, IMU2B={self.stats['imu2b_frames']}, "
+                     f"IMU2_ALL={self.stats['imu2_all_frames']}, "
                      f"MOCAP_L={self.stats['mocap_L_frames']}, MOCAP_R={self.stats['mocap_R_frames']}, "
                      f"Prompts={self.stats['prompts']}")
             
