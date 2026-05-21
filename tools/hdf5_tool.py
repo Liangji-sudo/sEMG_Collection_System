@@ -305,6 +305,12 @@ class StatisticsPanel(QFrame):
             ('imu1b_ble', 'IMU1B BLE'), ('imu1b_100hz', 'IMU1B 100Hz'),
             ('imu2a_ble', 'IMU2A BLE'), ('imu2a_100hz', 'IMU2A 100Hz'),
             ('imu2b_ble', 'IMU2B BLE'), ('imu2b_100hz', 'IMU2B 100Hz'),
+            # V1/V2 通用IMU数据集（可变IMU数量）
+            ('imu1_all_ble', 'IMU1 All BLE'), ('imu2_all_ble', 'IMU2 All BLE'),
+            # V2 设备版本元数据
+            ('imu1_hw_version', 'IMU1 硬件版本'), ('imu2_hw_version', 'IMU2 硬件版本'),
+            ('imu1_num_imus', 'IMU1 IMU数量'), ('imu2_num_imus', 'IMU2 IMU数量'),
+            ('total_imu1_all_frames', 'IMU1 All帧数'), ('total_imu2_all_frames', 'IMU2 All帧数'),
             ('mocap', 'Mocap'),
             # SD卡bin文件索引（绿色）
             ('sd_bin_dev1', 'SD Bin(设备1)'), ('sd_bin_dev2', 'SD Bin(设备2)'),
@@ -466,6 +472,32 @@ class StatisticsPanel(QFrame):
                         self.labels[key].setText(str(f[key].shape))
                     else:
                         self.labels[key].setText('-')
+
+                # V1/V2 通用IMU数据集形状
+                for key in ['imu1_all_ble', 'imu2_all_ble']:
+                    if key in f:
+                        self.labels[key].setText(str(f[key].shape))
+                    else:
+                        self.labels[key].setText('-')
+
+                # V2 设备版本元数据
+                for attr_name in ['imu1_hw_version', 'imu2_hw_version',
+                                  'imu1_num_imus', 'imu2_num_imus']:
+                    val = f.attrs.get(attr_name, None)
+                    if val is not None:
+                        if isinstance(val, bytes):
+                            val = val.decode('utf-8')
+                        self.labels[attr_name].setText(str(val))
+                    else:
+                        self.labels[attr_name].setText('-')
+
+                # V2 统计信息
+                for attr_name in ['total_imu1_all_frames', 'total_imu2_all_frames']:
+                    val = f.attrs.get(attr_name, None)
+                    if val is not None:
+                        self.labels[attr_name].setText(str(val))
+                    else:
+                        self.labels[attr_name].setText('-')
 
                 if 'mocap' in f:
                     self.labels['mocap'].setText(str(f['mocap'].shape))
@@ -878,9 +910,13 @@ class ViewerTab(QWidget):
         gyr_key = 'gyr' if 'gyr' in dtype.names else 'gyro' if 'gyro' in dtype.names else None
         has_mag = 'mag' in dtype.names
         has_time = 'time' in dtype.names
+        has_imu_index = 'imu_index' in dtype.names     # V2 IMU_ALL_BLE_DTYPE
+        has_has_mag_flag = 'has_mag' in dtype.names     # V2 IMU_ALL_BLE_DTYPE
 
         # 构建表头
         headers = ['帧序号']
+        if has_imu_index:
+            headers.append('IMU索引')
         if has_frame_id:
             headers.append('BLE帧号')
         if has_sd_frame_id:
@@ -891,6 +927,8 @@ class ViewerTab(QWidget):
             headers += ['Gyr_X', 'Gyr_Y', 'Gyr_Z']
         if has_mag:
             headers += ['Mag_X', 'Mag_Y', 'Mag_Z']
+        if has_has_mag_flag:
+            headers.append('Has Mag')
         if has_time:
             headers.append('时间戳')
 
@@ -905,6 +943,14 @@ class ViewerTab(QWidget):
             item.setTextAlignment(Qt.AlignCenter)
             self.data_table.setItem(i, col, item)
             col += 1
+
+            # IMU索引 (V2 IMU_ALL_BLE_DTYPE)
+            if has_imu_index:
+                item = QTableWidgetItem(str(row['imu_index']))
+                item.setTextAlignment(Qt.AlignCenter)
+                item.setBackground(QColor(240, 240, 255))  # 浅紫背景
+                self.data_table.setItem(i, col, item)
+                col += 1
 
             # BLE帧号
             if has_frame_id:
@@ -938,13 +984,29 @@ class ViewerTab(QWidget):
                     self.data_table.setItem(i, col, item)
                     col += 1
 
-            # 磁力计
+            # 磁力计 (V2 has_mag=0 时显示 "-")
             if has_mag:
+                row_has_mag = row['has_mag'] if has_has_mag_flag else 1
                 for j, val in enumerate(row['mag']):
-                    item = QTableWidgetItem(f'{val:.6f}')
+                    if row_has_mag == 0:
+                        item = QTableWidgetItem('-')
+                        item.setForeground(QColor(180, 180, 180))  # 灰色
+                    else:
+                        item = QTableWidgetItem(f'{val:.6f}')
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                     self.data_table.setItem(i, col, item)
                     col += 1
+
+            # Has Mag 标志 (V2 IMU_ALL_BLE_DTYPE)
+            if has_has_mag_flag:
+                item = QTableWidgetItem(str(row['has_mag']))
+                item.setTextAlignment(Qt.AlignCenter)
+                if row['has_mag'] == 0:
+                    item.setBackground(QColor(255, 240, 240))
+                else:
+                    item.setBackground(QColor(240, 255, 240))
+                self.data_table.setItem(i, col, item)
+                col += 1
 
             # 时间戳
             if has_time:
@@ -954,6 +1016,8 @@ class ViewerTab(QWidget):
 
             # 文本预览
             parts = []
+            if has_imu_index:
+                parts.append(f'IMU[{row["imu_index"]}]')
             if has_frame_id:
                 parts.append(f'BLE={row["frame_id"]}')
             if has_sd_frame_id:
@@ -962,6 +1026,12 @@ class ViewerTab(QWidget):
                 parts.append(f'Acc=[{row["acc"][0]:8.4f}, {row["acc"][1]:8.4f}, {row["acc"][2]:8.4f}]')
             if has_gyr and gyr_key:
                 parts.append(f'Gyr=[{row[gyr_key][0]:8.4f}, {row[gyr_key][1]:8.4f}, {row[gyr_key][2]:8.4f}]')
+            if has_mag:
+                row_has_mag = row['has_mag'] if has_has_mag_flag else 1
+                if row_has_mag == 0:
+                    parts.append('Mag=[  -,    -,    -  ]')
+                else:
+                    parts.append(f'Mag=[{row["mag"][0]:8.4f}, {row["mag"][1]:8.4f}, {row["mag"][2]:8.4f}]')
             if has_time:
                 parts.append(f't={row["time"]:.9f}')
             text_lines.append(f'帧{i:5d}: {" ".join(parts)}')
