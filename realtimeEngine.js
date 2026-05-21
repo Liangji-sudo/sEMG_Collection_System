@@ -753,27 +753,34 @@ class RealtimeEngine extends EventEmitter {
         try {
             if (!packet.dev1 && !packet.dev2) return;
 
-            // 用于前端显示的滤波后数据
-            let emg1Data = null, emg2Data = null;
-            // 用于存储的原始数据
-            let emg1RawData = null, emg2RawData = null;
-            let emg1Timestamps = null, emg2Timestamps = null;
-            let emg1FrameIds = null, emg2FrameIds = null;
-            // IMU 数据 (V1/V2 兼容)
-            let imu1Norm = null, imu2Norm = null;
-            let imu1Timestamps = null, imu2Timestamps = null;
-            // Legacy IMU slots for storage backward compat
-            let imu1aData = null, imu1bData = null;
-            let imu2aData = null, imu2bData = null;
-            let imu1All = null, imu2All = null;
-            let imu1HwVersion = null, imu2HwVersion = null;
-            let imu1NumImus = null, imu2NumImus = null;
-            let timestamp = packet.ts;
-            let stats1 = null, stats2 = null;
-            let framesInPacket = 9;
+            // Normalize to arrays, matching ble_server.py data_sender_thread batch behavior
+            const dev1List = Array.isArray(packet.dev1) ? packet.dev1 : (packet.dev1 ? [packet.dev1] : []);
+            const dev2List = Array.isArray(packet.dev2) ? packet.dev2 : (packet.dev2 ? [packet.dev2] : []);
+            const maxLen = Math.max(dev1List.length, dev2List.length);
 
-            if (packet.dev1) {
-                const dev1 = Array.isArray(packet.dev1) ? packet.dev1[0] : packet.dev1;
+            for (let i = 0; i < maxLen; i++) {
+                const dev1 = dev1List[i] || null;
+                const dev2 = dev2List[i] || null;
+
+                if (!dev1 && !dev2) continue;
+
+                let emg1Data = null, emg2Data = null;
+                let emg1RawData = null, emg2RawData = null;
+                let emg1Timestamps = null, emg2Timestamps = null;
+                let emg1FrameIds = null, emg2FrameIds = null;
+                let imu1Norm = null, imu2Norm = null;
+                let imu1Timestamps = null, imu2Timestamps = null;
+                let imu1aData = null, imu1bData = null;
+                let imu2aData = null, imu2bData = null;
+                let imu1All = null, imu2All = null;
+                let imu1HwVersion = null, imu2HwVersion = null;
+                let imu1NumImus = null, imu2NumImus = null;
+                // Prefer sub-packet's own timestamp (set by ble_server create_notification_handler)
+                let timestamp = (dev1 && dev1.t) || (dev2 && dev2.t) || packet.ts;
+                let stats1 = null, stats2 = null;
+                let framesInPacket = 9;
+
+                // ===== Process dev1 sub-packet =====
                 if (dev1) {
                     if (dev1.uv?.length > 0) emg1Data = this.transposeEMG(dev1.uv);
                     if (dev1.raw?.length > 0) emg1RawData = this.transposeEMG(dev1.raw);
@@ -789,16 +796,13 @@ class RealtimeEngine extends EventEmitter {
                     imu1NumImus = imu1Norm.numImus;
                     imu1All = imu1Norm.imus;
 
-                    // Legacy slots: V1 fills {acc,gyr,mag}, V2 stays null (avoids storage TypeError on mag)
                     if (imu1HwVersion === "V1") {
                         if (dev1.imu?.[0]) imu1aData = this.imuChipToLegacy(dev1.imu[0], imu1HwVersion);
                         if (dev1.imu?.[1]) imu1bData = this.imuChipToLegacy(dev1.imu[1], imu1HwVersion);
                     }
                 }
-            }
 
-            if (packet.dev2) {
-                const dev2 = Array.isArray(packet.dev2) ? packet.dev2[0] : packet.dev2;
+                // ===== Process dev2 sub-packet =====
                 if (dev2) {
                     if (dev2.uv?.length > 0) emg2Data = this.transposeEMG(dev2.uv);
                     if (dev2.raw?.length > 0) emg2RawData = this.transposeEMG(dev2.raw);
@@ -807,6 +811,8 @@ class RealtimeEngine extends EventEmitter {
                     if (dev2.imu_t?.length > 0) imu2Timestamps = dev2.imu_t;
                     stats2 = dev2.s ? { total: dev2.s[0], lost: dev2.s[1] } : null;
                     this.dev2_packet_count += (dev2.n || 9);
+                    // Use max when both devices have data in the same pair
+                    if (dev2.n && dev2.n > framesInPacket) framesInPacket = dev2.n;
 
                     imu2Norm = this.normalizeImuData(dev2);
                     imu2HwVersion = imu2Norm.hwVersion;
@@ -818,45 +824,43 @@ class RealtimeEngine extends EventEmitter {
                         if (dev2.imu?.[1]) imu2bData = this.imuChipToLegacy(dev2.imu[1], imu2HwVersion);
                     }
                 }
-            }
 
-            this.emg_packet_count += framesInPacket;
+                this.emg_packet_count += framesInPacket;
 
-            // 前端实时显示：imu1/imu2 使用各自第0个IMU（保持现有字段兼容）
-            const frontImu1 = imu1Norm?.imus?.[0] || null;
-            const frontImu2 = imu2Norm?.imus?.[0] || null;
+                // Frontend display: imu1/imu2 use respective 0th IMU
+                const frontImu1 = imu1Norm?.imus?.[0] || null;
+                const frontImu2 = imu2Norm?.imus?.[0] || null;
 
-            const dataItem = {
-                emg1: emg1Data, emg2: emg2Data,
-                imu1: frontImu1, imu2: frontImu2,
-                timestamp, packetCount: this.emg_packet_count, framesInPacket,
-                stats1, stats2, activeDevices: packet.active || []
-            };
-            this.realtimeDataBuffer.push(dataItem);
+                const dataItem = {
+                    emg1: emg1Data, emg2: emg2Data,
+                    imu1: frontImu1, imu2: frontImu2,
+                    timestamp, packetCount: this.emg_packet_count, framesInPacket,
+                    stats1, stats2, activeDevices: packet.active || []
+                };
+                this.realtimeDataBuffer.push(dataItem);
 
-            if (!this.realtimeDataTimer) {
-                this.realtimeDataTimer = setTimeout(() => {
+                if (!this.realtimeDataTimer) {
+                    this.realtimeDataTimer = setTimeout(() => {
+                        this.flushRealtimeDataBuffer();
+                    }, this.realtimeDataMaxDelay);
+                }
+
+                if (this.realtimeDataBuffer.length >= this.realtimeDataBufferLimit) {
                     this.flushRealtimeDataBuffer();
-                }, this.realtimeDataMaxDelay);
-            }
+                }
 
-            if (this.realtimeDataBuffer.length >= this.realtimeDataBufferLimit) {
-                this.flushRealtimeDataBuffer();
-            }
-
-            // 发送原始 raw 数据给 storage_server 存储
-            if (this.isCollecting && !this.collectionPaused && this.stageFileOpen && !this.isClosingStageFile) {
-                this.saveDataToStorage({
-                    emg1: emg1RawData, emg2: emg2RawData, emg1_t: emg1Timestamps, emg2_t: emg2Timestamps,
-                    emg1_frame_ids: emg1FrameIds, emg2_frame_ids: emg2FrameIds,
-                    // Legacy IMU slots for backward compat
-                    imu1a: imu1aData, imu1b: imu1bData, imu1_t: imu1Timestamps,
-                    imu2a: imu2aData, imu2b: imu2bData, imu2_t: imu2Timestamps,
-                    // New V1/V2 universal fields
-                    imu1_all: imu1All, imu2_all: imu2All,
-                    imu1_hw_version: imu1HwVersion, imu2_hw_version: imu2HwVersion,
-                    imu1_num_imus: imu1NumImus, imu2_num_imus: imu2NumImus,
-                });
+                // Send raw data to storage_server for this sub-packet pair
+                if (this.isCollecting && !this.collectionPaused && this.stageFileOpen && !this.isClosingStageFile) {
+                    this.saveDataToStorage({
+                        emg1: emg1RawData, emg2: emg2RawData, emg1_t: emg1Timestamps, emg2_t: emg2Timestamps,
+                        emg1_frame_ids: emg1FrameIds, emg2_frame_ids: emg2FrameIds,
+                        imu1a: imu1aData, imu1b: imu1bData, imu1_t: imu1Timestamps,
+                        imu2a: imu2aData, imu2b: imu2bData, imu2_t: imu2Timestamps,
+                        imu1_all: imu1All, imu2_all: imu2All,
+                        imu1_hw_version: imu1HwVersion, imu2_hw_version: imu2HwVersion,
+                        imu1_num_imus: imu1NumImus, imu2_num_imus: imu2NumImus,
+                    });
+                }
             }
 
         } catch (error) {

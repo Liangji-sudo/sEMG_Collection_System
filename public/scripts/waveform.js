@@ -213,6 +213,23 @@
                     const magData = data.imu1.mag.map(v => [v]);
                     const imu1Mag = rm.get('imu1Mag');
                     if (imu1Mag) imu1Mag.renderPoints(magData);
+                    // V1: 确保 Mag 区域可见
+                    const container = document.getElementById('imu1-mag-container');
+                    if (container) container.style.display = '';
+                    if (container) {
+                        const bar = container.previousElementSibling;
+                        if (bar && bar.classList.contains('control-bar')) bar.style.display = '';
+                    }
+                } else {
+                    // V2: 无磁力计，清除残留数据并隐藏 Mag 区域
+                    const imu1Mag = rm.get('imu1Mag');
+                    if (imu1Mag) imu1Mag.clear();
+                    const container = document.getElementById('imu1-mag-container');
+                    if (container) container.style.display = 'none';
+                    if (container) {
+                        const bar = container.previousElementSibling;
+                        if (bar && bar.classList.contains('control-bar')) bar.style.display = 'none';
+                    }
                 }
             }
 
@@ -234,6 +251,21 @@
                     const magData = data.imu2.mag.map(v => [v]);
                     const imu2Mag = rm.get('imu2Mag');
                     if (imu2Mag) imu2Mag.renderPoints(magData);
+                    const container = document.getElementById('imu2-mag-container');
+                    if (container) container.style.display = '';
+                    if (container) {
+                        const bar = container.previousElementSibling;
+                        if (bar && bar.classList.contains('control-bar')) bar.style.display = '';
+                    }
+                } else {
+                    const imu2Mag = rm.get('imu2Mag');
+                    if (imu2Mag) imu2Mag.clear();
+                    const container = document.getElementById('imu2-mag-container');
+                    if (container) container.style.display = 'none';
+                    if (container) {
+                        const bar = container.previousElementSibling;
+                        if (bar && bar.classList.contains('control-bar')) bar.style.display = 'none';
+                    }
                 }
             }
 

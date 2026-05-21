@@ -101,6 +101,7 @@ BASE_LSB_24BIT = 0.2861        # 2.4V ref / 2^23 * 1e6 (μV)
 HARDWARE_FRONTEND_GAIN = 10    # 硬件前端增益
 
 # ================= IMU 配置 =================
+BLE_SAMPLE_RATE = 250           # BLE实际传输频率（固定250Hz，与供应商一致）
 BYTES_PER_IMU = 18              # 单 IMU 数据长度 (Acc6+Gyro6+Reserved6)
 MAX_NUM_IMUS_V1 = 2             # V1 固定 2 个 IMU (ICM-20948)
 MAX_NUM_IMUS_V2 = 3             # V2 最多 3 个 IMU (LSM6DSV32X)
