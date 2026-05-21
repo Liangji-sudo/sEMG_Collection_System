@@ -1390,10 +1390,13 @@
 
         /* 手势示范 GIF 显示区域 */
         .gesture-gif-container {
+            --gif-content-height: 140px;
             position: absolute;
             bottom: 70px;
             left: 20px;
             width: 180px;
+            min-width: 120px;
+            max-width: 380px;
             background: white;
             border-radius: 12px;
             box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
@@ -1424,7 +1427,7 @@
         .gesture-gif-content {
             position: relative;
             width: 100%;
-            height: 140px;
+            height: var(--gif-content-height);
             background: #f8fafc;
             display: flex;
             align-items: center;
@@ -1432,8 +1435,8 @@
         }
 
         .gesture-gif-image {
-            max-width: 100%;
-            max-height: 100%;
+            width: 100%;
+            height: 100%;
             object-fit: contain;
             display: none;
         }
@@ -1460,6 +1463,28 @@
 
         .gesture-gif-placeholder.hidden {
             display: none;
+        }
+
+        .gif-resize-handle {
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 18px;
+            height: 18px;
+            cursor: nwse-resize;
+            user-select: none;
+            z-index: 10;
+        }
+
+        .gif-resize-handle::after {
+            content: '';
+            position: absolute;
+            bottom: 3px;
+            right: 3px;
+            width: 10px;
+            height: 10px;
+            border-right: 2px solid #d1d5db;
+            border-bottom: 2px solid #d1d5db;
         }
 
         /* 状态指示 */
@@ -5393,6 +5418,7 @@
                                 <span>等待开始</span>
                             </div>
                         </div>
+                        <div class="gif-resize-handle" id="gestureGifResizeHandle" title="拖动缩放"></div>
                     </div>
                 </div>
             </div>

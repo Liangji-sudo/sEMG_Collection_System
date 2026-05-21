@@ -12,13 +12,21 @@
 
     const STORAGE_KEY_PANEL = 'emg_animation_panel_position';
     const STORAGE_KEY_GIF = 'emg_gif_panel_position';
+    const STORAGE_KEY_GIF_SIZE = 'emg_gif_panel_size';
+
+    const GIF_CONTENT_RATIO = 140 / 180;  // 默认内容区高度 / 默认宽度
+    const GIF_MIN_WIDTH = 120;
+    const GIF_HEADER_HEIGHT = 36;  // 近似: 8px padding-top + 14px font + 8px padding-bottom + 间隙
 
     class PositionManager {
         constructor() {
             this._dragging = null;
+            this._resizing = null;
             this._onPointerMove = this._onPointerMove.bind(this);
             this._onPointerUp = this._onPointerUp.bind(this);
             this._onResize = this._onResize.bind(this);
+            this._onResizeMove = this._onResizeMove.bind(this);
+            this._onResizeUp = this._onResizeUp.bind(this);
         }
 
         init() {
@@ -35,7 +43,9 @@
                 this._setupDraggable(this._panel, '[data-drag-handle="animation"]', STORAGE_KEY_PANEL);
             }
             if (this._gif) {
+                this._restoreGifSize();          // 先恢复尺寸，后续位置恢复可以正确 clamp
                 this._setupDraggable(this._gif, '.gesture-gif-header', STORAGE_KEY_GIF);
+                this._setupGifResize();
             }
 
             window.addEventListener('resize', this._onResize);
@@ -98,6 +108,10 @@
         }
 
         _onPointerMove(e) {
+            if (this._resizing) {
+                this._onResizeMove(e);
+                return;
+            }
             if (!this._dragging) return;
 
             const d = this._dragging;
@@ -120,6 +134,10 @@
         }
 
         _onPointerUp(e) {
+            if (this._resizing) {
+                this._onResizeUp(e);
+                return;
+            }
             if (!this._dragging) return;
 
             document.removeEventListener('pointermove', this._onPointerMove);
@@ -209,6 +227,127 @@
             el.style.top = top + 'px';
         }
 
+        // ==================== GIF 等比缩放 ====================
+
+        _setupGifResize() {
+            const handle = document.getElementById('gestureGifResizeHandle');
+            if (!handle) return;
+
+            handle.addEventListener('pointerdown', (e) => {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                e.stopPropagation();
+
+                const gifRect = this._gif.getBoundingClientRect();
+                const containerRect = this._container.getBoundingClientRect();
+
+                this._resizing = {
+                    startX: e.clientX,
+                    startWidth: gifRect.width,
+                    startLeft: !isNaN(parseFloat(this._gif.style.left))
+                        ? parseFloat(this._gif.style.left)
+                        : gifRect.left - containerRect.left,
+                    startTop: !isNaN(parseFloat(this._gif.style.top))
+                        ? parseFloat(this._gif.style.top)
+                        : gifRect.top - containerRect.top
+                };
+
+                // 确保 inline 位置存在
+                this._gif.style.left = this._resizing.startLeft + 'px';
+                this._gif.style.top = this._resizing.startTop + 'px';
+                this._gif.style.bottom = 'auto';
+
+                document.addEventListener('pointermove', this._onResizeMove);
+                document.addEventListener('pointerup', this._onResizeUp);
+            });
+        }
+
+        _onResizeMove(e) {
+            if (!this._resizing) return;
+
+            const r = this._resizing;
+            const dx = e.clientX - r.startX;
+            let newWidth = Math.max(GIF_MIN_WIDTH, r.startWidth + dx);
+
+            const containerRect = this._container.getBoundingClientRect();
+
+            // 双向边界：右边界 + 下边界
+            const maxWidthByRight = containerRect.width - r.startLeft - 5;
+            const maxWidthByBottom = (containerRect.height - r.startTop - GIF_HEADER_HEIGHT - 5) / GIF_CONTENT_RATIO;
+            const maxWidth = Math.max(
+                GIF_MIN_WIDTH,
+                Math.min(380, maxWidthByRight, maxWidthByBottom)
+            );
+            newWidth = Math.max(GIF_MIN_WIDTH, Math.min(newWidth, maxWidth));
+
+            // 如果当前 top 放不下最小宽度，向上推 top
+            const minContentHeight = GIF_CONTENT_RATIO * newWidth;
+            const minTotalHeight = GIF_HEADER_HEIGHT + minContentHeight;
+            const safeTop = Math.max(0, Math.min(r.startTop, containerRect.height - minTotalHeight));
+            r.startTop = safeTop;
+            this._gif.style.top = safeTop + 'px';
+
+            this._applyGifSize(newWidth);
+        }
+
+        _onResizeUp(e) {
+            if (!this._resizing) return;
+
+            document.removeEventListener('pointermove', this._onResizeMove);
+            document.removeEventListener('pointerup', this._onResizeUp);
+
+            this._saveGifSize();
+            this._savePosition(this._gif, STORAGE_KEY_GIF);
+            this._resizing = null;
+        }
+
+        _applyGifSize(width) {
+            if (!this._gif) return;
+
+            const contentHeight = GIF_CONTENT_RATIO * width;
+            this._gif.style.width = width + 'px';
+            this._gif.style.setProperty('--gif-content-height', contentHeight + 'px');
+        }
+
+        _restoreGifSize() {
+            if (!this._gif || !this._container) return;
+
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY_GIF_SIZE);
+                if (!raw) return;
+
+                const data = JSON.parse(raw);
+                if (data.widthRatio == null) return;
+
+                const containerRect = this._container.getBoundingClientRect();
+                if (containerRect.width <= 0) return;
+
+                let width = data.widthRatio * containerRect.width;
+                width = Math.max(GIF_MIN_WIDTH, Math.min(width, containerRect.width - 20));
+                this._applyGifSize(width);
+            } catch (e) {}
+        }
+
+        _saveGifSize() {
+            if (!this._gif || !this._container) return;
+
+            const gifRect = this._gif.getBoundingClientRect();
+            const containerRect = this._container.getBoundingClientRect();
+            if (containerRect.width <= 0) return;
+
+            const data = {
+                widthRatio: gifRect.width / containerRect.width
+            };
+
+            try {
+                localStorage.setItem(STORAGE_KEY_GIF_SIZE, JSON.stringify(data));
+            } catch (e) {
+                console.warn('[PositionManager] GIF 尺寸保存失败:', e);
+            }
+        }
+
+        // ==================== 默认位置 ====================
+
         _setDefaultPosition(el, storageKey) {
             if (!el || !this._container) return;
 
@@ -235,7 +374,10 @@
         }
 
         _onResize() {
-            if (this._dragging) return;
+            if (this._dragging || this._resizing) return;
+
+            // 恢复 GIF 尺寸
+            this._restoreGifSize();
 
             const items = [
                 { el: this._panel, key: STORAGE_KEY_PANEL },
@@ -289,7 +431,7 @@
         }
 
         resetPositions() {
-            [STORAGE_KEY_PANEL, STORAGE_KEY_GIF].forEach(key => {
+            [STORAGE_KEY_PANEL, STORAGE_KEY_GIF, STORAGE_KEY_GIF_SIZE].forEach(key => {
                 try { localStorage.removeItem(key); } catch (e) {}
             });
 
@@ -302,6 +444,8 @@
                 this._gif.style.left = '';
                 this._gif.style.top = '';
                 this._gif.style.bottom = '';
+                this._gif.style.width = '';
+                this._gif.style.setProperty('--gif-content-height', '140px');
             }
 
             // 仅对当前可见的元素立即恢复默认位置；
@@ -314,6 +458,7 @@
                 this._clampToContainer(this._panel);
             }
             if (gifActive) {
+                this._saveGifSize();  // 保存默认尺寸 ratio
                 this._setDefaultPosition(this._gif, STORAGE_KEY_GIF);
                 this._clampToContainer(this._gif);
             }
