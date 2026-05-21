@@ -204,8 +204,9 @@
         init(containerSelector) {
             this.loadConfig();
             
-            this.containerElement = document.querySelector('.animation-area') ||
-                                    document.querySelector(containerSelector) || 
+            this.containerElement = document.getElementById('gestureAnimationViewport') ||
+                                    document.querySelector('.animation-area') ||
+                                    document.querySelector(containerSelector) ||
                                     document.getElementById('gestureDisplay');
             
             if (!this.containerElement) {
@@ -380,6 +381,7 @@
             // 调整Canvas
             this.resizeCanvas();
             this.canvas.style.display = 'block';
+            window.animationPositionManager?.showAnimationPanel();
             this.canvas.focus();
             
             // 绑定滚轮事件
@@ -1035,6 +1037,7 @@
             if (this.canvas) {
                 this.canvas.style.display = 'none';
             }
+            window.animationPositionManager?.hideAnimationPanel();
         }
 
         /**

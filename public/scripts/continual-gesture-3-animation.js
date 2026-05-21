@@ -121,8 +121,9 @@
         init(containerSelector) {
             this.loadConfig();
             
-            this.containerElement = document.querySelector('.animation-area') ||
-                                    document.querySelector(containerSelector) || 
+            this.containerElement = document.getElementById('gestureAnimationViewport') ||
+                                    document.querySelector('.animation-area') ||
+                                    document.querySelector(containerSelector) ||
                                     document.getElementById('gestureDisplay');
             
             if (!this.containerElement) {
@@ -253,6 +254,7 @@
 
             if (this.canvas) {
                 this.canvas.style.display = 'block';
+                window.animationPositionManager?.showAnimationPanel();
                 this.canvas.focus();
                 this.canvas.addEventListener('wheel', this._wheelHandler, { passive: false });
             }
@@ -688,6 +690,7 @@
             if (this.canvas) {
                 this.canvas.style.display = 'none';
             }
+            window.animationPositionManager?.hideAnimationPanel();
         }
 
         destroy() {

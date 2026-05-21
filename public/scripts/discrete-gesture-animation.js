@@ -98,8 +98,9 @@
         init(containerSelector) {
             this.loadConfig();
             
-            this.containerElement = document.querySelector('.animation-area') ||
-                                    document.querySelector(containerSelector) || 
+            this.containerElement = document.getElementById('gestureAnimationViewport') ||
+                                    document.querySelector('.animation-area') ||
+                                    document.querySelector(containerSelector) ||
                                     document.getElementById('gestureDisplay');
             
             if (!this.containerElement) {
@@ -411,7 +412,8 @@
             // 调整Canvas
             this.resizeCanvas();
             this.canvas.style.display = 'block';
-            
+            window.animationPositionManager?.showAnimationPanel();
+
             // 创建第一个提示
             this.createNextPrompt();
             
@@ -993,6 +995,7 @@
             if (this.canvas) {
                 this.canvas.style.display = 'none';
             }
+            window.animationPositionManager?.hideAnimationPanel();
         }
 
         /**
@@ -1116,6 +1119,7 @@
             // 调整Canvas
             this.resizeCanvas();
             this.canvas.style.display = 'block';
+            window.animationPositionManager?.showAnimationPanel();
 
             // 创建初始的多个提示（乱序模式下同时显示多个）
             this.createInitialShufflePrompts();
@@ -1308,6 +1312,7 @@
             if (this.canvas) {
                 this.canvas.style.display = 'none';
             }
+            window.animationPositionManager?.hideAnimationPanel();
         }
     }
 

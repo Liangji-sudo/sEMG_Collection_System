@@ -1328,6 +1328,66 @@
             color: #6b7280;
         }
 
+        /* 可拖拽动画浮层 */
+        .draggable-animation-panel {
+            position: absolute;
+            width: 70%;
+            height: 55%;
+            min-width: 300px;
+            min-height: 200px;
+            background: rgba(248, 250, 252, 0.98);
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+            overflow: hidden;
+            z-index: 60;
+            display: none;
+            flex-direction: column;
+        }
+
+        .draggable-animation-panel.active {
+            display: flex;
+        }
+
+        .drag-handle {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 22px;
+            min-height: 22px;
+            background: #f1f5f9;
+            border-bottom: 1px solid #e2e8f0;
+            color: #94a3b8;
+            font-size: 12px;
+            cursor: grab;
+            user-select: none;
+            flex-shrink: 0;
+        }
+
+        .drag-handle:active {
+            cursor: grabbing;
+        }
+
+        .drag-handle i {
+            font-size: 10px;
+        }
+
+        .gesture-animation-viewport {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+            background: transparent;
+        }
+
+        /* GIF 容器拖拽手柄样式增强 */
+        .gesture-gif-container .gesture-gif-header {
+            cursor: grab;
+            user-select: none;
+        }
+
+        .gesture-gif-container .gesture-gif-header:active {
+            cursor: grabbing;
+        }
+
         /* 手势示范 GIF 显示区域 */
         .gesture-gif-container {
             position: absolute;
@@ -5268,6 +5328,14 @@
                 </div>
 
                 <div class="animation-area">
+                    <!-- 可拖拽动画浮层 -->
+                    <div class="draggable-animation-panel" id="gestureAnimationPanel">
+                        <div class="drag-handle" data-drag-handle="animation">
+                            <i class="fas fa-grip-lines"></i>
+                        </div>
+                        <div class="gesture-animation-viewport" id="gestureAnimationViewport"></div>
+                    </div>
+
                     <!-- 状态指示器 -->
                     <div class="status-indicator">
                         <div class="status-dot idle" id="statusDot"></div>
@@ -5475,6 +5543,7 @@
     <script src="scripts/discrete-gesture-animation.js"></script>
     <script src="scripts/continual-gesture-1-animation.js"></script>
     <script src="scripts/continual-gesture-2-animation.js"></script>
+    <script src="scripts/continual-gesture-3-animation.js"></script>
 
     <script src="scripts/animation-input-interface.js"></script>
     <script src="scripts/calibration-guide-animation.js"></script>
@@ -5484,6 +5553,8 @@
     -->
     <!-- 动画控制器（开场动画、stage动画等） -->
     <script src="scripts/animation-controller.js"></script>
+    <!-- 动画浮层拖拽管理 -->
+    <script src="scripts/animation-position-manager.js"></script>
     
     <!-- 采集选择流程控制器 -->
     <script defer src="scripts/collection-selector.js"></script>
