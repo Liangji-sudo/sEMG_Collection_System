@@ -113,7 +113,8 @@
                 gestureDisplayTime: 2.0,       // 手势提示显示时间（秒）
                 sustainedDuration: 2.0,        // 持续性手势的持续时间（秒）
                 shuffleInterval: 1.0,          // 乱序模式手势间隔（秒）
-                scrollSpeed: 2                 // 【新增】整体移动速度（px/帧）
+                scrollSpeed: 2,                // 【新增】整体移动速度（px/帧）
+                orderedShuffleRatio: 0.6       // 乱序中顺序占比（0.6 = 前60%顺序，后40%乱序）
             },
             // 连续手势1采集参数（同心圆引导动画）
             continual_gesture_1: {
@@ -312,7 +313,8 @@
                             intervalBetweenRepeat: oldExec.intervalBetweenRepeat || 1.0,
                             restBetweenGestures: oldExec.restBetweenGestures || 30.0,
                             preparationTime: oldExec.preparationTime || 3.0,
-                            gestureDisplayTime: oldExec.gestureDisplayTime || 2.0
+                            gestureDisplayTime: oldExec.gestureDisplayTime || 2.0,
+                            orderedShuffleRatio: 0.6
                         },
                         continual_gesture_1: {
                             trialsPerStage: 5,
@@ -372,6 +374,13 @@
                         this.currentTemplate.execution[taskId] = JSON.parse(JSON.stringify(defaultExec[taskId]));
                     }
                 });
+
+                // 确保 discrete_gesture 有 orderedShuffleRatio（旧模板迁移后补字段）
+                if (this.currentTemplate.execution.discrete_gesture &&
+                    this.currentTemplate.execution.discrete_gesture.orderedShuffleRatio === undefined) {
+                    this.currentTemplate.execution.discrete_gesture.orderedShuffleRatio = 0.6;
+                    console.log('[TemplateConfig] 补充缺失的 orderedShuffleRatio = 0.6');
+                }
             }
             
             // 检查并补充 gestures
@@ -1633,6 +1642,13 @@
                                    value="${taskExec.scrollSpeed || 2}" min="1" max="10" step="0.5">
                             <span class="param-unit">px/帧</span>
                             <span class="param-hint">（动画滚动速度，与时间配合计算距离）</span>
+                        </div>
+                        <div class="config-param-item config-param-shuffle">
+                            <label><i class="fa fa-chart-pie"></i> 乱序中顺序占比</label>
+                            <input type="number" data-task="${task.id}" data-param="orderedShuffleRatio"
+                                   value="${taskExec.orderedShuffleRatio !== undefined ? taskExec.orderedShuffleRatio : 0.6}" min="0" max="1" step="0.05">
+                            <span class="param-unit">比例</span>
+                            <span class="param-hint">（0.6 = 前60%按顺序采集，剩余进入乱序。0=全部乱序，1=全部顺序）</span>
                         </div>
                     `;
                 } else if (task.id === 'continual_gesture_1' || task.id === 'continual_gesture_2') {

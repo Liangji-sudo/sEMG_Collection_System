@@ -131,11 +131,14 @@
                 },
 
                 execution: {
-                    repeatPerGesture: 5,
-                    intervalBetweenRepeat: 1.0,
-                    restBetweenGestures: 30.0,
-                    preparationTime: 3.0,
-                    gestureDisplayTime: 2.0
+                    discrete_gesture: {
+                        repeatPerGesture: 5,
+                        intervalBetweenRepeat: 1.0,
+                        restBetweenGestures: 30.0,
+                        preparationTime: 3.0,
+                        gestureDisplayTime: 2.0,
+                        orderedShuffleRatio: 0.6
+                    }
                 }
             };
         }

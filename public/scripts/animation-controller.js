@@ -38,7 +38,8 @@
             this.animationModules = {
                 'discrete_gesture': () => window.discreteGestureAnimation,
                 'continual_gesture_1': () => window.continualGesture1Animation,
-                'continual_gesture_2': () => window.continualGesture2Animation
+                'continual_gesture_2': () => window.continualGesture2Animation,
+                'continual_gesture_3': () => window.continualGesture3Animation
             };
         }
 
