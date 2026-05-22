@@ -756,42 +756,95 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             const shuffleGestures = currentStage?.shuffleGestures || false;
 
             if (shuffleGestures && this.currentTaskId === 'discrete_gesture') {
-                // 乱序模式：生成完整的手势实例序列并打乱
-                // 【修改】测试模式下每个手势只出现2次
+                // 部分顺序 + 部分乱序模式
                 const repeatCount = this._isTestMode ? 2 : (this.currentExecutionParams?.repeatPerGesture || 5);
-                const instanceSequence = [];
 
-                // 为每个手势生成N个实例
-                baseGestures.forEach(gesture => {
-                    for (let i = 0; i < repeatCount; i++) {
-                        // 创建手势实例的浅拷贝，添加实例索引标记
-                        instanceSequence.push({
-                            ...gesture,
-                            _instanceIndex: i,  // 标记这是该手势的第几个实例
-                            _shuffled: true     // 标记这是乱序模式的实例
-                        });
-                    }
-                });
-
-                // Fisher-Yates 洗牌算法打乱顺序
-                for (let i = instanceSequence.length - 1; i > 0; i--) {
-                    const j = Math.floor(Math.random() * (i + 1));
-                    [instanceSequence[i], instanceSequence[j]] = [instanceSequence[j], instanceSequence[i]];
+                // 读取 orderedShuffleRatio 并做容错
+                let orderedRatio = this.currentExecutionParams?.orderedShuffleRatio;
+                if (typeof orderedRatio !== 'number' || isNaN(orderedRatio)) {
+                    orderedRatio = 0.6;
                 }
+                orderedRatio = Math.max(0, Math.min(1, orderedRatio));
 
-                this.gestures = instanceSequence;
-                this._shuffleMode = true;  // 标记当前为乱序模式
+                const result = this.buildPartiallyShuffledGestureSequence(baseGestures, repeatCount, orderedRatio);
 
-                console.log(`[Collection] ★ 乱序模式已启用 ★`);
+                this.gestures = result.sequence;
+                this._shuffleMode = true;
+
+                console.log(`[Collection] ★ 部分乱序模式已启用 ★`);
                 console.log(`[Collection] 测试模式: ${this._isTestMode ? '是' : '否'}`);
-                console.log(`[Collection] 原始手势: ${baseGestures.length}个, 每个重复${repeatCount}次`);
-                console.log(`[Collection] 生成乱序序列: ${instanceSequence.length}个实例`);
-                console.log(`[Collection] 序列预览: ${instanceSequence.slice(0, 10).map(g => g.name).join(', ')}...`);
+                console.log(`[Collection] 原始手势: ${result.baseCount}个, 每个重复${result.repeatCount}次`);
+                console.log(`[Collection] orderedShuffleRatio: ${result.orderedRatio}`);
+                console.log(`[Collection] orderedRepeat: ${result.orderedRepeat}, shuffledRepeat: ${result.shuffledRepeat}`);
+                console.log(`[Collection] orderedPart: ${result.orderedCount}个, shuffledPart: ${result.shuffledCount}个`);
+                console.log(`[Collection] 序列总长度: ${result.totalLength}个`);
             } else {
                 // 正常模式
                 this.gestures = baseGestures;
                 this._shuffleMode = false;
             }
+        }
+
+        /**
+         * 构建"部分顺序 + 部分乱序"的手势实例序列
+         *
+         * 规则：按 orderedRatio 控制顺序段占比（默认 0.6），剩余进入 Fisher-Yates 打乱。
+         *
+         * @param {Array} baseGestures - Stage 手势库（已按顺序排列）
+         * @param {number} repeatCount - 每个手势总重复次数
+         * @param {number} orderedRatio - 顺序段占比，默认 0.6
+         * @returns {{ sequence: Array, baseCount: number, repeatCount: number,
+         *             orderedRatio: number, orderedRepeat: number, shuffledRepeat: number,
+         *             orderedCount: number, shuffledCount: number, totalLength: number }}
+         */
+        buildPartiallyShuffledGestureSequence(baseGestures, repeatCount, orderedRatio = 0.6) {
+            const orderedRepeat = Math.floor(repeatCount * orderedRatio);
+            const shuffledRepeat = repeatCount - orderedRepeat;
+
+            const orderedPart = [];
+            const shuffledPart = [];
+
+            baseGestures.forEach((gesture, gestureIndex) => {
+                for (let i = 0; i < orderedRepeat; i++) {
+                    orderedPart.push({
+                        ...gesture,
+                        _shuffled: true,
+                        _shuffleSegment: 'ordered',
+                        _baseGestureIndex: gestureIndex,
+                        _repeatIndex: i + 1,
+                        _repeatTotal: repeatCount
+                    });
+                }
+
+                for (let i = 0; i < shuffledRepeat; i++) {
+                    shuffledPart.push({
+                        ...gesture,
+                        _shuffled: true,
+                        _shuffleSegment: 'shuffled',
+                        _baseGestureIndex: gestureIndex,
+                        _repeatIndex: orderedRepeat + i + 1,
+                        _repeatTotal: repeatCount
+                    });
+                }
+            });
+
+            // Fisher-Yates 仅打乱 shuffledPart
+            for (let i = shuffledPart.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [shuffledPart[i], shuffledPart[j]] = [shuffledPart[j], shuffledPart[i]];
+            }
+
+            return {
+                sequence: orderedPart.concat(shuffledPart),
+                baseCount: baseGestures.length,
+                repeatCount,
+                orderedRatio,
+                orderedRepeat,
+                shuffledRepeat,
+                orderedCount: orderedPart.length,
+                shuffledCount: shuffledPart.length,
+                totalLength: orderedPart.length + shuffledPart.length
+            };
         }
 
         goToNextStage() {
@@ -2040,10 +2093,44 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             const progressFill = document.getElementById('progressFill');
             const progressText = document.getElementById('progressText');
+            const phaseLabel = document.getElementById('shufflePhaseLabel');
 
             if (progressFill) progressFill.style.width = `${percent}%`;
             if (progressText) {
                 progressText.textContent = `${current} / ${total} 手势`;
+            }
+
+            // 乱序模式：显示阶段标签 + 变色
+            if (phaseLabel) {
+                if (this._shuffleMode && this._isRunning && current < total) {
+                    const gesture = this.gestures[current];
+                    const segment = gesture?._shuffleSegment;
+                    if (segment === 'ordered') {
+                        phaseLabel.textContent = '顺序';
+                        phaseLabel.className = 'shuffle-phase-label visible phase-ordered';
+                        if (progressFill) {
+                            progressFill.style.background = 'linear-gradient(90deg, #0d9488 0%, #14b8a6 100%)';
+                        }
+                    } else if (segment === 'shuffled') {
+                        phaseLabel.textContent = '乱序';
+                        phaseLabel.className = 'shuffle-phase-label visible phase-shuffled';
+                        if (progressFill) {
+                            progressFill.style.background = 'linear-gradient(90deg, #ef4444 0%, #dc2626 100%)';
+                        }
+                    } else {
+                        phaseLabel.className = 'shuffle-phase-label';
+                        phaseLabel.textContent = '';
+                        if (progressFill) {
+                            progressFill.style.background = '';
+                        }
+                    }
+                } else {
+                    phaseLabel.className = 'shuffle-phase-label';
+                    phaseLabel.textContent = '';
+                    if (progressFill) {
+                        progressFill.style.background = '';
+                    }
+                }
             }
         }
 
@@ -2061,8 +2148,18 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 gestureInstructionEl.textContent = `当前Stage: ${stageName}，点击开始按钮开始采集`;
             }
             if (gestureIcon?.parentElement) gestureIcon.parentElement.style.display = '';
-            if (progressFill) progressFill.style.width = '0%';
+            if (progressFill) {
+                progressFill.style.width = '0%';
+                progressFill.style.background = '';
+            }
             if (progressText) progressText.textContent = `0 / ${this.gestures.length} 手势`;
+
+            const phaseLabel = document.getElementById('shufflePhaseLabel');
+            if (phaseLabel) {
+                phaseLabel.className = 'shuffle-phase-label';
+                phaseLabel.textContent = '';
+            }
+
             if (countdownEl) countdownEl.style.display = 'none';
 
             this.updateStatus('准备就绪');

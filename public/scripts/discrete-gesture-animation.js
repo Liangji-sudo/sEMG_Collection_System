@@ -942,37 +942,67 @@
         drawProgress() {
             const ctx = this.ctx;
             const total = this.promptSequence.length;
-            
+
             ctx.save();
-            
+
             // 右下角显示进度
             ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
             ctx.font = '700 18px ui-sans-serif, system-ui';
             ctx.textAlign = 'right';
             ctx.textBaseline = 'bottom';
             ctx.fillText(
-                `${this.executedCount} / ${total}`, 
-                this.config.canvasWidth - 20, 
+                `${this.executedCount} / ${total}`,
+                this.config.canvasWidth - 20,
                 this.config.canvasHeight - 20
             );
-            
+
             // 进度条
             const barWidth = 150;
             const barHeight = 8;
             const barX = this.config.canvasWidth - 20 - barWidth;
             const barY = this.config.canvasHeight - 45;
             const progress = total > 0 ? this.executedCount / total : 0;
-            
+
+            // 乱序模式：读取当前 prompt 的 _shuffleSegment 决定颜色和标签
+            let fillColor = '#22c55e';
+            let phaseLabel = null;
+
+            if (this._shuffleModeActive && total > 0 && this.executedCount < total) {
+                const index = Math.min(this.executedCount, total - 1);
+                const promptName = this.promptSequence[index];
+                const gesture = this.promptLibrary[promptName]?.originalGesture;
+                const segment = gesture?._shuffleSegment;
+
+                if (segment === 'ordered') {
+                    fillColor = '#0d9488';
+                    phaseLabel = '顺序';
+                } else if (segment === 'shuffled') {
+                    fillColor = '#ef4444';
+                    phaseLabel = '乱序';
+                }
+            }
+
+            // 阶段标签（进度条左侧）
+            if (phaseLabel) {
+                ctx.fillStyle = fillColor;
+                ctx.font = '700 16px ui-sans-serif, system-ui';
+                ctx.textAlign = 'right';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(phaseLabel, barX - 12, barY + barHeight / 2);
+            }
+
+            // 进度条背景
             ctx.fillStyle = '#e5e7eb';
             ctx.beginPath();
             ctx.roundRect(barX, barY, barWidth, barHeight, 4);
             ctx.fill();
-            
-            ctx.fillStyle = '#22c55e';
+
+            // 进度条填充
+            ctx.fillStyle = fillColor;
             ctx.beginPath();
             ctx.roundRect(barX, barY, barWidth * progress, barHeight, 4);
             ctx.fill();
-            
+
             ctx.restore();
         }
 

@@ -1321,6 +1321,35 @@
             width: 0%;
         }
 
+        .shuffle-phase-label {
+            display: none;
+            font-size: 13px;
+            font-weight: 600;
+            white-space: nowrap;
+            padding-right: 8px;
+        }
+
+        .shuffle-phase-label.visible {
+            display: inline;
+        }
+
+        .shuffle-phase-label.phase-ordered {
+            color: #0d9488;
+        }
+
+        .shuffle-phase-label.phase-shuffled {
+            color: #ef4444;
+        }
+
+        .progress-row {
+            display: flex;
+            align-items: center;
+        }
+
+        .progress-row .progress-bar {
+            flex: 1;
+        }
+
         .progress-text {
             text-align: center;
             margin-top: 8px;
@@ -5399,8 +5428,11 @@
 
                     <!-- 进度条 -->
                     <div class="progress-container">
-                        <div class="progress-bar">
-                            <div class="progress-fill" id="progressFill"></div>
+                        <div class="progress-row">
+                            <span id="shufflePhaseLabel" class="shuffle-phase-label"></span>
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="progressFill"></div>
+                            </div>
                         </div>
                         <div class="progress-text" id="progressText">0 / 0 完成</div>
                     </div>

@@ -448,11 +448,15 @@ public/
 
 ### 7.6 乱序模式（Shuffle Mode）
 
-- 由 Stage 配置的 `shuffleGestures: true` 启用
-- Fisher-Yates 洗牌算法打乱手势实例序列
+- 由 Stage 配置的 `shuffleGestures: true` 启用（仅离散手势采集）
+- **部分顺序 + 部分乱序**：顺序段占比由执行参数 `orderedShuffleRatio` 控制（默认 0.6），剩余进入 Fisher-Yates 打乱
+- 例如 10 个手势每个 100 次、ratio=0.6：顺序段每个手势 60 次按序执行，乱序段每个手势 40 次共 400 个实例打乱执行
 - 每个实例执行 1 次（repeatPerGesture 用于生成实例数量）
 - 无手势间休息，缩短间隔时间
 - 隐藏手势列表显示
+- 采集窗口进度条显示"顺序"/"乱序"阶段标签并变色（蓝绿/红）
+- `repeatCount=1` 时 `orderedRepeat=0`，全部进入乱序段
+- `orderedShuffleRatio` 可在后台 执行参数 → 离散手势 中配置（0~1，step=0.05）
 
 ---
 
