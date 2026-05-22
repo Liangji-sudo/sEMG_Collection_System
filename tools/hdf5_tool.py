@@ -308,6 +308,7 @@ class StatisticsPanel(QFrame):
             ('imu2b_ble', 'IMU2B BLE'), ('imu2b_100hz', 'IMU2B 100Hz'),
             # V1/V2 通用IMU数据集（可变IMU数量）
             ('imu1_all_ble', 'IMU1 All BLE'), ('imu2_all_ble', 'IMU2 All BLE'),
+            ('imu1_all_100hz', 'IMU1 All 100Hz'), ('imu2_all_100hz', 'IMU2 All 100Hz'),
             # V2 设备版本元数据
             ('imu1_hw_version', 'IMU1 硬件版本'), ('imu2_hw_version', 'IMU2 硬件版本'),
             ('imu1_num_imus', 'IMU1 IMU数量'), ('imu2_num_imus', 'IMU2 IMU数量'),
@@ -477,7 +478,8 @@ class StatisticsPanel(QFrame):
                         self.labels[key].setText('-')
 
                 # V1/V2 通用IMU数据集形状
-                for key in ['imu1_all_ble', 'imu2_all_ble']:
+                for key in ['imu1_all_ble', 'imu2_all_ble',
+                           'imu1_all_100hz', 'imu2_all_100hz']:
                     if key in f:
                         self.labels[key].setText(str(f[key].shape))
                     else:

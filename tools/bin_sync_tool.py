@@ -21,7 +21,9 @@ bin_sync_tool.py - EMG/IMU数据同步工具
 
 bin文件格式（来自ESP32固件）：
   EMG: 文件头126字节 + 每帧52字节（4字节帧号 + 48字节数据）
-  IMU: 文件头126字节 + 每帧40字节（4字节帧号 + 36字节数据）
+  IMU V1: 文件头126字节 + 每帧40字节（4字节帧号 + 36字节数据，2 IMU）
+  IMU V2: 文件头126字节 + 每帧(4+N*18)字节（N=1/2/3个IMU），可选36字节Footer
+         V2 每个IMU仅Acc+Gyro（6轴），无Mag；Acc/Gyro小端，Accel量程±32g
 
 采样率关系：
   EMG: SD卡2000Hz, BLE 250Hz (降采样比8:1)
@@ -43,14 +45,26 @@ from datetime import datetime
 EMG_MAGIC = 0xAABBCCDD
 IMU_MAGIC = 0xBBCCDDEE
 
+# V2 Footer Magic
+FOOTER_MAGIC_EMG = 0xDDCCBBAA
+FOOTER_MAGIC_IMU = 0xEEDDCCBB
+
 # 文件头大小
 HEADER_SIZE = 126
+
+# Footer大小 (V4.1+)
+FOOTER_SIZE = 36
 
 # EMG帧大小：4字节帧号 + 16通道 * 3字节 = 52字节
 EMG_FRAME_SIZE = 4 + 16 * 3
 
-# IMU帧大小：4字节帧号 + 36字节数据 = 40字节
+# IMU帧大小（V1固定）：4字节帧号 + 36字节数据 = 40字节
 IMU_FRAME_SIZE = 4 + 36
+
+# IMU V2 参数
+BYTES_PER_IMU = 18       # 单个IMU芯片数据字节数
+AXES_PER_IMU = 6         # 每IMU轴数（Acc3 + Gyro3，无Mag）
+MAX_NUM_IMUS = 3         # V2最大IMU数量
 
 # 降采样比例（2kHz -> 250Hz）
 DOWNSAMPLE_RATIO = 8
@@ -66,14 +80,56 @@ BASE_LSB_24BIT = 0.476837
 HARDWARE_FRONTEND_GAIN = 10  # 供应商固件使用10
 
 # IMU转换系数
-SCALE_ACCEL = 16.0 / 32768.0
-SCALE_GYRO = 2000.0 / 32768.0
-SCALE_MAG = 0.15
+SCALE_ACCEL = 16.0 / 32768.0      # V1: ±16g
+SCALE_ACCEL_V2 = 32.0 / 32768.0   # V2: ±32g
+SCALE_GYRO = 2000.0 / 32768.0     # ±2000dps (V1与V2相同)
+SCALE_MAG = 0.15                  # V1 only
+
+# V1/V2 通用 IMU 100Hz dtype（与 storage_server.py IMU_ALL_BLE_DTYPE 对齐，sd_frame_id 替代 frame_id）
+IMU_ALL_100HZ_DTYPE = np.dtype([
+    ("imu_index", "<u1"),    # IMU 索引 (0-based)
+    ("acc", "<f4", (3,)),    # 加速度计 [ax, ay, az]
+    ("gyr", "<f4", (3,)),   # 陀螺仪 [gx, gy, gz]
+    ("has_mag", "<u1"),      # 是否有磁力计 (V1=1, V2=0)
+    ("mag", "<f4", (3,)),   # 磁力计 [mx, my, mz] (V2 填充 NaN)
+    ("sd_frame_id", "<u4"), # IMU SD卡帧号
+    ("time", "<f8")         # 时间戳
+])
 
 
 def log(message):
     """打印日志"""
     print(f"[bin_sync_tool] {message}")
+
+
+# ===================== Footer 检测 =====================
+
+def _detect_footer(file_handle, file_size, footer_magic):
+    """
+    检测 bin 文件末尾是否存在 Footer (V4.1+)。
+
+    Returns:
+        (has_footer: bool, footer_info: dict | None)
+        footer_info 包含: total_frames, sd_drop, imu_drop, ble_drop, stop_reason
+    """
+    if file_size < HEADER_SIZE + FOOTER_SIZE:
+        return False, None
+    saved_pos = file_handle.tell()
+    try:
+        file_handle.seek(file_size - FOOTER_SIZE)
+        magic = struct.unpack('<I', file_handle.read(4))[0]
+        if magic != footer_magic:
+            return False, None
+        ft_total, ft_sd, ft_imu, ft_ble = struct.unpack('<4I', file_handle.read(16))
+        ft_reason = struct.unpack('B', file_handle.read(1))[0]
+        reason_map = {0: '无', 1: '运行中', 2: '用户停止', 3: 'BLE断连', 4: '远程关机'}
+        return True, {
+            'total_frames': ft_total, 'sd_drop': ft_sd,
+            'imu_drop': ft_imu, 'ble_drop': ft_ble,
+            'stop_reason': reason_map.get(ft_reason, f'未知({ft_reason})')
+        }
+    finally:
+        file_handle.seek(saved_pos)
 
 
 # ===================== bin文件解析 =====================
@@ -125,12 +181,26 @@ class EMGBinParser:
             frame_payload = 16 * bytes_per_sample
             frame_size = 4 + frame_payload
 
+            # 检测 V4.1+ Footer，确定数据区结束位置
+            has_footer, footer_info = _detect_footer(f, file_size, FOOTER_MAGIC_EMG)
+            if has_footer:
+                self._has_footer = True
+                self._footer_info = footer_info
+                log(f"检测到 EMG Footer: 固件帧数={footer_info['total_frames']}, "
+                    f"SD丢包={footer_info['sd_drop']}, IMU丢包={footer_info['imu_drop']}, "
+                    f"BLE丢包={footer_info['ble_drop']}, 停止原因={footer_info['stop_reason']}")
+                data_end = file_size - FOOTER_SIZE
+            else:
+                self._has_footer = False
+                self._footer_info = None
+                data_end = file_size
+
             log(f"EMG文件信息: 采样率={sample_rate}Hz, 增益={self.gain}, 位深={bit_depth}bit")
             log(f"时间戳: {self.timestamp_str}")
             log(f"LSB系数: {self.lsb_uv:.6f} μV/LSB (用于转换)")
 
-            # 读取所有帧
-            while True:
+            # 读取所有帧（不超过 data_end）
+            while f.tell() + frame_size <= data_end:
                 chunk = f.read(frame_size)
                 if len(chunk) < frame_size:
                     break
@@ -167,63 +237,322 @@ class EMGBinParser:
 
 
 class IMUBinParser:
-    """IMU bin文件解析器"""
+    """IMU bin文件解析器 — 自动检测 V1/V2 并适配解析
 
-    def __init__(self, bin_path):
+    统一接口：
+      - parser.parse() 后 .frames 为 {frame_id: [imu_dict, ...]}，列表长度 = num_imus
+      - 每个 imu_dict 含 acc/gyr/mag/has_mag/index 键
+      - .parser_version: 1 或 2
+      - .num_imus: 实际 IMU 数量
+      - .has_mag: V1=True, V2=False
+    """
+
+    def __init__(self, bin_path, h5_file=None, device_id=None):
         self.bin_path = bin_path
+        self.h5_file = h5_file
+        self.device_id = device_id
         self.sample_rate = 0
         self.timestamp_str = ""
-        self.frames = {}  # {frame_id: (imu1_data, imu2_data)}
+        self.frames = {}       # {frame_id: [imu_dict, ...]}  统一为 list
         self.frame_count = 0
+        self.parser_version = 1
+        self.num_imus = 2
+        self.has_mag = True
+        self._detected_footer = False
+
+    # ------------------------------------------------------------------
+    # 版本检测
+    # ------------------------------------------------------------------
+
+    def _detect_version(self, file_size):
+        """
+        保守检测策略：先收集所有候选帧长，再按优先级决策。
+
+        V1 40字节帧是历史基线。40的倍数可能恰好也被 58/22 整除
+        （例如 40×29=1160 可被 58 整除），所以不能按顺序抢先匹配。
+        策略：先收集，后决策。
+        """
+        # --- 1. 从 H5 属性读取元数据 ---
+        h5_num_imus = None
+        h5_hw_version = None
+        h5_parser_ver = None
+        if self.h5_file and self.device_id:
+            try:
+                with h5py.File(self.h5_file, 'r') as hf:
+                    attr_name = f'imu{self.device_id}_parser_version'
+                    v = hf.attrs.get(attr_name, None)
+                    if isinstance(v, (int, np.integer)):
+                        h5_parser_ver = int(v)
+
+                    attr_name = f'imu{self.device_id}_num_imus'
+                    v = hf.attrs.get(attr_name, None)
+                    if v is not None:
+                        h5_num_imus = int(v) if not isinstance(v, bytes) else int(v.decode('utf-8'))
+
+                    attr_name = f'imu{self.device_id}_hw_version'
+                    v = hf.attrs.get(attr_name, None)
+                    if v is not None:
+                        h5_hw_version = str(v) if isinstance(v, bytes) else str(v)
+            except Exception:
+                pass
+
+        # H5 显式 parser_version=1 → 直接 V1（最高优先级）
+        if h5_parser_ver == 1:
+            log("  IMU版本检测: H5 显式 parser_version=1, 按 V1 解析")
+            return 1, 2
+
+        # --- 2. 检测 V2 Footer，读取 total_frames 用于交叉校验 ---
+        data_size = file_size - HEADER_SIZE
+
+        has_v2_footer = False
+        footer_total_frames = None
+        effective_size = data_size
+        if data_size >= FOOTER_SIZE:
+            try:
+                with open(self.bin_path, 'rb') as tmp_f:
+                    tmp_f.seek(file_size - FOOTER_SIZE)
+                    fb = tmp_f.read(20)  # magic(4) + 4*uint32(16)
+                    footer_magic = struct.unpack('<I', fb[0:4])[0]
+                if footer_magic == FOOTER_MAGIC_IMU:
+                    has_v2_footer = True
+                    self._detected_footer = True
+                    effective_size = data_size - FOOTER_SIZE
+                    ft_total, ft_sd, ft_imu, ft_ble = struct.unpack('<4I', fb[4:20])
+                    footer_total_frames = ft_total
+                    log(f"  检测到 V2 IMU Footer (0xEEDDCCBB), 固件帧数={ft_total}")
+            except Exception:
+                pass
+
+        # --- 3. 收集所有候选帧长 ---
+        v1_candidate   = effective_size > 0 and effective_size % 40 == 0
+        v2_1_candidate = effective_size > 0 and effective_size % 22 == 0
+        v2_2_candidate = effective_size > 0 and effective_size % 40 == 0
+        v2_3_candidate = effective_size > 0 and effective_size % 58 == 0
+
+        FRAME_SIZES = {1: 22, 2: 40, 3: 58}
+        CANDIDATES  = {1: v2_1_candidate, 2: v2_2_candidate, 3: v2_3_candidate}
+
+        def _pick_v2_num_imus(prefer_list=(3, 2, 1), footer_total=None):
+            """
+            从 V2 候选中选择 num_imus。
+            若 footer_total 已知，用它做交叉校验：
+            effective_size // frame_size 必须 == footer_total 才接受该候选。
+            """
+            for n in prefer_list:
+                if not CANDIDATES[n]:
+                    continue
+                if footer_total is not None:
+                    inferred = effective_size // FRAME_SIZES[n]
+                    if inferred != footer_total:
+                        continue  # footer 帧数不匹配，跳过
+                return n
+            return None
+
+        # --- 4. H5 明确 V2（parser_version=2 或 hw_version 含 V2） ---
+        h5_is_v2 = (h5_parser_ver == 2) or \
+                   (h5_hw_version and 'V2' in h5_hw_version.upper())
+
+        if h5_is_v2:
+            source = "parser_version=2" if h5_parser_ver == 2 else f"hw_version={h5_hw_version}"
+            if h5_num_imus and 1 <= h5_num_imus <= MAX_NUM_IMUS:
+                log(f"  IMU版本检测: H5 明确 V2 ({source}), num_imus={h5_num_imus}")
+                return 2, h5_num_imus
+            # 有 footer 时用交叉校验推断
+            if footer_total_frames is not None:
+                n = _pick_v2_num_imus(footer_total=footer_total_frames)
+                if n is not None:
+                    log(f"  IMU版本检测: H5 明确 V2 ({source}), footer校验推断 num_imus={n} "
+                        f"(帧长={FRAME_SIZES[n]}字节)")
+                    return 2, n
+            # 无 footer / footer 不匹配: 统计唯一 V2 候选，多候选报错
+            v2_cands = [n for n in (1, 2, 3) if CANDIDATES[n]]
+            if len(v2_cands) == 1:
+                n = v2_cands[0]
+                log(f"  IMU版本检测: H5 明确 V2 ({source}), 唯一候选 num_imus={n} "
+                    f"(帧长={FRAME_SIZES[n]}字节)")
+                return 2, n
+            if len(v2_cands) > 1:
+                raise ValueError(
+                    f"无法确定 imu{self.device_id}_num_imus: H5 已标记为 V2 ({source}), "
+                    f"但存在多个候选 num_imus={v2_cands} 且无 Footer 可交叉校验。"
+                    f"请在 H5 属性中设置 imu{self.device_id}_num_imus, "
+                    f"或使用带 Footer 的 V2 bin 文件。"
+                )
+            # 无候选
+            raise ValueError(
+                f"H5 已标记为 V2 ({source}), 但数据区 {effective_size} 字节"
+                f"无法被任何 V2 帧长 (22/40/58) 整除。"
+            )
+
+        # --- 5. 有 V2 Footer → V2 (用 footer total_frames 交叉校验) ---
+        if has_v2_footer:
+            n = _pick_v2_num_imus(footer_total=footer_total_frames)
+            if n is not None:
+                log(f"  IMU版本检测: V2 Footer + 帧长={FRAME_SIZES[n]}字节 "
+                    f"(footer校验通过, total_frames={footer_total_frames}) "
+                    f"→ V2, {n} IMU(s)")
+                return 2, n
+            log(f"  警告: 检测到 V2 Footer (total_frames={footer_total_frames}) "
+                f"但帧长无法匹配，回退 V1")
+            return 1, 2
+
+        # --- 6. V1 40字节是历史基线：只要 V1 候选成立就默认 V1 ---
+        if v1_candidate:
+            log("  IMU版本检测: 帧长=40字节，无 V2 元数据，默认按 V1 解析")
+            log("    提示: 若实际为 V2 腕带，请在 H5 属性中设置 imu{dev}_parser_version=2")
+            return 1, 2
+
+        # --- 7. V1 候选不成立时，只有唯一 V2 候选才自动判 V2 ---
+        if v2_3_candidate and not v2_1_candidate:
+            log("  IMU版本检测: 帧长=58字节 (唯一) → V2, 3 IMU")
+            return 2, 3
+        if v2_1_candidate and not v2_3_candidate:
+            log("  IMU版本检测: 帧长=22字节 (唯一) → V2, 1 IMU")
+            return 2, 1
+
+        # --- 8. 兜底 ---
+        log("  IMU版本检测: 无法唯一确定格式，回退 V1 尝试解析")
+        return 1, 2
+
+    # ------------------------------------------------------------------
+    # 统一解析入口
+    # ------------------------------------------------------------------
 
     def parse(self):
-        """解析bin文件"""
+        """解析 IMU bin 文件，自动适配 V1/V2"""
         file_size = os.path.getsize(self.bin_path)
         if file_size < HEADER_SIZE:
             raise ValueError(f"文件太小: {file_size} bytes")
 
+        self.parser_version, self.num_imus = self._detect_version(file_size)
+
+        if self.parser_version == 2:
+            return self._parse_v2()
+        else:
+            return self._parse_v1()
+
+    # ------------------------------------------------------------------
+    # V1 解析（保留原逻辑，输出格式统一为 list）
+    # ------------------------------------------------------------------
+
+    def _parse_v1(self):
+        """V1 IMU bin: 固定 2 IMU, 40 字节帧, Acc/Gyro 大端, Mag 小端, ±16g"""
+        self.has_mag = True
+        self.num_imus = 2
+        file_size = os.path.getsize(self.bin_path)
+
         with open(self.bin_path, 'rb') as f:
-            # 读取文件头
             header = f.read(HEADER_SIZE)
             magic, sample_rate, _, _, _, ts_bytes = struct.unpack(
                 '<I H B B B 32s', header[:41]
             )
-
             if magic != IMU_MAGIC:
                 raise ValueError(f"无效的IMU文件Magic: 0x{magic:08X}")
 
             self.sample_rate = sample_rate if 0 < sample_rate <= 1000 else 100
             self.timestamp_str = ts_bytes.decode('utf-8').strip('\x00')
 
-            log(f"IMU文件信息: 采样率={self.sample_rate}Hz")
-            log(f"时间戳: {self.timestamp_str}")
+            # Footer 检测
+            has_footer, footer_info = _detect_footer(f, file_size, FOOTER_MAGIC_IMU)
+            if has_footer:
+                self._detected_footer = True
+            data_end = file_size - FOOTER_SIZE if has_footer else file_size
 
-            # 读取所有帧
-            while True:
+            log(f"IMU文件信息(V1): 采样率={self.sample_rate}Hz, 固定 2 IMU, "
+                f"Acc/Gyro大端, 含Mag, Accel±16g")
+            log(f"时间戳: {self.timestamp_str}")
+            if has_footer:
+                log(f"  Footer: 固件帧数={footer_info['total_frames']}, "
+                    f"SD丢包={footer_info['sd_drop']}, 停止原因={footer_info['stop_reason']}")
+
+            def parse_chip_v1(b):
+                ag = struct.unpack('>6h', b[0:12])
+                m = struct.unpack('<3h', b[12:18])
+                return {
+                    'acc': [x * SCALE_ACCEL for x in ag[0:3]],
+                    'gyr': [x * SCALE_GYRO for x in ag[3:6]],
+                    'mag': [x * SCALE_MAG for x in m[0:3]],
+                    'has_mag': 1,
+                    'index': -1  # 由外部赋值
+                }
+
+            while f.tell() + IMU_FRAME_SIZE <= data_end:
                 chunk = f.read(IMU_FRAME_SIZE)
                 if len(chunk) < IMU_FRAME_SIZE:
                     break
-
                 frame_id = struct.unpack('<I', chunk[0:4])[0]
                 raw_data = chunk[4:]
-
-                # 解析IMU数据
-                def parse_chip(b):
-                    ag = struct.unpack('>6h', b[0:12])
-                    m = struct.unpack('<3h', b[12:18])
-                    return {
-                        'acc': [x * SCALE_ACCEL for x in ag[0:3]],
-                        'gyr': [x * SCALE_GYRO for x in ag[3:6]],
-                        'mag': [x * SCALE_MAG for x in m[0:3]]
-                    }
-
-                imu1 = parse_chip(raw_data[0:18])
-                imu2 = parse_chip(raw_data[18:36])
-
-                self.frames[frame_id] = (imu1, imu2)
+                imu1 = parse_chip_v1(raw_data[0:18])
+                imu2 = parse_chip_v1(raw_data[18:36])
+                imu1['index'] = 0
+                imu2['index'] = 1
+                self.frames[frame_id] = [imu1, imu2]
                 self.frame_count += 1
 
-        log(f"解析完成: 共 {self.frame_count} 帧")
+        log(f"V1 解析完成: 共 {self.frame_count} 帧, "
+            f"帧号范围 [{min(self.frames.keys())}, {max(self.frames.keys())}]")
+        return self
+
+    # ------------------------------------------------------------------
+    # V2 解析（新增）
+    # ------------------------------------------------------------------
+
+    def _parse_v2(self):
+        """V2 IMU bin: 可变 1-3 IMU, 帧长=4+N*18, Acc/Gyro 小端, 无Mag, ±32g"""
+        self.has_mag = False
+        file_size = os.path.getsize(self.bin_path)
+
+        with open(self.bin_path, 'rb') as f:
+            header = f.read(HEADER_SIZE)
+            magic, sample_rate, _, _, _, ts_bytes = struct.unpack(
+                '<I H B B B 32s', header[:41]
+            )
+            if magic != IMU_MAGIC:
+                raise ValueError(f"无效的IMU文件Magic: 0x{magic:08X}")
+
+            self.sample_rate = sample_rate if 0 < sample_rate <= 1000 else 100
+            self.timestamp_str = ts_bytes.decode('utf-8').strip('\x00')
+
+            # Footer 检测
+            has_footer, footer_info = _detect_footer(f, file_size, FOOTER_MAGIC_IMU)
+            if has_footer:
+                self._detected_footer = True
+            data_end = file_size - FOOTER_SIZE if has_footer else file_size
+
+            frame_size = 4 + self.num_imus * BYTES_PER_IMU
+
+            log(f"IMU文件信息(V2): 采样率={self.sample_rate}Hz, {self.num_imus} IMU(s), "
+                f"帧长={frame_size}字节, Acc/Gyro小端, 无Mag, Accel±32g")
+            log(f"时间戳: {self.timestamp_str}")
+            if has_footer:
+                log(f"  Footer: 固件帧数={footer_info['total_frames']}, "
+                    f"SD丢包={footer_info['sd_drop']}, 停止原因={footer_info['stop_reason']}")
+
+            def parse_chip_v2(b, imu_idx):
+                ag = struct.unpack('<6h', b[0:12])
+                return {
+                    'acc': [x * SCALE_ACCEL_V2 for x in ag[0:3]],
+                    'gyr': [x * SCALE_GYRO for x in ag[3:6]],
+                    'mag': [np.nan, np.nan, np.nan],
+                    'has_mag': 0,
+                    'index': imu_idx
+                }
+
+            while f.tell() + frame_size <= data_end:
+                chunk = f.read(frame_size)
+                if len(chunk) < frame_size:
+                    break
+                frame_id = struct.unpack('<I', chunk[0:4])[0]
+                raw_data = chunk[4:]
+                imus = []
+                for i in range(self.num_imus):
+                    offset = i * BYTES_PER_IMU
+                    imus.append(parse_chip_v2(raw_data[offset:offset + BYTES_PER_IMU], i))
+                self.frames[frame_id] = imus
+                self.frame_count += 1
+
+        log(f"V2 解析完成: 共 {self.frame_count} 帧, "
+            f"帧号范围 [{min(self.frames.keys())}, {max(self.frames.keys())}]")
         return self
 
 
@@ -252,7 +581,7 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
 
     # 解析bin文件
     emg_parser = EMGBinParser(emg_bin_path).parse()
-    imu_parser = IMUBinParser(imu_bin_path).parse() if imu_bin_path else None
+    imu_parser = IMUBinParser(imu_bin_path, h5_file=h5_path, device_id=device_id).parse() if imu_bin_path else None
 
     # 打开h5文件
     with h5py.File(h5_path, 'r+') as f:
@@ -413,7 +742,7 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
             log(f"警告: 数据集 {ds_2khz_name} 不存在，创建新数据集")
             ds_2khz = f.create_dataset(
                 ds_2khz_name, data=data_2khz,
-                chunks=(1000,), compression="gzip"
+                chunks=(min(1000, num_frames_2khz),), compression="gzip"
             )
             ds_2khz.attrs["device"] = f"device_{device_id}"
             ds_2khz.attrs["channels"] = 16
@@ -435,6 +764,11 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
 
         if imu_parser is not None:
             log("正在同步IMU 100Hz数据...")
+            log(f"  IMU 解析器版本: V{imu_parser.parser_version}, "
+                f"IMU数量: {imu_parser.num_imus}, "
+                f"{'含' if imu_parser.has_mag else '不含'}磁力计")
+            if imu_parser._detected_footer:
+                log(f"  检测到并跳过了 IMU Footer")
 
             # 从EMG 2kHz数据中提取所有SD帧号，映射到IMU帧号
             emg_sd_frame_ids = data_2khz['sd_frame_id']
@@ -445,131 +779,191 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
             num_imu_frames = len(imu_frame_ids_unique)
 
             log(f"EMG SD帧号范围: [{emg_sd_frame_ids[0]}, {emg_sd_frame_ids[-1]}]")
-            log(f"对应IMU帧号范围: [{imu_frame_ids_unique[0]}, {imu_frame_ids_unique[-1]}], 共 {num_imu_frames} 帧")
+            log(f"对应IMU帧号范围: [{imu_frame_ids_unique[0]}, {imu_frame_ids_unique[-1]}], "
+                f"共 {num_imu_frames} 帧")
 
-            # 构建IMU 100Hz数据
-            imu_100hz_dtype = np.dtype([
+            # ---- 构建统一 all_100hz 数据集 (行 = 每IMU每时间点) ----
+            num_all_rows = num_imu_frames * imu_parser.num_imus
+            data_imu_all = np.empty(num_all_rows, dtype=IMU_ALL_100HZ_DTYPE)
+
+            # ---- 构建 legacy a/b 数据集 (V1 向后兼容) ----
+            imu_legacy_dtype = np.dtype([
                 ("acc", "<f4", (3,)),
                 ("gyr", "<f4", (3,)),
                 ("mag", "<f4", (3,)),
                 ("sd_frame_id", "<u4"),
                 ("time", "<f8")
             ])
+            data_imu_a = np.empty(num_imu_frames, dtype=imu_legacy_dtype)
+            data_imu_b = np.empty(num_imu_frames, dtype=imu_legacy_dtype)
 
-            data_imu_100hz = np.empty(num_imu_frames, dtype=imu_100hz_dtype)
             imu_filled = 0
             imu_missing = 0
-
-            for idx, imu_fid in enumerate(imu_frame_ids_unique):
-                imu_fid = int(imu_fid)
-                imu_data = imu_parser.frames.get(imu_fid)
-
-                if imu_data is not None:
-                    imu1, imu2 = imu_data
-                    # 使用第一个IMU芯片的数据（与BLE上报一致）
-                    data_imu_100hz[idx]['acc'] = np.array(imu1['acc'], dtype=np.float32)
-                    data_imu_100hz[idx]['gyr'] = np.array(imu1['gyr'], dtype=np.float32)
-                    data_imu_100hz[idx]['mag'] = np.array(imu1['mag'], dtype=np.float32)
-                    imu_filled += 1
-                else:
-                    # IMU帧丢失，用零填充
-                    data_imu_100hz[idx]['acc'] = np.zeros(3, dtype=np.float32)
-                    data_imu_100hz[idx]['gyr'] = np.zeros(3, dtype=np.float32)
-                    data_imu_100hz[idx]['mag'] = np.zeros(3, dtype=np.float32)
-                    imu_missing += 1
-
-                data_imu_100hz[idx]['sd_frame_id'] = imu_fid
-
-                # 插值时间戳：根据EMG时间戳推算
-                # 找到对应EMG帧的时间戳（该IMU帧对应的第一个EMG帧）
-                emg_idx = idx * EMG_IMU_RATIO
-                if emg_idx < len(data_2khz):
-                    data_imu_100hz[idx]['time'] = data_2khz[emg_idx]['time']
-                elif len(data_2khz) > 0:
-                    data_imu_100hz[idx]['time'] = data_2khz[-1]['time'] + (idx - num_imu_frames + 1) * 0.01
-                else:
-                    data_imu_100hz[idx]['time'] = idx * 0.01
-
-            log(f"IMU 100Hz数据构建完成: {imu_filled} 帧来自bin, {imu_missing} 帧缺失填零")
-
-            # 【修改】写入 2 个 IMU 100Hz 数据集（每设备有 2 个 IMU 传感器：a 和 b）
-            # imu1a_100hz / imu1b_100hz 或 imu2a_100hz / imu2b_100hz
-            ds_imu_a_name = f"imu{device_id}a_100hz"
-            ds_imu_b_name = f"imu{device_id}b_100hz"
-            ds_imu_name_legacy = f"imu{device_id}_100hz"  # 兼容旧版单一数据集
-
-            # 构建 IMU_B 的数据（与 IMU_A 类似，但使用 imu2 的数据）
-            data_imu_b_100hz = np.empty(num_imu_frames, dtype=imu_100hz_dtype)
             imu_b_filled = 0
             imu_b_missing = 0
 
             for idx, imu_fid in enumerate(imu_frame_ids_unique):
                 imu_fid = int(imu_fid)
-                imu_data = imu_parser.frames.get(imu_fid)
+                imu_list = imu_parser.frames.get(imu_fid)
 
-                if imu_data is not None:
-                    imu1, imu2 = imu_data
-                    # IMU_B 使用第二个 IMU 芯片的数据
-                    data_imu_b_100hz[idx]['acc'] = np.array(imu2['acc'], dtype=np.float32)
-                    data_imu_b_100hz[idx]['gyr'] = np.array(imu2['gyr'], dtype=np.float32)
-                    data_imu_b_100hz[idx]['mag'] = np.array(imu2['mag'], dtype=np.float32)
-                    imu_b_filled += 1
+                # 计算该 IMU 帧对应的时间戳
+                emg_idx = idx * EMG_IMU_RATIO
+                if emg_idx < len(data_2khz):
+                    imu_time = data_2khz[emg_idx]['time']
+                elif len(data_2khz) > 0:
+                    imu_time = data_2khz[-1]['time'] + (idx - num_imu_frames + 1) * 0.01
                 else:
-                    data_imu_b_100hz[idx]['acc'] = np.zeros(3, dtype=np.float32)
-                    data_imu_b_100hz[idx]['gyr'] = np.zeros(3, dtype=np.float32)
-                    data_imu_b_100hz[idx]['mag'] = np.zeros(3, dtype=np.float32)
+                    imu_time = idx * 0.01
+
+                if imu_list is not None:
+                    # 填充 all_100hz — 每个 IMU 一行
+                    for imu_dict in imu_list:
+                        row_idx = idx * imu_parser.num_imus + imu_dict['index']
+                        data_imu_all[row_idx]['imu_index'] = imu_dict['index']
+                        data_imu_all[row_idx]['acc'] = np.array(imu_dict['acc'], dtype=np.float32)
+                        data_imu_all[row_idx]['gyr'] = np.array(imu_dict['gyr'], dtype=np.float32)
+                        data_imu_all[row_idx]['has_mag'] = imu_dict['has_mag']
+                        data_imu_all[row_idx]['mag'] = np.array(imu_dict['mag'], dtype=np.float32)
+                        data_imu_all[row_idx]['sd_frame_id'] = imu_fid
+                        data_imu_all[row_idx]['time'] = imu_time
+
+                    # 填充 legacy IMU_A (index=0)
+                    imu0 = imu_list[0]
+                    data_imu_a[idx]['acc'] = np.array(imu0['acc'], dtype=np.float32)
+                    data_imu_a[idx]['gyr'] = np.array(imu0['gyr'], dtype=np.float32)
+                    data_imu_a[idx]['mag'] = np.array(imu0['mag'], dtype=np.float32)
+                    imu_filled += 1
+
+                    # 填充 legacy IMU_B (index=1，若存在)
+                    if len(imu_list) > 1:
+                        imu1 = imu_list[1]
+                        data_imu_b[idx]['acc'] = np.array(imu1['acc'], dtype=np.float32)
+                        data_imu_b[idx]['gyr'] = np.array(imu1['gyr'], dtype=np.float32)
+                        data_imu_b[idx]['mag'] = np.array(imu1['mag'], dtype=np.float32)
+                        imu_b_filled += 1
+                    else:
+                        data_imu_b[idx]['acc'] = np.zeros(3, dtype=np.float32)
+                        data_imu_b[idx]['gyr'] = np.zeros(3, dtype=np.float32)
+                        data_imu_b[idx]['mag'] = np.zeros(3, dtype=np.float32)
+                        imu_b_missing += 1
+                else:
+                    imu_missing += 1
                     imu_b_missing += 1
+                    # all_100hz 缺失帧填充（mag 按 has_mag 决定填 0 或 NaN）
+                    nan3 = np.array([np.nan, np.nan, np.nan], dtype=np.float32)
+                    for i_imu in range(imu_parser.num_imus):
+                        row_idx = idx * imu_parser.num_imus + i_imu
+                        data_imu_all[row_idx]['imu_index'] = i_imu
+                        data_imu_all[row_idx]['acc'] = np.zeros(3, dtype=np.float32)
+                        data_imu_all[row_idx]['gyr'] = np.zeros(3, dtype=np.float32)
+                        data_imu_all[row_idx]['has_mag'] = int(imu_parser.has_mag)
+                        data_imu_all[row_idx]['mag'] = (
+                            np.zeros(3, dtype=np.float32) if imu_parser.has_mag else nan3
+                        )
+                        data_imu_all[row_idx]['sd_frame_id'] = imu_fid
+                        data_imu_all[row_idx]['time'] = imu_time
+                    # legacy a/b 填零
+                    data_imu_a[idx]['acc'] = np.zeros(3, dtype=np.float32)
+                    data_imu_a[idx]['gyr'] = np.zeros(3, dtype=np.float32)
+                    data_imu_a[idx]['mag'] = np.zeros(3, dtype=np.float32)
+                    data_imu_b[idx]['acc'] = np.zeros(3, dtype=np.float32)
+                    data_imu_b[idx]['gyr'] = np.zeros(3, dtype=np.float32)
+                    data_imu_b[idx]['mag'] = np.zeros(3, dtype=np.float32)
 
-                data_imu_b_100hz[idx]['sd_frame_id'] = imu_fid
-                data_imu_b_100hz[idx]['time'] = data_imu_100hz[idx]['time']  # 使用相同的时间戳
+                data_imu_a[idx]['sd_frame_id'] = imu_fid
+                data_imu_a[idx]['time'] = imu_time
+                data_imu_b[idx]['sd_frame_id'] = imu_fid
+                data_imu_b[idx]['time'] = imu_time
 
-            # 写入 IMU_A 数据集
+            log(f"IMU all_100hz 数据构建完成: {num_all_rows} 行 "
+                f"(={num_imu_frames} 帧 x {imu_parser.num_imus} IMU)")
+            log(f"IMU legacy 数据: A={imu_filled}来自bin/{imu_missing}缺失, "
+                f"B={imu_b_filled}来自bin/{imu_b_missing}缺失")
+
+            # ---- 写入统一 all_100hz 数据集 ----
+            ds_imu_all_name = f"imu{device_id}_all_100hz"
+            if ds_imu_all_name in f:
+                ds_imu_all = f[ds_imu_all_name]
+                ds_imu_all.resize(num_all_rows, axis=0)
+                ds_imu_all[:] = data_imu_all
+            else:
+                ds_imu_all = f.create_dataset(
+                    ds_imu_all_name, data=data_imu_all,
+                    chunks=(min(1000, num_all_rows),), compression="gzip"
+                )
+            ds_imu_all.attrs["sample_rate"] = 100
+            ds_imu_all.attrs["source_bin"] = os.path.basename(imu_bin_path)
+            ds_imu_all.attrs["sync_time"] = datetime.now().isoformat()
+            ds_imu_all.attrs["parser_version"] = imu_parser.parser_version
+            ds_imu_all.attrs["num_imus"] = imu_parser.num_imus
+            ds_imu_all.attrs["has_mag"] = int(imu_parser.has_mag)
+            ds_imu_all.attrs["row_layout"] = "one_row_per_imu_per_timestamp"
+            ds_imu_all.attrs["description"] = (
+                f"IMU 100Hz synced data, V{imu_parser.parser_version}, "
+                f"{imu_parser.num_imus} IMU(s), "
+                f"{'with' if imu_parser.has_mag else 'without'} magnetometer"
+            )
+            log(f"  [OK]已写入 {ds_imu_all_name}: {num_all_rows} 行")
+
+            # ---- 写入 legacy a/b 数据集 (V1 向后兼容) ----
+            ds_imu_a_name = f"imu{device_id}a_100hz"
+            ds_imu_b_name = f"imu{device_id}b_100hz"
+            ds_imu_name_legacy = f"imu{device_id}_100hz"
+
             if ds_imu_a_name in f:
                 ds_imu_a = f[ds_imu_a_name]
                 ds_imu_a.resize(num_imu_frames, axis=0)
-                ds_imu_a[:] = data_imu_100hz
+                ds_imu_a[:] = data_imu_a
                 ds_imu_a.attrs["sample_rate"] = 100
                 ds_imu_a.attrs["source_bin"] = os.path.basename(imu_bin_path)
                 ds_imu_a.attrs["sync_time"] = datetime.now().isoformat()
                 ds_imu_a.attrs["filled_frames"] = imu_filled
                 ds_imu_a.attrs["missing_frames"] = imu_missing
-                log(f"IMU_A 同步完成！100Hz数据已写入 {ds_imu_a_name}")
+                ds_imu_a.attrs["parser_version"] = imu_parser.parser_version
+                log(f"  [OK]已写入 {ds_imu_a_name}: {imu_filled}来自bin/{imu_missing}缺失")
             elif ds_imu_name_legacy in f:
-                # 兼容旧版：如果只有旧版数据集，则只写入 IMU_A
                 ds_imu = f[ds_imu_name_legacy]
                 ds_imu.resize(num_imu_frames, axis=0)
-                ds_imu[:] = data_imu_100hz
+                ds_imu[:] = data_imu_a
                 ds_imu.attrs["sample_rate"] = 100
                 ds_imu.attrs["source_bin"] = os.path.basename(imu_bin_path)
                 ds_imu.attrs["sync_time"] = datetime.now().isoformat()
                 ds_imu.attrs["filled_frames"] = imu_filled
                 ds_imu.attrs["missing_frames"] = imu_missing
-                log(f"使用旧版数据集名 {ds_imu_name_legacy}")
+                ds_imu.attrs["parser_version"] = imu_parser.parser_version
+                log(f"  [OK]已写入旧版 {ds_imu_name_legacy}")
             else:
-                log(f"警告: 数据集 {ds_imu_a_name} 不存在，跳过 IMU_A 写入")
+                log(f"  - {ds_imu_a_name} 不存在，跳过 IMU_A legacy 写入")
 
-            # 写入 IMU_B 数据集
             if ds_imu_b_name in f:
                 ds_imu_b = f[ds_imu_b_name]
                 ds_imu_b.resize(num_imu_frames, axis=0)
-                ds_imu_b[:] = data_imu_b_100hz
+                ds_imu_b[:] = data_imu_b
                 ds_imu_b.attrs["sample_rate"] = 100
                 ds_imu_b.attrs["source_bin"] = os.path.basename(imu_bin_path)
                 ds_imu_b.attrs["sync_time"] = datetime.now().isoformat()
                 ds_imu_b.attrs["filled_frames"] = imu_b_filled
                 ds_imu_b.attrs["missing_frames"] = imu_b_missing
-                log(f"IMU_B 同步完成！100Hz数据已写入 {ds_imu_b_name}")
+                ds_imu_b.attrs["parser_version"] = imu_parser.parser_version
+                log(f"  [OK]已写入 {ds_imu_b_name}: {imu_b_filled}来自bin/{imu_b_missing}缺失")
             else:
-                log(f"数据集 {ds_imu_b_name} 不存在，跳过 IMU_B 写入")
+                log(f"  - {ds_imu_b_name} 不存在，跳过 IMU_B legacy 写入")
 
-            log(f"IMU同步完成！A: {imu_filled}帧, B: {imu_b_filled}帧")
+            log(f"IMU同步完成！V{imu_parser.parser_version}, "
+                f"{imu_parser.num_imus}IMU, all_100hz={num_all_rows}行, "
+                f"A={imu_filled}帧, B={imu_b_filled}帧")
             imu_result = {
                 'imu_status': 'success',
+                'imu_parser_version': imu_parser.parser_version,
+                'imu_num_imus': imu_parser.num_imus,
+                'imu_has_mag': imu_parser.has_mag,
                 'imu_frames': num_imu_frames,
                 'imu_filled': imu_filled,
                 'imu_missing': imu_missing,
                 'imu_b_filled': imu_b_filled,
-                'imu_b_missing': imu_b_missing
+                'imu_b_missing': imu_b_missing,
+                'imu_all_rows': num_all_rows,
+                'imu_all_dataset': ds_imu_all_name
             }
 
         # 更新sync_status（仅当set_synced=True时）
