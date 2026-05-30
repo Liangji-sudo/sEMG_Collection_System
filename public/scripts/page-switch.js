@@ -160,6 +160,11 @@
             }
 
             this.stopWaveform();
+
+            // 【新增】离开采集页后隐藏质量颜色指示
+            if (window.waveformController) {
+                window.waveformController.refreshQualityVisibility();
+            }
         }
 
         /**
@@ -177,7 +182,12 @@
             if (backendPage) backendPage.classList.add('hidden');
             
             this.startWaveform();
-            
+
+            // 【新增】进入采集页后刷新质量颜色指示（如果设备已连接且未采集则显示）
+            if (window.waveformController) {
+                window.waveformController.refreshQualityVisibility();
+            }
+
             // 通知采集控制器页面已显示
             if (window.collectionController) {
                 window.collectionController.onPageShow();
@@ -198,6 +208,11 @@
             if (collectionScreen) collectionScreen.style.display = 'none';
             if (backendPage) backendPage.classList.remove('hidden');
             
+            // 【新增】离开采集页后隐藏质量颜色指示
+            if (window.waveformController) {
+                window.waveformController.refreshQualityVisibility();
+            }
+
             // 通知后台管理器页面已显示（每次进入都刷新）
             if (window.backendManager) {
                 if (!window.backendManager._bindingDone) {

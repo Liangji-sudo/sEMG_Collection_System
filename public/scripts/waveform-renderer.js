@@ -21,8 +21,8 @@
         EMG_POINTS_PER_RENDER: 18,
         // IMU每次渲染的数据点数
         IMU_POINTS_PER_RENDER: 1,
-        // 显示窗口时长 (秒)
-        WINDOW_DURATION: 5,
+        // 显示窗口时长 (秒) - 从 5 缩短到 3，方便观察细节（与 V3 质量窗口一致）
+        WINDOW_DURATION: 3,
         // EMG通道数
         EMG_CHANNELS: 16,
         // IMU轴数

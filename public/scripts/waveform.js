@@ -178,6 +178,8 @@
                 if (emg1Renderer) {
                     emg1Renderer.renderPoints(data.emg1);
                 }
+                // Feed 质量监测器
+                this.controller.feedQualityMonitor(1, data.emg1);
                 // 更新帧计数
                 this.controller.frameCount1 += (data.framesInPacket || data.emg1[0].length || 9);
             }
@@ -188,6 +190,8 @@
                 if (emg2Renderer) {
                     emg2Renderer.renderPoints(data.emg2);
                 }
+                // Feed 质量监测器
+                this.controller.feedQualityMonitor(2, data.emg2);
                 // 更新帧计数
                 this.controller.frameCount2 += (data.framesInPacket || data.emg2[0].length || 9);
             }
@@ -303,15 +307,19 @@
         constructor() {
             this.rendererManager = new RendererManager();
             this.dataReceiver = new RealtimeDataReceiver(this);
-            
+
             this.isRunning = false;
             this.frameCount1 = 0;  // 设备1帧计数
             this.frameCount2 = 0;  // 设备2帧计数
-            
+
             // 设备统计
             this.stats1 = { total: 0, lost: 0 };
             this.stats2 = { total: 0, lost: 0 };
-            
+
+            // 信号质量监测器 (每个设备独立)
+            this._qualityMonitor1 = new SignalQuality.QualityMonitor();
+            this._qualityMonitor2 = new SignalQuality.QualityMonitor();
+
             this.init();
         }
 
@@ -397,6 +405,11 @@
         stop() {
             this.isRunning = false;
             this.dataReceiver.disconnect();
+            // 重置质量状态
+            this._qualityMonitor1.reset();
+            this._qualityMonitor2.reset();
+            SignalQuality.updateChannelStatusRow('emg1-channel-status', null);
+            SignalQuality.updateChannelStatusRow('emg2-channel-status', null);
             console.log('[Waveform] 停止显示');
         }
 
@@ -428,6 +441,56 @@
         }
 
         /**
+         * 喂入数据到信号质量监测器
+         * @param {number} deviceId - 1 或 2
+         * @param {number[][]} emgData - [channel][sample] μV 数据
+         */
+        feedQualityMonitor(deviceId, emgData) {
+            var monitor = deviceId === 1 ? this._qualityMonitor1 : this._qualityMonitor2;
+            var rowId = 'emg' + deviceId + '-channel-status';
+
+            var metrics = monitor.feed(emgData);
+            if (metrics) {
+                SignalQuality.updateChannelStatusRow(rowId, metrics);
+            }
+        }
+
+        /**
+         * 刷新通道质量指示的显示/隐藏
+         * 统一入口，其他模块只调用此方法。
+         *
+         * 显示条件:
+         *   a) 当前在 collectionScreen
+         *   b) 对应设备 connected
+         *   c) 采集未运行 (collectionController._isRunning === false)
+         */
+        refreshQualityVisibility() {
+            var collectionScreen = document.getElementById('collectionScreen');
+            var isCollectionScreen = collectionScreen && collectionScreen.style.display !== 'none';
+            var isCollecting = window.collectionController && window.collectionController.isRunning();
+
+            for (var devId = 1; devId <= 2; devId++) {
+                var row = document.getElementById('emg' + devId + '-channel-status');
+                if (!row) continue;
+
+                // 检查设备连接状态
+                var isConnected = false;
+                if (window.BleControl && window.BleControl.state && window.BleControl.state.devices) {
+                    var dev = window.BleControl.state.devices[devId];
+                    isConnected = dev && dev.connected;
+                }
+
+                var shouldShow = isCollectionScreen && isConnected && !isCollecting;
+                row.style.display = shouldShow ? 'flex' : 'none';
+
+                // 隐藏时重置为灰色
+                if (!shouldShow) {
+                    SignalQuality.updateChannelStatusRow('emg' + devId + '-channel-status', null);
+                }
+            }
+        }
+
+        /**
          * 清除所有显示
          */
         clearAll() {
@@ -435,6 +498,12 @@
             this.frameCount1 = 0;
             this.frameCount2 = 0;
             this.updateFrameCount();
+
+            // 重置质量状态
+            this._qualityMonitor1.reset();
+            this._qualityMonitor2.reset();
+            SignalQuality.updateChannelStatusRow('emg1-channel-status', null);
+            SignalQuality.updateChannelStatusRow('emg2-channel-status', null);
         }
 
         /**

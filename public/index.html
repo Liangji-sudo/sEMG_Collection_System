@@ -972,6 +972,30 @@
             padding: 5px;
         }
 
+        /* ==================== 通道质量颜色指示 ==================== */
+        .channel-status-row {
+            display: none;
+            gap: 2px;
+            padding: 2px 4px;
+            align-items: center;
+            flex-shrink: 0;
+        }
+
+        .channel-status-dot {
+            width: 18px;
+            height: 18px;
+            border-radius: 3px;
+            background-color: #9ca3af;
+            color: white;
+            font-weight: bold;
+            font-size: 8px;
+            text-align: center;
+            line-height: 18px;
+            flex-shrink: 0;
+            transition: background-color 0.15s;
+            user-select: none;
+        }
+
         .imu-waveform-container {
             position: relative;
             width: 100%;
@@ -5229,12 +5253,22 @@
                                 </select>
                             </div>
                         </div>
+                        <div id="emg1-channel-status" class="channel-status-row">
+                            <div class="channel-status-dot">1</div><div class="channel-status-dot">2</div>
+                            <div class="channel-status-dot">3</div><div class="channel-status-dot">4</div>
+                            <div class="channel-status-dot">5</div><div class="channel-status-dot">6</div>
+                            <div class="channel-status-dot">7</div><div class="channel-status-dot">8</div>
+                            <div class="channel-status-dot">9</div><div class="channel-status-dot">10</div>
+                            <div class="channel-status-dot">11</div><div class="channel-status-dot">12</div>
+                            <div class="channel-status-dot">13</div><div class="channel-status-dot">14</div>
+                            <div class="channel-status-dot">15</div><div class="channel-status-dot">16</div>
+                        </div>
                         <div class="emg-waveform-container" id="emg1-container">
                             <div class="time-pointer" id="emg1-pointer"></div>
                             <canvas id="emg1-canvas"></canvas>
                         </div>
                     </div>
-                    
+
                     <div class="emg-sub-card">
                         <div class="sub-title">EMG2 (16通道)</div>
                         <div class="control-bar">
@@ -5250,6 +5284,16 @@
                                     <option value="9-16">9-16</option>
                                 </select>
                             </div>
+                        </div>
+                        <div id="emg2-channel-status" class="channel-status-row">
+                            <div class="channel-status-dot">1</div><div class="channel-status-dot">2</div>
+                            <div class="channel-status-dot">3</div><div class="channel-status-dot">4</div>
+                            <div class="channel-status-dot">5</div><div class="channel-status-dot">6</div>
+                            <div class="channel-status-dot">7</div><div class="channel-status-dot">8</div>
+                            <div class="channel-status-dot">9</div><div class="channel-status-dot">10</div>
+                            <div class="channel-status-dot">11</div><div class="channel-status-dot">12</div>
+                            <div class="channel-status-dot">13</div><div class="channel-status-dot">14</div>
+                            <div class="channel-status-dot">15</div><div class="channel-status-dot">16</div>
                         </div>
                         <div class="emg-waveform-container" id="emg2-container">
                             <div class="time-pointer" id="emg2-pointer"></div>
@@ -5587,6 +5631,8 @@
     <script defer src="scripts/ble_control.js"></script>
 
 
+    <!-- 信号质量颜色指示模块 (必须在 waveform.js 前加载) -->
+    <script src="scripts/signal-quality.js"></script>
     <!-- 前端采集数据实时显示主入口 -->
     <script src="scripts/waveform.js"></script>
     <!-- 波形显示模块 -->
