@@ -359,6 +359,7 @@ class DeviceState:
     total_frames: int = 0
     lost_frames: int = 0
     last_frame_index: int = -1
+    last_packet_counter: int = -1  # 上一包 counters，用于检测 BLE 丢包
     last_data_time: float = 0.0  # 【新增】最后收到数据的时间戳
     sd_filename: Optional[str] = None  # 【新增】当前采集的SD卡bin文件名前缀
 
@@ -380,6 +381,7 @@ class DeviceState:
         self.total_frames = 0
         self.lost_frames = 0
         self.last_frame_index = -1
+        self.last_packet_counter = -1
         self.data_buffer.clear()
         self.sd_filename = None  # 【新增】重置SD卡文件名
 
@@ -571,7 +573,10 @@ def parse_packet(data: bytearray, dev: DeviceState) -> Optional[dict]:
         bps = params['bps']
         fpkt = params['fpkt']
 
-        start_frame = struct.unpack('<I', data[0:4])[0]
+        # 包头 4 字节是 ESP32 固件的 ble_frame_counter（包计数器），不是帧号
+        # 每个 BLE 包包含 fpkt 个 250Hz EMG 帧，真实帧号 = 包号 × fpkt + 帧内偏移
+        packet_counter = struct.unpack('<I', data[0:4])[0]
+        start_frame = packet_counter * fpkt
 
         # ===== EMG 解析 (物理顺序) =====
         emg_raw = []
@@ -613,11 +618,17 @@ def parse_packet(data: bytearray, dev: DeviceState) -> Optional[dict]:
 
         dev.total_frames += fpkt
 
-        if dev.last_frame_index >= 0:
-            expected = dev.last_frame_index + 1
-            if start_frame != expected and start_frame > expected:
-                dev.lost_frames += start_frame - expected
+        # ===== 丢包检测：跟踪 packet_counter 连续性 =====
+        if dev.last_packet_counter >= 0:
+            expected_packet = dev.last_packet_counter + 1
+            if packet_counter > expected_packet:
+                lost_packets = packet_counter - expected_packet
+                lost_frames_delta = lost_packets * fpkt
+                dev.lost_frames += lost_frames_delta
+                log(f"[Dev{dev.device_id}] BLE 丢包检测: packet_counter {expected_packet}→{packet_counter}, "
+                    f"丢失 {lost_packets} 包 ({lost_frames_delta} 帧)")
 
+        dev.last_packet_counter = packet_counter
         dev.last_frame_index = start_frame + fpkt - 1
 
         # ===== 生成每帧的BLE帧号 =====
@@ -638,6 +649,7 @@ def parse_packet(data: bytearray, dev: DeviceState) -> Optional[dict]:
 
         return {
             'f': start_frame,
+            'packet_counter': packet_counter,  # 原始包号（诊断用）
             'n': fpkt,
             'frame_ids': frame_ids,
             'raw': emg_raw_mapped,
@@ -717,7 +729,7 @@ def create_notification_handler(dev: DeviceState):
 
                 # 【调试】每100个包打印一次日志
                 if dev.total_frames % 100 == 0:
-                    log(f"[Dev{dev.device_id}] 已收到 {dev.total_frames} 包, 丢包: {dev.lost_frames}, 缓冲区: {len(dev.data_buffer)}")
+                    log(f"[Dev{dev.device_id}] 已收到 {dev.total_frames} 帧, 丢帧: {dev.lost_frames}, 缓冲区: {len(dev.data_buffer)}")
 
                 # 生成每帧EMG的时间戳
                 # 注意：BLE传输的是250Hz数据（2kHz降采样8倍），所以时间间隔是1/250=0.004秒
