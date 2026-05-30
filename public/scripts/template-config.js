@@ -292,8 +292,8 @@
             // 【新增】确保category3中的每个Stage都有gestures字段
             if (this.currentTemplate.category3 && Array.isArray(this.currentTemplate.category3)) {
                 this.currentTemplate.category3.forEach(stage => {
-                    if (!stage.gestures) {
-                        stage.gestures = [];  // 空数组表示使用全局手势库
+                    if (!Object.prototype.hasOwnProperty.call(stage, 'gestures')) {
+                        stage.gestures = [];
                     }
                 });
             }
@@ -390,6 +390,39 @@
             }
         }
 
+        getEnabledDiscreteGestures() {
+            return (this.currentTemplate.gestures?.discrete || []).filter(g => g.enabled);
+        }
+
+        getStageGestureIds(stage) {
+            if (!stage || !Array.isArray(stage.gestures)) {
+                return [];
+            }
+
+            return stage.gestures
+                .map(gesture => {
+                    if (typeof gesture === 'string') return gesture;
+                    if (gesture && typeof gesture === 'object') return gesture.id || gesture.name;
+                    return null;
+                })
+                .filter(Boolean);
+        }
+
+        getValidStageGestureIds(stage, allGestures = this.getEnabledDiscreteGestures()) {
+            const enabledGestureIds = new Set(allGestures.map(g => g.id));
+            const validIds = [];
+            const seenIds = new Set();
+
+            this.getStageGestureIds(stage).forEach(id => {
+                if (enabledGestureIds.has(id) && !seenIds.has(id)) {
+                    validIds.push(id);
+                    seenIds.add(id);
+                }
+            });
+
+            return validIds;
+        }
+
         /**
          * 保存模板到localStorage
          */
@@ -475,6 +508,7 @@
                         throw new Error('无效的模板格式');
                     }
                     this.currentTemplate = template;
+                    this.ensureTemplateFields();
                     this.isDirty = true;
                     this.render();
                     this.showToast('模板已导入', 'success');
@@ -826,10 +860,8 @@
          */
         renderStageItem(item, index) {
             // 获取该Stage已勾选的手势数量
-            const stageGestures = item.gestures || [];
-            // 【修改】只统计已启用的手势数量
-            const allEnabledGestures = (this.currentTemplate.gestures?.discrete || []).filter(g => g.enabled);
-            const enabledGesturesCount = stageGestures.length;
+            const allEnabledGestures = this.getEnabledDiscreteGestures();
+            const enabledGesturesCount = this.getValidStageGestureIds(item, allEnabledGestures).length;
             // 根据是否配置了手势决定按钮颜色
             const btnBg = enabledGesturesCount > 0 ? '#1e88e5' : '#e0e0e0';
             const btnColor = enabledGesturesCount > 0 ? 'white' : '#666';
@@ -1074,14 +1106,9 @@
                 return;
             }
 
-            // 确保stage.gestures存在
-            if (!stage.gestures) {
-                stage.gestures = [];
-            }
-
             // 【修改】只显示已启用的手势，而不是全部手势
-            const allGestures = (this.currentTemplate.gestures?.discrete || []).filter(g => g.enabled);
-            const stageGestureIds = stage.gestures;
+            const allGestures = this.getEnabledDiscreteGestures();
+            const stageGestureIds = this.getValidStageGestureIds(stage, allGestures);
 
             // 创建对话框 - 注意：不使用 modal-overlay 类，因为该类有 opacity:0 visibility:hidden
             const overlay = document.createElement('div');
