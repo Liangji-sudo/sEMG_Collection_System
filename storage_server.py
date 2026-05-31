@@ -956,11 +956,22 @@ class HDF5StorageServer:
         if self.f:
             self.f.flush()
     
-    def close_file(self):
-        """关闭文件"""
+    def close_file(self, params=None):
+        """关闭文件
+
+        Args:
+            params: 可选扩展参数 dict:
+                - collection_status: "completed" | "manual_stopped" | "abnormal_interrupted" | "resumed" | "abandoned"
+                - interrupted_at: ISO 时间字符串（仅 abnormal_interrupted 时写入）
+                - interrupt_reason: 中断原因（仅 abnormal_interrupted 时写入）
+                - resume_progress: JSON 序列化的进度快照（仅 abnormal_interrupted 时写入）
+                - segment_index: segment 序号，默认 1
+        """
+        if params is None:
+            params = {}
         try:
             self.flush()
-            
+
             if self.f:
                 # 写入最终统计信息
                 self.f.attrs["closed_at"] = datetime.now().isoformat()
@@ -974,7 +985,37 @@ class HDF5StorageServer:
                 self.f.attrs["total_imu1_all_frames"] = self.stats["imu1_all_frames"]
                 self.f.attrs["total_imu2_all_frames"] = self.stats["imu2_all_frames"]
                 self.f.attrs["total_prompts"] = self.stats["prompts"]
-                
+
+                # ==================== 采集状态标记（断点续采支持） ====================
+                # collection_status: 采集完成状态
+                collection_status = params.get("collection_status", "completed")
+                self.f.attrs["collection_status"] = str(collection_status)
+                debug_log(f"   collection_status: {collection_status}")
+
+                # segment_index: 当前 segment 序号（默认 1）
+                segment_index = params.get("segment_index", 1)
+                self.f.attrs["segment_index"] = int(segment_index)
+
+                # 异常中断相关属性（仅当 collection_status 为 abnormal_interrupted 时写入）
+                if collection_status == "abnormal_interrupted":
+                    interrupted_at = params.get("interrupted_at")
+                    if interrupted_at:
+                        self.f.attrs["interrupted_at"] = str(interrupted_at)
+                        debug_log(f"   interrupted_at: {interrupted_at}")
+
+                    interrupt_reason = params.get("interrupt_reason")
+                    if interrupt_reason:
+                        self.f.attrs["interrupt_reason"] = str(interrupt_reason)
+                        debug_log(f"   interrupt_reason: {interrupt_reason}")
+
+                    resume_progress = params.get("resume_progress")
+                    if resume_progress:
+                        self.f.attrs["resume_progress"] = str(resume_progress)
+                        debug_log(f"   resume_progress: {resume_progress[:80]}...")
+
+                # 注意：sync_status 保持 pending，不受 collection_status 影响
+                # 只有 bin_sync_tool 才能将 sync_status 改为 synced 或 sync_failed
+
                 self.f.close()
                 self.f = None
             
@@ -1084,7 +1125,7 @@ class HDF5StorageServer:
                         # 兼容旧版：REP socket 也支持 append
                         response = self.append_data(params)
                     elif cmd == "close":
-                        response = self.close_file()
+                        response = self.close_file(params)
                     elif cmd == "stats":
                         response = {"status": "success", "data": self.get_stats()}
                     elif cmd == "flush":

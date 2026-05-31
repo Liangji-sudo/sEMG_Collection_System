@@ -163,6 +163,15 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 });
             }
 
+            // 【新增】异常中断按钮
+            const abortBtn = document.getElementById('abortTaskBtn');
+            if (abortBtn) {
+                abortBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    this.abortTask();
+                });
+            }
+
             const nextStageBtn = document.getElementById('nextStageBtn');
             if (nextStageBtn) {
                 nextStageBtn.addEventListener('click', (e) => {
@@ -1164,6 +1173,291 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
         // 【已移除】togglePause 方法已被测试模式替代
 
+        // ==================== 异常中断 ====================
+
+        /**
+         * 【新增】异常中断采集任务 — Phase 1
+         * 1. 弹出确认对话框，让工作人员选择中断原因
+         * 2. 保存 breakpoint state 到 localStorage
+         * 3. 发送 abnormal_interrupt 到 realtimeEngine
+         * 4. 清理前端状态
+         *
+         * 限制：仅在 _isRunning && !_isTestMode 时可用
+         */
+        abortTask(reason) {
+            // 如果已经传了 reason（从弹窗回调），直接执行中断
+            if (reason !== undefined) {
+                this._executeAbort(reason);
+                return;
+            }
+
+            // 检查是否正在运行
+            if (!this._isRunning) {
+                console.warn('[Collection] 采集未运行，无法异常中断');
+                return;
+            }
+
+            // 测试模式不支持异常中断
+            if (this._isTestMode) {
+                this.showToast('测试模式无需保存断点', 'warning');
+                return;
+            }
+
+            // 弹出原因选择对话框
+            this._showAbortReasonDialog((selectedReason) => {
+                if (selectedReason) {
+                    this._executeAbort(selectedReason);
+                }
+                // 取消则不做任何事
+            });
+        }
+
+        /**
+         * 【新增】显示异常中断原因选择对话框
+         */
+        _showAbortReasonDialog(callback) {
+            // 移除已有的对话框
+            const existing = document.getElementById('abortReasonDialog');
+            if (existing) existing.remove();
+
+            const overlay = document.createElement('div');
+            overlay.id = 'abortReasonDialog';
+            overlay.style.cssText = `
+                position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+                background: rgba(0,0,0,0.5); display: flex; align-items: center;
+                justify-content: center; z-index: 10000;
+            `;
+
+            const reasons = [
+                { value: '设备没电', label: '🔋 设备没电' },
+                { value: '丢包严重', label: '📉 丢包严重' },
+                { value: '双设备不同步', label: '🔗 双设备不同步' },
+                { value: '信号异常', label: '📊 信号异常' },
+                { value: '其他', label: '📝 其他' }
+            ];
+
+            overlay.innerHTML = `
+                <div style="
+                    background: white; border-radius: 16px; padding: 32px;
+                    min-width: 420px; max-width: 520px;
+                    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                ">
+                    <h3 style="margin:0 0 8px 0; font-size:20px; color:#dc2626;">
+                        ⚠️ 确认异常中断
+                    </h3>
+                    <p style="margin:0 0 20px 0; color:#6b7280; font-size:14px;">
+                        请选择中断原因，确认后当前采集进度将被保存。
+                    </p>
+                    <div id="abortReasonList" style="display:flex; flex-direction:column; gap:10px; margin-bottom:24px;">
+                        ${reasons.map((r, i) => `
+                            <button class="abort-reason-btn" data-reason="${r.value}"
+                                style="
+                                    padding:12px 16px; border:2px solid #e5e7eb; border-radius:8px;
+                                    background:white; cursor:pointer; font-size:14px; text-align:left;
+                                    transition: all 0.2s;
+                                "
+                                onmouseover="this.style.borderColor='#f97316';this.style.background='#fff7ed';"
+                                onmouseout="this.style.borderColor='#e5e7eb';this.style.background='white';"
+                            >${r.label}</button>
+                        `).join('')}
+                    </div>
+                    <div style="display:flex; gap:12px; justify-content:flex-end;">
+                        <button id="abortCancelBtn" style="
+                            padding:10px 24px; border:1px solid #d1d5db; border-radius:8px;
+                            background:white; cursor:pointer; font-size:14px;
+                        ">取消</button>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(overlay);
+
+            // 绑定原因选择事件
+            const reasonButtons = overlay.querySelectorAll('.abort-reason-btn');
+            reasonButtons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const selectedReason = btn.dataset.reason;
+                    overlay.remove();
+                    callback(selectedReason);
+                });
+            });
+
+            // 绑定取消按钮
+            const cancelBtn = overlay.querySelector('#abortCancelBtn');
+            if (cancelBtn) {
+                cancelBtn.addEventListener('click', () => {
+                    overlay.remove();
+                    callback(null);
+                });
+            }
+
+            // 点击遮罩关闭
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    overlay.remove();
+                    callback(null);
+                }
+            });
+        }
+
+        /**
+         * 【新增】执行异常中断
+         */
+        _executeAbort(reason) {
+            console.log('[Collection] ===== 异常中断 =====');
+            console.log('[Collection] 中断原因:', reason);
+            console.log('[Collection] 当前进度: Session', this.currentSessionIndex + 1,
+                ', Stage', this.currentStageIndex, ', Gesture', this.currentGestureIndex,
+                ', Repeat', this.gestureRepeatCount);
+
+            // ---- 1. 采集进度快照 ----
+            const progress = {
+                currentSessionIndex: this.currentSessionIndex,
+                currentStageIndex: this.currentStageIndex,
+                currentGestureIndex: this.currentGestureIndex,
+                gestureRepeatCount: this.gestureRepeatCount,
+                continualTrialCount: this.continualTrialCount,
+                currentPhase: this.currentPhase,
+                _shuffleMode: this._shuffleMode,
+                isAllSessionsMode: this._isAllSessionsMode,
+                sessionCount: this.sessionCount
+            };
+
+            // 手势快照（乱序模式下保存完整序列，便于恢复）
+            const gesturesSnapshot = this.gestures.map((g, i) => ({
+                id: g.id,
+                name: g.name,
+                icon: g.icon,
+                gifFile: g.gifFile,
+                _shuffled: g._shuffled || false,
+                _shuffleSegment: g._shuffleSegment || null,
+                _baseGestureIndex: g._baseGestureIndex !== undefined ? g._baseGestureIndex : null,
+                _repeatIndex: g._repeatIndex !== undefined ? g._repeatIndex : null,
+                _repeatTotal: g._repeatTotal !== undefined ? g._repeatTotal : null
+            }));
+
+            const interruptedAt = new Date().toISOString();
+
+            // ---- 2. 写入 localStorage ----
+            const breakpointState = {
+                version: 1,
+                status: 'abnormal_interrupted',
+                interruptedAt: interruptedAt,
+                interruptReason: reason,
+                collectionConfig: this.collectionConfig,
+                currentTaskId: this.currentTaskId,
+                currentSessionIndex: this.currentSessionIndex,
+                currentStageIndex: this.currentStageIndex,
+                currentGestureIndex: this.currentGestureIndex,
+                gestureRepeatCount: this.gestureRepeatCount,
+                continualTrialCount: this.continualTrialCount,
+                currentPhase: this.currentPhase,
+                _shuffleMode: this._shuffleMode,
+                isAllSessionsMode: this._isAllSessionsMode,
+                sessionCount: this.sessionCount,
+                gesturesSnapshot: gesturesSnapshot,
+                recordingSessionId: this._recordingSessionId,
+                stages: this.stages.map(s => ({ id: s.id, name: s.name }))
+            };
+
+            localStorage.setItem('emg_breakpoint_state', JSON.stringify(breakpointState));
+            localStorage.setItem('emg_breakpoint_exists', 'true');
+            console.log('[Collection] breakpoint 状态已写入 localStorage');
+            console.log('[Collection] breakpoint:', breakpointState);
+
+            // ---- 3. 发送异常中断到 realtimeEngine ----
+            this.sendToRealtimeEngine('abnormal_interrupt', {
+                reason: reason,
+                interruptedAt: interruptedAt,
+                progress: progress
+            });
+
+            // ---- 4. 清理前端状态（复用 stopTask 的清理逻辑） ----
+            this._isRunning = false;
+            this._isPaused = false;
+
+            // 取消全部轮次模式
+            this.cancelAllSessionsMode();
+
+            if (this.phaseTimer) {
+                clearTimeout(this.phaseTimer);
+                this.phaseTimer = null;
+            }
+            if (this.countdownTimer) {
+                clearInterval(this.countdownTimer);
+                this.countdownTimer = null;
+            }
+            if (this.continualProgressTimer) {
+                clearInterval(this.continualProgressTimer);
+                this.continualProgressTimer = null;
+            }
+
+            // 清理标定状态
+            if (this.calibrationTimer) {
+                clearInterval(this.calibrationTimer);
+                this.calibrationTimer = null;
+            }
+            this.isCalibrating = false;
+            this.calibrationPhase = null;
+
+            // 隐藏标定指导动画
+            if (window.calibrationGuideAnimation) {
+                window.calibrationGuideAnimation.hide();
+            }
+
+            // 隐藏手势示范 GIF
+            this.hideGestureGif();
+
+            // 停止动画
+            if (window.discreteGestureAnimation) {
+                window.discreteGestureAnimation.stop();
+                if (window.discreteGestureAnimation._shuffleModeActive) {
+                    window.discreteGestureAnimation.stopShuffleMode();
+                }
+            }
+            if (window.continualGesture1Animation) {
+                window.continualGesture1Animation.stop();
+            }
+            if (window.continualGesture2Animation) {
+                window.continualGesture2Animation.stop();
+            }
+            if (window.animationController) {
+                window.animationController.stop();
+            }
+
+            // 重置乱序模式标志
+            this._shuffleMode = false;
+
+            // 重新启用选择器
+            const sessionSelect = document.getElementById('sessionSwitchSelect');
+            if (sessionSelect) sessionSelect.disabled = false;
+            const stageSelect = document.getElementById('stageSwitchSelect');
+            if (stageSelect) stageSelect.disabled = false;
+
+            // 禁用空格键监听
+            this._disableSpaceKey();
+
+            // 恢复按钮状态
+            this.updateControlButtons(false);
+            this.updateNextStageButton();
+            this.updateGestureList();
+            this.updateStatus('已中断');
+
+            // 恢复质量颜色指示
+            if (window.waveformController) {
+                window.waveformController.refreshQualityVisibility();
+            }
+
+            this.showToast(`已保存断点: ${reason}`, 'success');
+
+            console.log('[Collection] 异常中断流程完成，breakpoint 已保存');
+
+            // ---- 5. 建议返回首页（Phase 1 不做强制跳转，由用户手动返回） ----
+            // 后续 Phase 2 实现断点续采按钮时，可在此自动返回首页
+        }
+
+        // 【已移除】togglePause 方法已被测试模式替代
+
         isRunning() {
             return this._isRunning;
         }
@@ -2076,10 +2370,15 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             const startBtn = document.getElementById('startTaskBtn');
             const testBtn = document.getElementById('testModeBtn');
             const stopBtn = document.getElementById('stopTaskBtn');
+            const abortBtn = document.getElementById('abortTaskBtn');
 
             if (startBtn) startBtn.disabled = running;
             if (testBtn) testBtn.disabled = running;  // 测试按钮在运行时禁用
             if (stopBtn) stopBtn.disabled = !running;
+            // 【新增】异常中断按钮：采集中且非测试模式时启用，否则禁用
+            if (abortBtn) {
+                abortBtn.disabled = !running || this._isTestMode;
+            }
         }
 
         updateStatus(text) {

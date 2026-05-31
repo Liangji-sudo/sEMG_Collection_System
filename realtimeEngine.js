@@ -207,6 +207,7 @@ class RealtimeEngine extends EventEmitter {
                 case 'prompt_start': this.onPromptStart(data.promptName, data.promptIndex); break;
                 case 'prompt_end': this.onPromptEnd(data.promptName, data.promptIndex); break;
                 case 'prompt': this.onPrompt(data.name, data.stageName, data.timestamp); break;
+                case 'abnormal_interrupt': this.onAbnormalInterrupt(data); break;
 
                 // 【新增】Mocap命令
                 case 'mocap_set_channel': this.onMocapSetChannel(data.channel); break;
@@ -284,7 +285,12 @@ class RealtimeEngine extends EventEmitter {
 
     async onCollectionStop(completed) {
         if (this.stageFileOpen && !this.isClosingStageFile) {
-            await this.closeStageFile();
+            // 显式传 collection_status：
+            // completed === true  → "completed"（Stage 正常完成）
+            // completed === false → "manual_stopped"（工作人员手动点停止）
+            await this.closeStageFile({
+                collection_status: completed ? 'completed' : 'manual_stopped'
+            });
         }
         this.isCollecting = false;
         this.collectionPaused = false;
@@ -294,6 +300,33 @@ class RealtimeEngine extends EventEmitter {
         // 原因：在同一个采集会话中（从进入采集界面到离开），ESP32 持续录制到同一个 bin 文件
         // sd_filenames 由 sd_filenames_updated 事件更新，只有在 start_all 时才会变化
         // 如果在这里清空，第二次点击采集按钮时 sd_filenames 为空，导致 H5 文件缺少 bin 字段
+    }
+
+    // 【新增】异常中断处理 — Phase 1: 关闭 H5 并标记 abnormal_interrupted
+    async onAbnormalInterrupt(data) {
+        const { reason, interruptedAt, progress } = data || {};
+        console.log(`[realtimeEngine] ========== 异常中断 ==========`);
+        console.log(`[realtimeEngine] 原因: ${reason || '未知'}`);
+        console.log(`[realtimeEngine] 时间: ${interruptedAt || '未知'}`);
+
+        if (this.stageFileOpen && !this.isClosingStageFile) {
+            // 关闭当前 H5，写入异常中断标记
+            await this.closeStageFile({
+                collection_status: 'abnormal_interrupted',
+                interrupted_at: interruptedAt || new Date().toISOString(),
+                interrupt_reason: reason || '未知',
+                resume_progress: progress ? JSON.stringify(progress) : null,
+                segment_index: 1  // 第一个 segment，续采时递增
+            });
+        } else {
+            console.log('[realtimeEngine] 没有打开的 H5 文件，跳过关闭');
+        }
+
+        // 重置采集状态（但不改变 sd_filenames）
+        this.isCollecting = false;
+        this.collectionPaused = false;
+        this.isTestMode = false;
+        // 注意：不调用 onCollectionStop，避免覆盖 H5 标记
     }
 
     // 【新增】处理SD卡文件名和设备名称更新事件
@@ -518,15 +551,19 @@ class RealtimeEngine extends EventEmitter {
         }
     }
 
-    async closeStageFile() {
+    async closeStageFile(extraParams = {}) {
         if (!this.stageFileOpen || this.isClosingStageFile) return;
 
         this.isClosingStageFile = true;
 
         try {
-            const response = await this.sendStorageCommand('close', { end_time: Date.now() });
+            const params = { end_time: Date.now(), ...extraParams };
+            const response = await this.sendStorageCommand('close', params);
             this.stageFileOpen = false;
-            if (response.status === 'success') console.log(`[realtimeEngine] ✅ 文件已关闭`);
+            if (response.status === 'success') {
+                const status = params.collection_status || 'completed';
+                console.log(`[realtimeEngine] ✅ 文件已关闭 (collection_status: ${status})`);
+            }
             return response;
         } catch (error) {
             console.error('[realtimeEngine] 关闭Stage文件失败:', error);

@@ -1674,6 +1674,15 @@
             color: white;
         }
 
+        .control-btn.abort {
+            background: #f97316;
+            color: white;
+        }
+
+        .control-btn.abort:hover {
+            background: #ea580c;
+        }
+
         .control-btn:disabled {
             opacity: 0.5;
             cursor: not-allowed;
@@ -5467,6 +5476,9 @@
                         </button>
                         <button class="control-btn stop" id="stopTaskBtn" disabled>
                             <i class="fas fa-stop"></i> 停止
+                        </button>
+                        <button class="control-btn abort" id="abortTaskBtn" disabled>
+                            <i class="fas fa-exclamation-triangle"></i> 异常中断
                         </button>
                     </div>
 

@@ -165,6 +165,9 @@
             if (window.waveformController) {
                 window.waveformController.refreshQualityVisibility();
             }
+
+            // 【新增 Phase 1】检测断点状态
+            this._checkBreakpointState();
         }
 
         /**
@@ -505,6 +508,33 @@
                 video.play().catch(err => {
                     console.warn('[PageSwitch] 视频重播失败:', err);
                 });
+            }
+        }
+
+        /**
+         * 【新增 Phase 1】检测断点状态
+         * 如果存在 emg_breakpoint_exists，在控制台和 toast 提示
+         * Phase 1 不实现续采按钮，只做检测提示
+         */
+        _checkBreakpointState() {
+            const breakpointExists = localStorage.getItem('emg_breakpoint_exists');
+            if (breakpointExists === 'true') {
+                console.log('[PageSwitch] ⚠️ 检测到异常中断断点状态');
+                try {
+                    const breakpointState = JSON.parse(localStorage.getItem('emg_breakpoint_state') || '{}');
+                    console.log('[PageSwitch] 断点信息:', {
+                        interruptedAt: breakpointState.interruptedAt,
+                        reason: breakpointState.interruptReason,
+                        taskId: breakpointState.currentTaskId,
+                        session: (breakpointState.currentSessionIndex || 0) + 1,
+                        stage: breakpointState.currentStageIndex,
+                        gesture: breakpointState.currentGestureIndex
+                    });
+                } catch (e) {
+                    console.log('[PageSwitch] 断点状态解析失败:', e);
+                }
+                // Phase 1: 仅在 console 提示，不做 UI 入口
+                // Phase 2: 在此显示"断点续采"按钮
             }
         }
     }
