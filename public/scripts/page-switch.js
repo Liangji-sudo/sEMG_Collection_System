@@ -70,6 +70,20 @@
                 });
             }
 
+            // 【Phase 6】导入断点 JSON（首页，隐藏 file input）
+            const importInput = document.getElementById('importBreakpointInput');
+            if (importInput) {
+                importInput.addEventListener('change', (e) => {
+                    this._handleImportBreakpoint(e);
+                });
+            }
+            const importBtn = document.getElementById('importBreakpointBtn');
+            if (importBtn) {
+                importBtn.addEventListener('click', () => {
+                    if (importInput) importInput.click();
+                });
+            }
+
             // 用户表单提交（旧模式降级用）
             const userForm = document.getElementById('userForm');
             if (userForm) {
@@ -666,6 +680,55 @@
             }, 500);
 
             console.log('[PageSwitch] 断点续采恢复完成');
+        }
+
+        /**
+         * 【Phase 6】从 .breakpoint.json 文件导入断点
+         */
+        _handleImportBreakpoint(event) {
+            const file = event.target.files?.[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const bp = JSON.parse(e.target.result);
+
+                    // 校验
+                    if (!bp.version || bp.version !== 1) {
+                        this.showToast('断点文件版本不支持', 'error');
+                        return;
+                    }
+                    if (bp.status !== 'abnormal_interrupted') {
+                        this.showToast('该文件不是异常中断断点', 'error');
+                        return;
+                    }
+                    if (!bp.collectionConfig || !bp.currentTaskId) {
+                        this.showToast('断点数据不完整，缺少 collectionConfig', 'error');
+                        return;
+                    }
+
+                    // 写入 localStorage
+                    localStorage.setItem('emg_breakpoint_state', JSON.stringify(bp));
+                    localStorage.setItem('emg_breakpoint_exists', 'true');
+                    window.__showBreakpointResumeAfterAbort = true;
+
+                    console.log('[PageSwitch] 断点已从文件导入:', bp.interruptedAt);
+                    console.log('[PageSwitch] 来源:', bp.source_h5_path || file.name);
+
+                    // 刷新首页按钮
+                    this.showWelcome();
+                    this.showToast('断点已导入，可点击"断点续采"继续', 'success');
+
+                } catch (err) {
+                    console.error('[PageSwitch] 导入断点失败:', err);
+                    this.showToast('断点文件解析失败', 'error');
+                }
+            };
+            reader.readAsText(file);
+
+            // reset input so same file can be imported again
+            event.target.value = '';
         }
     }
 

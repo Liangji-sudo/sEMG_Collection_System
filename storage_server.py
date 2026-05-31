@@ -193,6 +193,7 @@ class HDF5StorageServer:
         self.current_category1 = None
         self.current_category2 = None
         self.current_category4 = None
+        self.current_recording_session_id = None  # Phase 5
         self.is_collecting = False
         
         # 【新增】Session信息
@@ -283,6 +284,63 @@ class HDF5StorageServer:
             filename = f"{safe_user_id}_{safe_stage_name}_session{session_number}_{date_str}_{time_str}.h5"
         return os.path.join(dir_path, filename)
     
+    def _maybe_update_parent_segment_link(self, new_file_path, params):
+        """Phase 5: 补填父 segment H5 的 resumed_by_segment_index / resumed_by_file
+
+        在当前（续采）segment 创建成功后调用。
+        扫描同目录 .h5 找父 segment 并写入反向链路。
+        """
+        is_resumed = params.get("is_resumed", False)
+        parent_seg = params.get("parent_segment_index")
+        session_id = params.get("recording_session_id") or self.current_recording_session_id or ""
+
+        if not is_resumed or not parent_seg or not session_id:
+            return
+
+        new_dir = os.path.dirname(new_file_path)
+        new_rel = os.path.relpath(new_file_path, self.storage_dir)
+        seg_idx = int(params.get("segment_index", 1))
+        found = False
+
+        try:
+            for fname in os.listdir(new_dir):
+                if not fname.endswith('.h5'):
+                    continue
+                parent_path = os.path.join(new_dir, fname)
+                if parent_path == new_file_path:
+                    continue
+
+                try:
+                    with h5py.File(parent_path, 'a') as pf:
+                        p_sid = (pf.attrs.get('collection_session_id') or
+                                 pf.attrs.get('recording_session_id'))
+                        if isinstance(p_sid, bytes):
+                            p_sid = p_sid.decode('utf-8')
+                        p_seg = pf.attrs.get('segment_index', 1)
+                        p_cs = pf.attrs.get('collection_status', '')
+                        if isinstance(p_cs, bytes):
+                            p_cs = p_cs.decode('utf-8')
+
+                        if p_sid != session_id or int(p_seg) != int(parent_seg):
+                            continue
+                        if p_cs != 'abnormal_interrupted':
+                            continue
+
+                        pf.attrs['resumed_by_segment_index'] = int(seg_idx)
+                        pf.attrs['resumed_by_file'] = str(new_rel)
+                        debug_log(f"🔗 已补填父 segment 链路: {os.path.basename(parent_path)}")
+                        debug_log(f"   resumed_by_segment_index={seg_idx}, resumed_by_file={new_rel}")
+                        found = True
+                        break
+                except Exception:
+                    continue
+
+            if not found:
+                debug_log(f"⚠️ 未找到父 segment: session={session_id}, parent_seg={parent_seg}")
+
+        except Exception as e:
+            debug_log(f"⚠️ 补填父 segment 链路失败: {e}")
+
     def create_file(self, params):
         """创建新的HDF5文件（使用多级目录结构，包含受试者层级）"""
         try:
@@ -394,6 +452,7 @@ class HDF5StorageServer:
             # recording_session_id: 录像会话ID，格式 "rec_YYYYMMDD_HHMMSS_N"
             # is_multi_session: 是否为多轮次采集模式
             recording_session_id = params.get("recording_session_id")
+            self.current_recording_session_id = recording_session_id  # Phase 5
             is_multi_session = params.get("is_multi_session", False)
             if recording_session_id:
                 self.f.attrs["recording_session_id"] = recording_session_id
@@ -652,7 +711,10 @@ class HDF5StorageServer:
             debug_log(f"✅ 文件创建成功: {rel_path}")
             debug_log(f"   任务: {task_id}, 用户: {user_id}, Stage: {stage_name}")
             debug_log(f"   分类: {category1}/{category2}/{category4}")
-            
+
+            # Phase 5: 补填父 segment 的 resumed_by 链路
+            self._maybe_update_parent_segment_link(self.file_path, params)
+
             return {
                 "status": "success",
                 "msg": f"创建Stage文件成功",
@@ -1063,6 +1125,12 @@ class HDF5StorageServer:
                     if resume_progress:
                         self.f.attrs["resume_progress"] = str(resume_progress)
                         debug_log(f"   resume_progress: {resume_progress[:80]}...")
+
+                    # Phase 6 fix: 完整可恢复 breakpoint state（优先于 resume_progress）
+                    breakpoint_state = params.get("breakpoint_state")
+                    if breakpoint_state:
+                        self.f.attrs["breakpoint_state"] = str(breakpoint_state)
+                        debug_log(f"   breakpoint_state: 已写入完整可恢复状态")
 
                     # Phase 3: interruption_id — 从已有 attrs 复用（create 时已生成）
                     # 如果 create 时已有，不覆盖；否则在此生成

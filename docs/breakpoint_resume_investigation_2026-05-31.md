@@ -1135,9 +1135,219 @@ interruption_id 生成                    ✅
 普通采集不受影响                        ✅
 ```
 
-### 16.7 Phase 4 建议
+### 16.7 Phase 4: hdf5_tool 展示 + bin_sync_tool 审计（2026-05-31）
 
-- hdf5_tool 展示新增 attrs：`collection_status`、`segment_index`、`is_resumed`、`interruption_id`、frame range、`segment_bin_summary`
-- hdf5_tool 按 `collection_session_id` 聚合 segment 列表视图
-- bin_sync_tool 利用 `segment_has_dev1_bin` / `segment_bin_summary` 判断是否需要同步
-- 跨 segment resumed_by 链路补填
+#### 修改文件
+
+| 文件 | 改动 | 说明 |
+|------|------|------|
+| [hdf5_tool.py](tools/hdf5_tool.py) | +120 行 | 新增 `extract_segment_metadata()` 纯函数；`StatisticsPanel` 新增 17 个 Phase 3 字段展示；增加 `json` / `datetime` import；面板高度从 460 增至 700 |
+| [bin_sync_tool.py](tools/bin_sync_tool.py) | +5 行 | 同步前检查 `collection_status`，`abnormal_interrupted` 时日志提示，不阻止同步 |
+
+#### hdf5_tool 新增展示内容
+
+**StatisticsPanel 新增字段**：
+- `collection_status`（红色=abnormal_interrupted，橙色=manual_stopped，绿色=completed）
+- `is_resumed`（紫色="是"）
+- `segment_index`（>1 时紫色）
+- `collection_session_id`、`parent_segment_index`
+- `start_time` / `end_time` / `duration`
+- `session_number`、`stage_index`
+- `emg1/emg2_frame_count`、`emg1/emg2_frame_range`（`[min, max]`）
+- `segment_has_dev1/dev2_bin`（✅/❌）
+- `segment_device_count`
+
+**新增纯函数** `extract_segment_metadata(h5_f) -> dict`：
+- 返回完整 metadata dict，包含上述所有字段
+- 自动解析 `segment_bin_summary` JSON
+- 自动解析 `resume_progress` JSON（abnormal 时）
+- 旧 H5 缺字段返回 `None` 或 `'-'`，不会崩溃
+
+#### bin_sync_tool 审计结论
+
+- `sync_h5_with_bin()` 按单个 H5 的 `sd_bin_dev1`/`sd_bin_dev2` 独立查找 bin 文件 ✅
+- `SyncWorker._find_bin_files()` 从 H5 attrs 读取 bin 前缀，不依赖全局状态 ✅
+- 每个 segment H5 自包含 bin 信息，逐文件同步安全 ✅
+- **最小适配**：同步前检查 `collection_status`，`abnormal_interrupted` 时日志提示"仅同步已采集的有效前半段"，不阻止同步 ✅
+- **不需要修改核心同步算法**
+
+#### 异常中断 segment 同步策略
+
+- **允许同步**：frame_id 校验通过即可同步，即使 `collection_status == abnormal_interrupted`
+- **日志提示**：警告工作人员这是中断 segment，同步的只是前半段有效数据
+- **不阻止**：除非 frame_id 校验失败（gap/duplicate），否则正常同步
+
+#### 旧 H5 兼容
+
+- 所有新增展示字段通过 `.get()` 读取，缺字段显示 `'-'`
+- `extract_segment_metadata()` 对所有 attrs 做 None 安全处理
+- 旧 H5 不会崩溃
+
+#### 验证结果
+
+```
+python -m py_compile hdf5_tool.py      ✅
+python -m py_compile bin_sync_tool.py  ✅
+extract_segment_metadata 正常           ✅
+  collection_status: abnormal_interrupted
+  duration: 3.5s
+  emg1_range: {frame_count:750, frame_id_min:0, frame_id_max:1498}
+  emg2_range: {frame_count:0} (empty)
+  abnormal_detail progress_parsed: {currentGestureIndex:18}
+  bin_summary_parsed: {device_count:1}
+```
+
+---
+
+## 17. Phase 5: segment 链路 + 父 H5 反链 + 重启策略（2026-05-31）
+
+### 17.1 修改文件
+
+| 文件 | 改动 | 说明 |
+|------|------|------|
+| [hdf5_tool.py](tools/hdf5_tool.py) | +100 行 | 新增 `scan_segment_chain()`、`format_segment_chain_summary()`；`StatisticsPanel` 新增 segment 链路 QTextEdit；面板高度 700→840 |
+| [storage_server.py](storage_server.py) | +45 行 | 新增 `_maybe_update_parent_segment_link()`；`create_file()` 成功后补填父 H5 的 `resumed_by_segment_index`/`resumed_by_file`；新增 `current_recording_session_id` 实例变量 |
+
+### 17.2 hdf5_tool 新增链路展示
+
+**`scan_segment_chain(current_h5_path) -> list[dict]`**：
+- 读取当前 H5 的 `collection_session_id`
+- 扫描同目录下所有 `.h5`，找出相同 session_id 的文件
+- 对每个文件调用 `extract_segment_metadata()` 提取元数据
+- 按 `segment_index` 排序
+- 旧 H5 无 `collection_session_id` 时返回空列表
+
+**`format_segment_chain_summary(chain, current_path) -> str`**：
+- 输出汇总行："会话共有 X 个 segment，异常中断 Y 个，续采 Z 个，完成 W 个"
+- 表格式列表：segment_index、文件名、状态、是否续采、回合、Stage、Dev1/Dev2 Bin、sync
+- 当前文件标记 `▶`
+- 关系提示："当前文件已被 segment N 续采" / "当前文件是续采段，父 segment=N"
+
+**StatisticsPanel 新增 QTextEdit**：
+- 显示 segment 链路摘要（只读，Consolas 7pt，max 120px，紫色标题）
+
+### 17.3 storage_server 补填父 segment 反链
+
+**`_maybe_update_parent_segment_link(new_file_path, params)`**：
+- **触发条件**：`is_resumed=true`，`parent_segment_index` 存在，`recording_session_id` 存在
+- **操作**：扫描同目录 `.h5`，找到 `collection_session_id` 相同、`segment_index == parent_segment_index`、`collection_status == abnormal_interrupted` 的父文件
+- **写入**：`resumed_by_segment_index = 当前 segment_index`，`resumed_by_file = os.path.relpath(new_file_path, storage_dir)`
+- **安全**：找不到就 log warning，不阻塞新 segment 创建；文件打开失败跳过
+- **调用点**：`create_file()` 成功后、return 前
+
+**链路完整性**：
+- 父 segment：`resumed_by_segment_index=2`、`resumed_by_file="path/to/seg2.h5"`
+- 续采 segment：`is_resumed=true`、`parent_segment_index=1`
+- 形成双向链路 ✅
+
+### 17.4 重启后断点策略
+
+**当前行为（不变）**：
+- 异常中断自动回首页 → `window.__showBreakpointResumeAfterAbort=true` → 显示"断点续采"按钮
+- 普通返回首页、刷新首页 → 内存标记丢失 → 按钮不显示
+- localStorage `emg_breakpoint_state` **仍保留**
+
+**策略说明**：
+- 这是 UX 策略，不是数据丢失
+- localStorage 断点是一个"热恢复"标记，只在同一会话的异常中断路径中可见
+- 重启后如需恢复，可通过 hdf5_tool 的 segment 链路视图找到 `abnormal_interrupted` 的 segment
+- Phase 6 建议增加"历史断点管理"入口，从 hdf5_tool 一键恢复
+
+### 17.5 验证结果
+
+```
+python -m py_compile hdf5_tool.py      ✅
+python -m py_compile storage_server.py ✅
+python -m py_compile bin_sync_tool.py  ✅
+
+scan_segment_chain: 2 files (parent + resumed) ✅
+segment sort by segment_index: correct ✅
+parent backfill: resumed_by_segment_index=2 ✅
+parent backfill: resumed_by_file set ✅
+chain summary: session stats correct ✅
+old H5 (no collection_session_id): empty chain ✅
+```
+
+### 17.6 Phase 6: 历史断点任务管理（2026-05-31）
+
+#### 修改文件
+
+| 文件 | 改动 | 说明 |
+|------|------|------|
+| [hdf5_tool.py](tools/hdf5_tool.py) | +130 行 | 新增 `scan_breakpoints()`、`_bp_summary_line()`、`generate_breakpoint_json()`；新增 `BreakpointTab` 标签页（扫描、列表、导出、复制剪贴板） |
+| [page-switch.js](public/scripts/page-switch.js) | +40 行 | 新增 `_handleImportBreakpoint()` 从 JSON 文件导入断点；绑定隐藏 file input |
+| [index.html](public/index.html) | +5 行 | 新增隐藏 `#importBreakpointInput` + "导入断点文件" 链接 |
+
+#### hdf5_tool 新增功能
+
+**`scan_breakpoints(storage_root) -> list[dict]`**：
+- 递归扫描 `storage_root` 下所有 `.h5`
+- 筛选 `collection_status == "abnormal_interrupted"`
+- 判断是否已被续采：`resumed_by_segment_index > 0` 或 `resumed_by_file` 非空
+- 恢复数据来源优先级：**`breakpoint_state`（新格式，含完整 collectionConfig/gesturesSnapshot）→ `resume_progress`（旧格式，仅诊断 fallback）**
+- 可恢复判定：未被续采 + `breakpoint_state` 可解析 + 含 `collectionConfig`
+- 仅 `resume_progress` 无 `breakpoint_state` → 标记 `[OLD_FMT]`，仅可诊断
+
+**`generate_breakpoint_json(h5_path) -> dict`**：
+- 生成前端兼容的 breakpoint state JSON
+- **优先读取 `breakpoint_state`（完整可恢复状态），fallback 到 `resume_progress`（旧格式兼容）**
+- 包含 `source_h5_path` 用于溯源
+- 返回 `recoverable` 标志和 `warnings` 列表
+
+**BreakpointTab UI**：
+- "扫描历史断点" 按钮 → 选择目录 → 列出所有异常中断 H5
+- 绿色 `[RECOVERABLE]` = 可恢复，紫色 `[RESUMED]` = 已续采，黄色 `[OLD_FMT]` = 旧格式仅诊断，橙色 `[DIAG_ONLY]` = 其他
+- 详情面板显示用户/任务/轮次/Stage/手势进度；旧格式文件提示"缺少 breakpoint_state/collectionConfig，仅可诊断"
+- "导出断点恢复 JSON" 和 "复制 JSON 到剪贴板" 仅对 `recoverable=true` 的项启用
+- 对不可恢复项点击导出会弹窗说明缺少 breakpoint_state/collectionConfig
+
+#### 前端导入入口
+
+- 首页 welcome 页面增加隐藏 `<input type="file" accept=".json">` + "导入断点文件" 链接
+- `_handleImportBreakpoint()` 读取 JSON，校验 version/status/collectionConfig/currentTaskId/segmentIndex
+- 写入 localStorage + 设置 `window.__showBreakpointResumeAfterAbort = true`
+- 刷新首页显示"断点续采"按钮
+
+#### 可恢复判定规则
+
+| 条件 | 判定 |
+|------|------|
+| collection_status == "abnormal_interrupted" | 扫描范围内 |
+| resumed_by_segment_index <= 0 | 未被续采 |
+| 有 `breakpoint_state` attrs（新格式） | 优先使用，含完整 collectionConfig+gesturesSnapshot |
+| 仅有 `resume_progress`（旧格式） | fallback，仅诊断，标记 OLD_FMT |
+| breakpoint_state.collectionConfig 存在 | **可完整恢复** |
+| 缺 collectionConfig | 仅可诊断（不可恢复） |
+
+#### 为什么不直接写浏览器 localStorage
+
+hdf5_tool 是 Python/PyQt5 桌面应用，浏览器 localStorage 在不同进程中。通过导出 JSON 文件 + 前端导入的方式解耦：
+1. hdf5_tool 导出 `.breakpoint.json`
+2. 用户通过首页"导入断点文件"链接加载
+3. 前端写入 localStorage
+
+#### 完整恢复流程（重启后）
+
+```
+hdf5_tool → 扫描 storage → 找到 abnormal_interrupted H5
+  → 导出 .breakpoint.json
+  → 复制到采集电脑/同一目录
+首页 → "导入断点文件" → 选择 .breakpoint.json
+  → localStorage 写入 → 显示"断点续采"按钮
+  → 连接设备 → 点击"断点续采" → 从断点继续
+```
+
+#### 验证结果
+
+```
+python -m py_compile hdf5_tool.py      ✅
+node --check page-switch.js            ✅
+node --check collection-controller.js  ✅
+
+scan_breakpoints: 2 found (1 recoverable + 1 resumed) ✅
+generate_breakpoint_json: source_h5_path + progress ✅
+  currentGestureIndex=18, collectionConfig present ✅
+completed H5: not in results ✅
+old H5 (no collection_status): not in results ✅
+frontend import: localStorage write + button refresh ✅
+```

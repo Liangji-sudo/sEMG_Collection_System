@@ -687,6 +687,14 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
             log("警告: 文件已同步，跳过")
             return {'status': 'skipped', 'reason': 'already_synced'}
 
+        # Phase 4: 检查 collection_status，异常中断 segment 提示但不阻止同步
+        coll_status = f.attrs.get('collection_status', 'unknown')
+        if coll_status == 'abnormal_interrupted':
+            log("⚠️ 注意: 这是异常中断 segment，仅同步已采集到的有效前半段数据")
+            log(f"   中断原因: {f.attrs.get('interrupt_reason', '未知')}")
+        elif coll_status == 'manual_stopped':
+            log("ℹ️ 手动停止 segment，同步已采集数据")
+
         # 获取250Hz ADC数据集
         ds_250hz_name = f"emg{device_id}_250hz_adc"
         if ds_250hz_name not in f:

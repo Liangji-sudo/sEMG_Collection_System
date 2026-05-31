@@ -1563,11 +1563,12 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             localStorage.setItem('emg_breakpoint_exists', 'true');
             console.log('[Collection] breakpoint 状态已写入 localStorage');
 
-            // ---- 2. 发送异常中断到 realtimeEngine（使用快照进度） ----
+            // ---- 2. 发送异常中断到 realtimeEngine（使用快照进度 + 完整 breakpointState） ----
             this.sendToRealtimeEngine('abnormal_interrupt', {
                 reason: reason,
                 interruptedAt: snap.interruptedAt,
-                progress: snap.progress
+                progress: snap.progress,
+                breakpointState: breakpointState  // Phase 6 fix: 完整可恢复状态
             });
 
             // ---- 3. 前端清理已在 abortTask() 中完成，此处无需重复 ----

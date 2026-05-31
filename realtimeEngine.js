@@ -339,7 +339,7 @@ class RealtimeEngine extends EventEmitter {
 
     // 【新增】异常中断处理 — 关闭 H5 并标记 abnormal_interrupted
     async onAbnormalInterrupt(data) {
-        const { reason, interruptedAt, progress } = data || {};
+        const { reason, interruptedAt, progress, breakpointState } = data || {};
         console.log(`[realtimeEngine] ========== 异常中断 ==========`);
         console.log(`[realtimeEngine] 原因: ${reason || '未知'}`);
         console.log(`[realtimeEngine] 时间: ${interruptedAt || '未知'}`);
@@ -352,7 +352,8 @@ class RealtimeEngine extends EventEmitter {
                 collection_status: 'abnormal_interrupted',
                 interrupted_at: interruptedAt || new Date().toISOString(),
                 interrupt_reason: reason || '未知',
-                resume_progress: progress ? JSON.stringify(progress) : null
+                resume_progress: progress ? JSON.stringify(progress) : null,
+                breakpoint_state: breakpointState ? JSON.stringify(breakpointState) : null
             });
         } else {
             console.log('[realtimeEngine] 没有打开的 H5 文件，跳过关闭');
