@@ -8,8 +8,10 @@ HDF5整合工具 - 结合查看和同步功能
 
 import sys
 import os
+import json
 import h5py
 import numpy as np
+from datetime import datetime
 from pathlib import Path
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -267,6 +269,457 @@ class WaveformWidget(QWidget):
         self.canvas.draw()
 
 
+def extract_segment_metadata(h5_f):
+    """Phase 4: 从 H5 文件提取 segment/bin 元数据（纯函数，可独立测试）
+
+    Args:
+        h5_f: h5py.File 对象
+
+    Returns:
+        dict: {
+            'collection_status', 'is_resumed', 'segment_index',
+            'collection_session_id', 'interruption_id',
+            'start_time', 'end_time', 'duration',
+            'session_info', 'stage_info',
+            'emg1_range', 'emg2_range',
+            'bin_info', 'abnormal_detail', 'resume_detail',
+            ...
+        }，缺失字段值为 None 或 '-'
+    """
+    def _str(v):
+        if v is None:
+            return None
+        if isinstance(v, bytes):
+            return v.decode('utf-8')
+        return str(v)
+
+    def _float_or_none(v):
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            return None
+
+    result = {
+        'collection_status': _str(h5_f.attrs.get('collection_status')),
+        'is_resumed': bool(h5_f.attrs.get('is_resumed', False)),
+        'segment_index': h5_f.attrs.get('segment_index', 1),
+        'collection_session_id': _str(h5_f.attrs.get('collection_session_id') or h5_f.attrs.get('recording_session_id')),
+        'interruption_id': _str(h5_f.attrs.get('interruption_id')),
+        'resumed_by_segment_index': h5_f.attrs.get('resumed_by_segment_index', -1),
+        'resumed_by_file': _str(h5_f.attrs.get('resumed_by_file')),
+        'start_time': _float_or_none(h5_f.attrs.get('start_time')),
+        'end_time': _float_or_none(h5_f.attrs.get('end_time')),
+    }
+
+    start = result['start_time']
+    end = result['end_time']
+    result['duration'] = round(end - start, 1) if (start and end) else None
+
+    # session/stage
+    result['session_info'] = {
+        'session_index': h5_f.attrs.get('session_index'),
+        'session_number': h5_f.attrs.get('session_number'),
+        'session_count': h5_f.attrs.get('session_count'),
+        'is_multi_session': bool(h5_f.attrs.get('is_multi_session', False)),
+    }
+    result['stage_info'] = {
+        'stage_index': h5_f.attrs.get('stage_index'),
+        'stage_name': _str(h5_f.attrs.get('stage_name')),
+        'task_id': _str(h5_f.attrs.get('task_id')),
+        'user_id': _str(h5_f.attrs.get('user_id')),
+    }
+
+    # EMG frame range
+    for dev in ('emg1', 'emg2'):
+        result[f'{dev}_range'] = {
+            'frame_count': h5_f.attrs.get(f'{dev}_frame_count', 0),
+            'frame_id_min': h5_f.attrs.get(f'{dev}_frame_id_min', -1),
+            'frame_id_max': h5_f.attrs.get(f'{dev}_frame_id_max', -1),
+            'time_min': _float_or_none(h5_f.attrs.get(f'{dev}_time_min')),
+            'time_max': _float_or_none(h5_f.attrs.get(f'{dev}_time_max')),
+        }
+
+    # bin info
+    result['bin_info'] = {}
+    for dev_label in ('dev1', 'dev2'):
+        info = {}
+        for key, attr in [('sd_bin', f'sd_bin_{dev_label}'),
+                          ('ble_device', f'ble_device_{dev_label}'),
+                          ('has_bin', f'segment_has_{dev_label}_bin')]:
+            val = h5_f.attrs.get(attr)
+            info[key] = _str(val) if val is not None else None
+        info['has_bin'] = bool(h5_f.attrs.get(f'segment_has_{dev_label}_bin', False))
+        result['bin_info'][dev_label] = info
+
+    result['segment_device_count'] = h5_f.attrs.get('segment_device_count', 0)
+
+    # segment_bin_summary JSON
+    bin_summary_raw = _str(h5_f.attrs.get('segment_bin_summary'))
+    if bin_summary_raw:
+        try:
+            result['bin_summary_parsed'] = json.loads(bin_summary_raw)
+        except (json.JSONDecodeError, TypeError):
+            result['bin_summary_parsed'] = None
+            result['bin_summary_raw'] = bin_summary_raw
+    else:
+        result['bin_summary_parsed'] = None
+
+    # abnormal detail
+    if result['collection_status'] == 'abnormal_interrupted':
+        progress_raw = _str(h5_f.attrs.get('resume_progress'))
+        progress_parsed = None
+        if progress_raw:
+            try:
+                progress_parsed = json.loads(progress_raw)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        result['abnormal_detail'] = {
+            'interrupted_at': _str(h5_f.attrs.get('interrupted_at')),
+            'interrupt_reason': _str(h5_f.attrs.get('interrupt_reason')),
+            'resume_progress_raw': progress_raw,
+            'resume_progress_parsed': progress_parsed,
+        }
+    else:
+        result['abnormal_detail'] = None
+
+    # resume detail
+    if result['is_resumed']:
+        result['resume_detail'] = {
+            'resume_from_interrupted_at': _str(h5_f.attrs.get('resume_from_interrupted_at')),
+            'resume_reason': _str(h5_f.attrs.get('resume_reason')),
+            'resume_parent_recording_session_id': _str(h5_f.attrs.get('resume_parent_recording_session_id')),
+            'parent_segment_index': h5_f.attrs.get('parent_segment_index'),
+        }
+    else:
+        result['resume_detail'] = None
+
+    return result
+
+
+def scan_segment_chain(current_h5_path):
+    """Phase 5: 扫描同目录下共享 collection_session_id 的 segment 链
+
+    Args:
+        current_h5_path: 当前打开的 H5 文件绝对路径
+
+    Returns:
+        list[dict]: 按 segment_index 排序的 segment 元数据列表，
+                    每个元素是 extract_segment_metadata + file_name + file_path + sync_status
+    """
+    directory = os.path.dirname(current_h5_path)
+    current_file = os.path.basename(current_h5_path)
+
+    # helper: safe int
+    def _safe_int(v, default=0):
+        try:
+            return int(v)
+        except (ValueError, TypeError):
+            return default
+
+    # helper: safe str
+    def _safe_str(v):
+        if v is None:
+            return None
+        if isinstance(v, bytes):
+            return v.decode('utf-8')
+        return str(v)
+
+    # 1) 读取当前文件的 collection_session_id
+    sid = None
+    try:
+        with h5py.File(current_h5_path, 'r') as f:
+            sid = _safe_str(f.attrs.get('collection_session_id') or
+                            f.attrs.get('recording_session_id'))
+    except Exception:
+        pass
+
+    if not sid:
+        return []
+
+    # 2) 扫描同目录 .h5 文件
+    chain = []
+    try:
+        for fname in sorted(os.listdir(directory)):
+            if not fname.endswith('.h5'):
+                continue
+            fpath = os.path.join(directory, fname)
+            try:
+                with h5py.File(fpath, 'r') as f:
+                    f_sid = _safe_str(f.attrs.get('collection_session_id') or
+                                      f.attrs.get('recording_session_id'))
+                    if f_sid != sid:
+                        continue
+                    meta = extract_segment_metadata(f)
+                    meta['file_name'] = fname
+                    meta['file_path'] = fpath
+                    meta['is_current'] = (fname == current_file)
+                    # Phase 5 fix: read real sync_status
+                    sync = _safe_str(f.attrs.get('sync_status'))
+                    meta['sync_status'] = sync if sync else 'unknown'
+                    chain.append(meta)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # 3) 按 segment_index 排序（safe int）
+    chain.sort(key=lambda m: (_safe_int(m.get('segment_index'), 0), m.get('file_name', '')))
+    return chain
+
+
+def format_segment_chain_summary(chain, current_path=None):
+    """Phase 5: 格式化 segment 链摘要文本
+
+    Args:
+        chain: scan_segment_chain() 返回值
+        current_path: 当前文件路径（用于标记 >>）
+
+    Returns:
+        str: 多行格式化摘要
+    """
+    def _safe_int(v, default=0):
+        try:
+            return int(v)
+        except (ValueError, TypeError):
+            return default
+
+    if not chain:
+        return "无 segment 链路（缺少 collection_session_id）"
+
+    total = len(chain)
+    abnormal_count = sum(1 for m in chain if m.get('collection_status') == 'abnormal_interrupted')
+    resumed_count = sum(1 for m in chain if m.get('is_resumed'))
+    completed_count = sum(1 for m in chain if m.get('collection_status') == 'completed')
+
+    lines = [
+        f"会话共有 {total} 个 segment，异常中断 {abnormal_count} 个，续采 {resumed_count} 个，完成 {completed_count} 个",
+        "-" * 80,
+    ]
+
+    header = f"{'':3s} {'文件':40s} {'状态':14s} {'续采':4s} {'回合':6s} {'Stage':10s} {'Dev1 Bin':20s} {'Dev2 Bin':20s} {'sync':8s}"
+    lines.append(header)
+    lines.append("-" * 80)
+
+    for m in chain:
+        marker = ">> " if m.get('is_current') else "   "
+        seg = _safe_int(m.get('segment_index'), 0)
+        fname = m.get('file_name', '?')[:38]
+        cs = m.get('collection_status', '?') or '?'
+        resumed = 'Y' if m.get('is_resumed') else 'N'
+        si = m.get('session_info', {})
+        sess = f"{si.get('session_number','?')}/{si.get('session_count','?')}"
+        stage = m.get('stage_info', {}).get('stage_name', '?') or '?'
+        dev1_bin = (m.get('bin_info', {}).get('dev1', {}).get('sd_bin') or '-')[:18]
+        dev2_bin = (m.get('bin_info', {}).get('dev2', {}).get('sd_bin') or '-')[:18]
+        sync = m.get('sync_status', 'unknown') or 'unknown'
+
+        tag = ''
+        if cs == 'abnormal_interrupted':
+            tag = ' [!]'
+        elif cs == 'manual_stopped':
+            tag = ' [M]'
+        if m.get('is_resumed'):
+            tag += ' [R]'
+
+        lines.append(
+            f"{marker}{seg:<2d} {fname:<40s} {cs+tag:<14s} {resumed:<4s} "
+            f"{sess:<6s} {stage:<10s} {dev1_bin:<20s} {dev2_bin:<20s} {sync:<8s}"
+        )
+
+    lines.append("-" * 80)
+
+    # 关系提示
+    cur = next((m for m in chain if m.get('is_current')), None)
+    if cur:
+        if cur.get('collection_status') == 'abnormal_interrupted':
+            resumed_by = _safe_int(cur.get('resumed_by_segment_index'), 0)
+            if resumed_by > 0:
+                lines.append(f">> 当前文件已被 segment {resumed_by} 续采")
+            else:
+                lines.append(">> 当前文件是异常中断段，尚未被续采")
+        if cur.get('is_resumed'):
+            parent = cur.get('resume_detail', {})
+            if parent:
+                pseg = parent.get('parent_segment_index', '?')
+                lines.append(f">> 当前文件是续采段，父 segment={pseg}")
+
+    return '\n'.join(lines)
+
+
+def scan_breakpoints(storage_root):
+    """Phase 6: 递归扫描 storage_root，找出所有 abnormal_interrupted 且未被续采的 H5
+
+    Returns:
+        list[dict]: 每个元素包含 file_path, recoverable, meta, summary 等字段
+    """
+    results = []
+    for root, dirs, files in os.walk(storage_root):
+        for fname in files:
+            if not fname.endswith('.h5'):
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                with h5py.File(fpath, 'r') as f:
+                    cs = f.attrs.get('collection_status')
+                    if isinstance(cs, bytes):
+                        cs = cs.decode('utf-8')
+                    if cs != 'abnormal_interrupted':
+                        continue
+
+                    resumed_by = f.attrs.get('resumed_by_segment_index', -1)
+                    try:
+                        resumed_by = int(resumed_by)
+                    except (ValueError, TypeError):
+                        resumed_by = -1
+
+                    resumed_file = f.attrs.get('resumed_by_file', '')
+                    if isinstance(resumed_file, bytes):
+                        resumed_file = resumed_file.decode('utf-8')
+                    already_resumed = (resumed_by > 0) or bool(resumed_file)
+
+                    # Phase 6 fix: prefer breakpoint_state (full), fallback to resume_progress (partial)
+                    bp_raw = f.attrs.get('breakpoint_state') or f.attrs.get('resume_progress')
+                    if isinstance(bp_raw, bytes):
+                        bp_raw = bp_raw.decode('utf-8')
+                    progress_parsed = None
+                    has_config = False
+                    has_full = False  # has collectionConfig + gesturesSnapshot
+                    if bp_raw:
+                        try:
+                            progress_parsed = json.loads(bp_raw)
+                            has_config = bool(progress_parsed.get('collectionConfig')) if isinstance(progress_parsed, dict) else False
+                            has_full = has_config and bool(progress_parsed.get('gesturesSnapshot'))
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+
+                    recoverable = (not already_resumed) and progress_parsed is not None and has_config
+
+                    seg_idx = f.attrs.get('segment_index', 1)
+                    try:
+                        seg_idx = int(seg_idx)
+                    except (ValueError, TypeError):
+                        seg_idx = 1
+
+                    meta_raw = extract_segment_metadata(f)
+                    entry = {
+                        'file_path': fpath,
+                        'file_name': fname,
+                        'directory': root,
+                        'collection_status': cs,
+                        'segment_index': seg_idx,
+                        'resumed_by_segment_index': resumed_by,
+                        'resumed_by_file': resumed_file,
+                        'already_resumed': already_resumed,
+                        'recoverable': recoverable,
+                        'has_config': has_config,
+                        'progress_parsed': progress_parsed,
+                        'progress_raw': bp_raw,
+                        'meta': meta_raw,
+                        'summary': _bp_summary_line(meta_raw, progress_parsed, seg_idx, recoverable, already_resumed),
+                    }
+                    results.append(entry)
+            except Exception:
+                continue
+
+    results.sort(key=lambda r: (r['file_path'], r.get('segment_index', 1)))
+    return results
+
+
+def _bp_summary_line(meta, progress, seg_idx, recoverable, already_resumed):
+    """Phase 6 helper: single-line string summary for breakpoint list display"""
+    user = meta.get('stage_info', {}).get('user_id', '?') or '?'
+    task = meta.get('stage_info', {}).get('task_id', '?') or '?'
+    stage = meta.get('stage_info', {}).get('stage_name', '?') or '?'
+    si = meta.get('session_info', {})
+    sess = f"{si.get('session_number','?')}/{si.get('session_count','?')}"
+
+    gi = progress.get('currentGestureIndex', '?') if progress else '?'
+    reason = meta.get('abnormal_detail', {})
+    int_reason = (reason.get('interrupt_reason') if reason else None) or '?'
+    int_at = (reason.get('interrupted_at') if reason else None) or '?'
+
+    status = 'RECOVERABLE' if recoverable else ('RESUMED' if already_resumed else 'DIAGNOSE_ONLY')
+    return (f"[{status}] seg={seg_idx} user={user} task={task} sess={sess} stage={stage} "
+            f"gesture={gi} reason={int_reason} at={int_at}")
+
+
+def generate_breakpoint_json(h5_path):
+    """Phase 6: 从 abnormal_interrupted H5 生成前端兼容的 breakpoint state JSON
+
+    Returns:
+        dict with keys: json_str, recoverable, warnings
+    """
+    try:
+        with h5py.File(h5_path, 'r') as f:
+            cs = f.attrs.get('collection_status')
+            if isinstance(cs, bytes):
+                cs = cs.decode('utf-8')
+            if cs != 'abnormal_interrupted':
+                return {'json_str': None, 'recoverable': False, 'warnings': ['not abnormal_interrupted']}
+
+            # Phase 6 fix: prefer breakpoint_state (full), fallback to resume_progress
+            raw = f.attrs.get('breakpoint_state') or f.attrs.get('resume_progress')
+            if isinstance(raw, bytes):
+                raw = raw.decode('utf-8')
+            if not raw:
+                return {'json_str': None, 'recoverable': False, 'warnings': ['no breakpoint_state or resume_progress']}
+
+            try:
+                progress = json.loads(raw)
+            except Exception:
+                return {'json_str': None, 'recoverable': False, 'warnings': ['breakpoint_state parse failed']}
+
+            # Build breakpoint state
+            bp = {
+                'version': 1,
+                'status': 'abnormal_interrupted',
+                'interruptedAt': f.attrs.get('interrupted_at') or progress.get('interruptedAt', ''),
+                'interruptReason': f.attrs.get('interrupt_reason') or progress.get('interruptReason', ''),
+                'currentTaskId': progress.get('currentTaskId', f.attrs.get('task_id', 'discrete_gesture')),
+                'currentSessionIndex': progress.get('currentSessionIndex', f.attrs.get('session_index', 0)),
+                'currentStageIndex': progress.get('currentStageIndex', 0),
+                'currentGestureIndex': progress.get('currentGestureIndex', 0),
+                'gestureRepeatCount': progress.get('gestureRepeatCount', 0),
+                'continualTrialCount': progress.get('continualTrialCount', 0),
+                'currentPhase': progress.get('currentPhase', 'gesture'),
+                '_shuffleMode': progress.get('_shuffleMode', False),
+                'segmentIndex': int(f.attrs.get('segment_index', 1)),
+                'isAllSessionsMode': progress.get('isAllSessionsMode', False),
+                'sessionCount': progress.get('sessionCount', f.attrs.get('session_count', 3)),
+                'recordingSessionId': f.attrs.get('recording_session_id', ''),
+                'stages': progress.get('stages', []),
+                'gesturesSnapshot': progress.get('gesturesSnapshot', []),
+                'collectionConfig': progress.get('collectionConfig', {}),
+                'source_h5_path': h5_path,
+            }
+
+            # Fix types
+            for k in ('interruptedAt', 'interruptReason', 'currentTaskId', 'recordingSessionId'):
+                if isinstance(bp[k], bytes):
+                    bp[k] = bp[k].decode('utf-8')
+
+            has_config = bool(bp.get('collectionConfig'))
+            has_snapshot = bool(bp.get('gesturesSnapshot'))
+            recoverable = has_config
+            warnings = []
+            if not has_config:
+                warnings.append('缺少 collectionConfig，仅可诊断')
+            if not has_snapshot:
+                warnings.append('缺少 gesturesSnapshot，恢复后手势库可能不完整')
+
+            bp['collectionConfig'] = bp.get('collectionConfig') or {}
+            bp['gesturesSnapshot'] = bp.get('gesturesSnapshot') or []
+
+            return {'json_str': json.dumps(bp, indent=2, ensure_ascii=False),
+                    'recoverable': recoverable,
+                    'warnings': warnings,
+                    'bp': bp}
+    except Exception as e:
+        return {'json_str': None, 'recoverable': False, 'warnings': [str(e)]}
+
+
 class StatisticsPanel(QFrame):
     """统计信息面板"""
     def __init__(self, parent=None):
@@ -317,12 +770,33 @@ class StatisticsPanel(QFrame):
             ('sd_bin_dev1', 'SD Bin(设备1)'), ('sd_bin_dev2', 'SD Bin(设备2)'),
             # BLE设备名称
             ('ble_device_dev1', 'BLE设备(设备1)'), ('ble_device_dev2', 'BLE设备(设备2)'),
+            # ===== Phase 4: segment/bin 元数据 =====
+            ('collection_status', '采集状态'),
+            ('is_resumed', '续采段'),
+            ('segment_index', 'Segment序号'),
+            ('collection_session_id', '会话ID'),
+            ('parent_segment_index', '父Segment'),
+            ('start_time', '开始时间'),
+            ('end_time', '结束时间'),
+            ('duration', '持续(秒)'),
+            ('session_number', '轮次编号'),
+            ('stage_index', 'Stage序号'),
+            ('emg1_frame_count', 'EMG1帧数'),
+            ('emg1_frame_range', 'EMG1帧号范围'),
+            ('emg2_frame_count', 'EMG2帧数'),
+            ('emg2_frame_range', 'EMG2帧号范围'),
+            ('segment_has_dev1_bin', 'Dev1有Bin'),
+            ('segment_has_dev2_bin', 'Dev2有Bin'),
+            ('segment_device_count', '设备数'),
         ]
 
         # Session相关字段（紫色）
-        session_keys = {'session_index', 'session_count', 'recording_session_id', 'is_multi_session'}
+        session_keys = {'session_index', 'session_count', 'recording_session_id', 'is_multi_session',
+                        'session_number'}
         # SD卡bin索引字段（绿色）
         sd_bin_keys = {'sd_bin_dev1', 'sd_bin_dev2'}
+        # Phase 4: 状态颜色映射
+        self._status_keys = {'collection_status', 'is_resumed', 'segment_index'}
 
         for i, (key, name) in enumerate(stats):
             row = i // 2
@@ -346,6 +820,17 @@ class StatisticsPanel(QFrame):
             layout.addWidget(name_label, row, col)
             layout.addWidget(value_label, row, col + 1)
             self.labels[key] = value_label
+
+        # Phase 5: segment chain summary
+        chain_label = QLabel('Segment 链路:')
+        chain_label.setStyleSheet('font-weight: bold; color: #7c3aed; font-size: 12px; padding-top: 10px;')
+        layout.addWidget(chain_label, row + 1, 0, 1, 4)
+        self.chain_text = QTextEdit()
+        self.chain_text.setReadOnly(True)
+        self.chain_text.setMaximumHeight(120)
+        self.chain_text.setFont(QFont('Consolas', 7))
+        self.chain_text.setStyleSheet('background: #f8f9fa; border: 1px solid #e5e7eb;')
+        layout.addWidget(self.chain_text, row + 2, 0, 1, 4)
 
     def update_stats(self, file_path):
         try:
@@ -506,6 +991,89 @@ class StatisticsPanel(QFrame):
                     self.labels['mocap'].setText(str(f['mocap'].shape))
                 else:
                     self.labels['mocap'].setText('-')
+
+                # ===== Phase 4: segment/bin 元数据 =====
+                meta = extract_segment_metadata(f)
+
+                # collection_status with color
+                cs = meta['collection_status'] or 'unknown'
+                self.labels['collection_status'].setText(cs)
+                if cs == 'abnormal_interrupted':
+                    self.labels['collection_status'].setStyleSheet('color: #dc2626; font-weight: bold;')
+                elif cs == 'manual_stopped':
+                    self.labels['collection_status'].setStyleSheet('color: #f97316; font-weight: bold;')
+                elif cs == 'completed':
+                    self.labels['collection_status'].setStyleSheet('color: #16a34a; font-weight: bold;')
+                elif cs == 'running':
+                    self.labels['collection_status'].setStyleSheet('color: #3b82f6;')
+                else:
+                    self.labels['collection_status'].setStyleSheet('color: #666;')
+
+                self.labels['is_resumed'].setText('是' if meta['is_resumed'] else '否')
+                if meta['is_resumed']:
+                    self.labels['is_resumed'].setStyleSheet('color: #7c3aed; font-weight: bold;')
+                else:
+                    self.labels['is_resumed'].setStyleSheet('color: #0066cc;')
+
+                seg_idx = meta['segment_index']
+                self.labels['segment_index'].setText(str(seg_idx))
+                if seg_idx > 1:
+                    self.labels['segment_index'].setStyleSheet('color: #7c3aed; font-weight: bold;')
+                else:
+                    self.labels['segment_index'].setStyleSheet('color: #0066cc;')
+
+                self.labels['collection_session_id'].setText(meta['collection_session_id'] or '-')
+                self.labels['parent_segment_index'].setText(
+                    str(meta['resume_detail']['parent_segment_index']) if meta['resume_detail'] and meta['resume_detail'].get('parent_segment_index') is not None else '-'
+                )
+
+                # time
+                if meta['start_time']:
+                    self.labels['start_time'].setText(datetime.fromtimestamp(meta['start_time']).strftime('%H:%M:%S'))
+                else:
+                    self.labels['start_time'].setText('-')
+                if meta['end_time']:
+                    self.labels['end_time'].setText(datetime.fromtimestamp(meta['end_time']).strftime('%H:%M:%S'))
+                else:
+                    self.labels['end_time'].setText('-')
+                self.labels['duration'].setText(f"{meta['duration']}s" if meta['duration'] is not None else '-')
+
+                # session
+                si = meta['session_info']
+                self.labels['session_number'].setText(
+                    f"{si['session_number']}/{si['session_count']}" if si['session_number'] is not None else '-'
+                )
+                self.labels['stage_index'].setText(str(meta['stage_info']['stage_index']) if meta['stage_info']['stage_index'] is not None else '-')
+
+                # EMG frame range
+                for dev in ('emg1', 'emg2'):
+                    r = meta[f'{dev}_range']
+                    count = r.get('frame_count', 0)
+                    self.labels[f'{dev}_frame_count'].setText(str(count))
+                    if count > 0:
+                        self.labels[f'{dev}_frame_range'].setText(
+                            f"[{r['frame_id_min']}, {r['frame_id_max']}]"
+                        )
+                    else:
+                        self.labels[f'{dev}_frame_range'].setText('-')
+
+                # bin has
+                self.labels['segment_has_dev1_bin'].setText(
+                    '✅' if meta['bin_info']['dev1']['has_bin'] else '❌'
+                )
+                self.labels['segment_has_dev2_bin'].setText(
+                    '✅' if meta['bin_info']['dev2']['has_bin'] else '❌'
+                )
+                self.labels['segment_device_count'].setText(str(meta['segment_device_count']))
+
+                # ===== Phase 5: segment 链路 =====
+                chain = scan_segment_chain(file_path)
+                summary = format_segment_chain_summary(chain, file_path)
+                if hasattr(self, 'chain_text'):
+                    self.chain_text.setPlainText(summary)
+                else:
+                    debug_log(f"segment chain ({len(chain)} files)")
+
         except Exception as e:
             print(f"更新统计信息错误: {e}")
 
@@ -529,7 +1097,7 @@ class ViewerTab(QWidget):
 
         # 统计信息面板
         self.stats_panel = StatisticsPanel()
-        self.stats_panel.setMaximumHeight(460)  # 容纳V2新增IMU字段，避免高DPI/中文字体裁切
+        self.stats_panel.setMaximumHeight(840)  # Phase 5 新增 segment 链路展示
         layout.addWidget(self.stats_panel)
 
         # 主分割器 - 可拖动
@@ -1514,6 +2082,150 @@ class SyncTab(QWidget):
             QMessageBox.warning(self, "错误", message)
 
 
+class BreakpointTab(QWidget):
+    """Phase 6: 历史断点管理标签页"""
+
+    def __init__(self):
+        super().__init__()
+        self.breakpoints = []
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+
+        # ---- top bar ----
+        top = QHBoxLayout()
+        scan_btn = QPushButton("扫描历史断点")
+        scan_btn.clicked.connect(self.scan)
+        scan_btn.setStyleSheet("font-weight: bold; padding: 10px 20px; background: #dc2626; color: white; border: none; border-radius: 6px;")
+        top.addWidget(scan_btn)
+        top.addStretch()
+        self.count_label = QLabel("未扫描")
+        top.addWidget(self.count_label)
+        layout.addLayout(top)
+
+        # ---- list ----
+        self.list_widget = QListWidget()
+        self.list_widget.setAlternatingRowColors(True)
+        self.list_widget.setSelectionMode(QListWidget.SingleSelection)
+        layout.addWidget(self.list_widget)
+
+        # ---- detail ----
+        self.detail = QTextEdit()
+        self.detail.setReadOnly(True)
+        self.detail.setMaximumHeight(150)
+        self.detail.setFont(QFont("Consolas", 8))
+        layout.addWidget(self.detail)
+
+        # ---- buttons ----
+        btn_row = QHBoxLayout()
+        self.export_btn = QPushButton("导出断点恢复 JSON")
+        self.export_btn.clicked.connect(self.export_json)
+        self.export_btn.setEnabled(False)
+        btn_row.addWidget(self.export_btn)
+
+        self.copy_btn = QPushButton("复制 JSON 到剪贴板")
+        self.copy_btn.clicked.connect(self.copy_json)
+        self.copy_btn.setEnabled(False)
+        btn_row.addWidget(self.copy_btn)
+
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        # connect selection
+        self.list_widget.itemSelectionChanged.connect(self.on_selection_changed)
+
+    def scan(self):
+        directory = QFileDialog.getExistingDirectory(self, "选择 storage 根目录扫描断点")
+        if not directory:
+            return
+        self.breakpoints = scan_breakpoints(directory)
+        self.list_widget.clear()
+        recoverable_count = 0
+        for bp in self.breakpoints:
+            if bp['recoverable']:
+                marker = "[RECOVERABLE]"
+                color = QColor(0x16, 0xa3, 0x4a)
+                recoverable_count += 1
+            elif bp['already_resumed']:
+                marker = "[RESUMED]"
+                color = QColor(0x7c, 0x3a, 0xed)
+            elif bp.get('progress_parsed'):
+                marker = "[OLD_FMT]"
+                color = QColor(0xf5, 0x9e, 0x0b)
+            else:
+                marker = "[DIAG_ONLY]"
+                color = QColor(0xf9, 0x73, 0x16)
+            item = QListWidgetItem(f"{marker} {bp['file_name']}")
+            item.setData(Qt.UserRole, bp)
+            item.setForeground(color)
+            self.list_widget.addItem(item)
+        self.count_label.setText(f"共 {len(self.breakpoints)} 个异常中断 H5，可恢复 {recoverable_count} 个")
+
+    def on_selection_changed(self):
+        items = self.list_widget.selectedItems()
+        if not items:
+            self.export_btn.setEnabled(False)
+            self.copy_btn.setEnabled(False)
+            self.detail.clear()
+            return
+        bp = items[0].data(Qt.UserRole)
+        self.export_btn.setEnabled(bp['recoverable'])
+        self.copy_btn.setEnabled(bp['recoverable'])
+
+        # build detail text
+        m = bp['meta']
+        p = bp.get('progress_parsed', {}) or {}
+        lines = [
+            f"文件: {bp['file_path']}",
+            f"状态: {bp['collection_status']}  segment_index={bp['segment_index']}",
+            f"可恢复: {'是' if bp['recoverable'] else '否'}  已续采: {'是' if bp['already_resumed'] else '否'}",
+        ]
+        if bp.get('progress_parsed') and not bp['recoverable'] and not bp['already_resumed']:
+            lines.append("注意: 旧格式断点，缺少 breakpoint_state/collectionConfig，仅可诊断")
+        lines.extend([
+            f"用户: {m.get('stage_info',{}).get('user_id','?')}  任务: {m.get('stage_info',{}).get('task_id','?')}",
+            f"轮次: {m.get('session_info',{}).get('session_number','?')}/{m.get('session_info',{}).get('session_count','?')}",
+            f"Stage: {m.get('stage_info',{}).get('stage_name','?')}",
+        ])
+        if p:
+            lines.append(f"手势进度: {p.get('currentGestureIndex','?')}  乱序: {p.get('_shuffleMode','?')}")
+        if bp.get('resumed_by_file'):
+            lines.append(f"已被续采: segment {bp['resumed_by_segment_index']} ({bp['resumed_by_file']})")
+        self.detail.setPlainText('\n'.join(lines))
+
+    def export_json(self):
+        items = self.list_widget.selectedItems()
+        if not items:
+            return
+        bp = items[0].data(Qt.UserRole)
+        result = generate_breakpoint_json(bp['file_path'])
+        if not result['json_str']:
+            QMessageBox.warning(self, "导出失败", '; '.join(result.get('warnings', [])))
+            return
+
+        default_name = os.path.splitext(bp['file_name'])[0] + '.breakpoint.json'
+        save_path, _ = QFileDialog.getSaveFileName(self, "导出断点恢复 JSON", default_name, "JSON Files (*.json)")
+        if not save_path:
+            return
+        with open(save_path, 'w', encoding='utf-8') as f:
+            f.write(result['json_str'])
+        QMessageBox.information(self, "导出成功", f"已保存到:\n{save_path}")
+
+    def copy_json(self):
+        items = self.list_widget.selectedItems()
+        if not items:
+            return
+        bp = items[0].data(Qt.UserRole)
+        result = generate_breakpoint_json(bp['file_path'])
+        if not result['json_str']:
+            QMessageBox.warning(self, "复制失败", '; '.join(result.get('warnings', [])))
+            return
+        QApplication.clipboard().setText(result['json_str'])
+        QMessageBox.information(self, "已复制", "JSON 已复制到剪贴板")
+
+
 class HDF5Tool(QMainWindow):
     """HDF5整合工具主窗口"""
     def __init__(self):
@@ -1739,6 +2451,9 @@ class HDF5Tool(QMainWindow):
 
         self.sync_tab = SyncTab()
         self.tabs.addTab(self.sync_tab, "同步")
+
+        self.breakpoint_tab = BreakpointTab()
+        self.tabs.addTab(self.breakpoint_tab, "历史断点")
 
         main_splitter.addWidget(self.tabs)
         main_splitter.setSizes([250, 1000])

@@ -181,6 +181,17 @@
             box-shadow: 0 8px 20px rgba(59, 130, 246, 0.15);
         }
 
+        .action-btn.resume {
+            background: linear-gradient(145deg, #06b6d4 0%, #0891b2 100%);
+            color: white;
+            box-shadow: 0 8px 24px rgba(6, 182, 212, 0.35);
+        }
+
+        .action-btn.resume:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 32px rgba(6, 182, 212, 0.45);
+        }
+
         .action-btn:active {
             transform: translateY(-2px);
         }
@@ -972,6 +983,30 @@
             padding: 5px;
         }
 
+        /* ==================== 通道质量颜色指示 ==================== */
+        .channel-status-row {
+            display: none;
+            gap: 2px;
+            padding: 2px 4px;
+            align-items: center;
+            flex-shrink: 0;
+        }
+
+        .channel-status-dot {
+            width: 18px;
+            height: 18px;
+            border-radius: 3px;
+            background-color: #9ca3af;
+            color: white;
+            font-weight: bold;
+            font-size: 8px;
+            text-align: center;
+            line-height: 18px;
+            flex-shrink: 0;
+            transition: background-color 0.15s;
+            user-select: none;
+        }
+
         .imu-waveform-container {
             position: relative;
             width: 100%;
@@ -1648,6 +1683,15 @@
         .control-btn.stop {
             background: #ef4444;
             color: white;
+        }
+
+        .control-btn.abort {
+            background: #f97316;
+            color: white;
+        }
+
+        .control-btn.abort:hover {
+            background: #ea580c;
         }
 
         .control-btn:disabled {
@@ -4959,6 +5003,17 @@
                     <div class="btn-title">采集</div>
                     <div class="btn-desc">开始数据采集任务</div>
                 </button>
+                <!-- 【Phase 2】断点续采按钮 — 默认隐藏，有 breakpoint 时显示 -->
+                <button class="action-btn resume" id="resumeBreakpointBtn" style="display:none;">
+                    <i class="fas fa-redo-alt"></i>
+                    <div class="btn-title">断点续采</div>
+                    <div class="btn-desc">恢复上次异常中断任务</div>
+                </button>
+                <!-- 【Phase 6】导入断点 JSON -->
+                <input type="file" id="importBreakpointInput" accept=".json" style="display:none;">
+                <a href="#" id="importBreakpointBtn" style="display:block; margin-top:8px; font-size:11px; color:#9ca3af; text-decoration:none;">
+                    <i class="fas fa-upload"></i> 导入断点文件
+                </a>
                 <button class="action-btn secondary" id="backendBtn">
                     <i class="fas fa-database"></i>
                     <div class="btn-title">后台</div>
@@ -5229,12 +5284,22 @@
                                 </select>
                             </div>
                         </div>
+                        <div id="emg1-channel-status" class="channel-status-row">
+                            <div class="channel-status-dot">1</div><div class="channel-status-dot">2</div>
+                            <div class="channel-status-dot">3</div><div class="channel-status-dot">4</div>
+                            <div class="channel-status-dot">5</div><div class="channel-status-dot">6</div>
+                            <div class="channel-status-dot">7</div><div class="channel-status-dot">8</div>
+                            <div class="channel-status-dot">9</div><div class="channel-status-dot">10</div>
+                            <div class="channel-status-dot">11</div><div class="channel-status-dot">12</div>
+                            <div class="channel-status-dot">13</div><div class="channel-status-dot">14</div>
+                            <div class="channel-status-dot">15</div><div class="channel-status-dot">16</div>
+                        </div>
                         <div class="emg-waveform-container" id="emg1-container">
                             <div class="time-pointer" id="emg1-pointer"></div>
                             <canvas id="emg1-canvas"></canvas>
                         </div>
                     </div>
-                    
+
                     <div class="emg-sub-card">
                         <div class="sub-title">EMG2 (16通道)</div>
                         <div class="control-bar">
@@ -5250,6 +5315,16 @@
                                     <option value="9-16">9-16</option>
                                 </select>
                             </div>
+                        </div>
+                        <div id="emg2-channel-status" class="channel-status-row">
+                            <div class="channel-status-dot">1</div><div class="channel-status-dot">2</div>
+                            <div class="channel-status-dot">3</div><div class="channel-status-dot">4</div>
+                            <div class="channel-status-dot">5</div><div class="channel-status-dot">6</div>
+                            <div class="channel-status-dot">7</div><div class="channel-status-dot">8</div>
+                            <div class="channel-status-dot">9</div><div class="channel-status-dot">10</div>
+                            <div class="channel-status-dot">11</div><div class="channel-status-dot">12</div>
+                            <div class="channel-status-dot">13</div><div class="channel-status-dot">14</div>
+                            <div class="channel-status-dot">15</div><div class="channel-status-dot">16</div>
                         </div>
                         <div class="emg-waveform-container" id="emg2-container">
                             <div class="time-pointer" id="emg2-pointer"></div>
@@ -5424,6 +5499,9 @@
                         <button class="control-btn stop" id="stopTaskBtn" disabled>
                             <i class="fas fa-stop"></i> 停止
                         </button>
+                        <button class="control-btn abort" id="abortTaskBtn" disabled>
+                            <i class="fas fa-exclamation-triangle"></i> 异常中断
+                        </button>
                     </div>
 
                     <!-- 进度条 -->
@@ -5587,6 +5665,8 @@
     <script defer src="scripts/ble_control.js"></script>
 
 
+    <!-- 信号质量颜色指示模块 (必须在 waveform.js 前加载) -->
+    <script src="scripts/signal-quality.js"></script>
     <!-- 前端采集数据实时显示主入口 -->
     <script src="scripts/waveform.js"></script>
     <!-- 波形显示模块 -->

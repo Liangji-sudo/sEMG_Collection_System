@@ -89,6 +89,12 @@
                 BleState.ws = null;
                 updateServerStatus('disconnected');
                 stopHeartbeat();
+
+                // 【新增】BLE 服务器断开后隐藏质量颜色指示
+                if (window.waveformController) {
+                    window.waveformController.refreshQualityVisibility();
+                }
+
                 // 【修复】只在非主动关闭时重连
                 if (event.code !== 1000) {
                     scheduleReconnect();
@@ -472,8 +478,13 @@ async function decodeData(buffer) {
         updateDeviceStatus(deviceId, dev.connected ? 'connected' : 'disconnected');
         updateDeviceInfo(deviceId, dev);
         updateConnectButton(deviceId, true);
+
+        // 【新增】设备状态变化时刷新质量颜色指示
+        if (window.waveformController) {
+            window.waveformController.refreshQualityVisibility();
+        }
     }
-    
+
     function updateDeviceStatus(deviceId, status) {
         const el = document.getElementById(`slot${deviceId}Status`);
         const slotEl = document.getElementById(`btSlot${deviceId}`);

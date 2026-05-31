@@ -58,6 +58,82 @@ DOWNSAMPLE_RATIO = 8
 # EMG与IMU的SD帧号比（EMG 2000Hz / IMU 100Hz = 20）
 EMG_IMU_RATIO = 20
 
+# ===================== 通道映射常量 =====================
+# 与 ble_server.py 保持一致。1-indexed: 使用时要 i-1 转到 0-indexed。
+# physical 顺序 (SD/bin 和 BLE 原始包): chip1[0..7] + chip2[0..7]
+# mapped 顺序 (H5 存储): 按 channel_map 重排后的逻辑显示顺序
+CHANNELS_MAP_V1 = [14, 15, 16, 3, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+CHANNELS_MAP_V2 = [15, 16, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+CHANNEL_MAPS_BY_NAME = {
+    'V1': CHANNELS_MAP_V1,
+    'V2': CHANNELS_MAP_V2,
+    'physical': None,  # None 表示恒等映射（不重排）
+}
+
+
+def map_physical_to_h5_order(row, channel_map):
+    """将物理顺序的 16 通道数据转换为 H5 存储的 mapped 顺序。
+
+    Args:
+        row: 物理顺序的 16 通道数据 (list/tuple/array)
+        channel_map: 1-indexed 通道映射表 (如 CHANNELS_MAP_V2)，None 表示不映射
+
+    Returns:
+        mapped 顺序的 list
+    """
+    if channel_map is None:
+        return list(row)
+    return [row[i - 1] for i in channel_map]
+
+
+def _resolve_channel_map(h5_file, dataset_250hz_name, channel_map_name='V2'):
+    """解析应使用的通道映射。
+
+    优先级: H5 dataset attrs > H5 file attrs > channel_map_name 参数
+
+    Args:
+        h5_file: h5py File 对象
+        dataset_250hz_name: 250Hz 数据集名称 (含路径)
+        channel_map_name: 默认映射名称 ('V1'/'V2'/'physical')
+
+    Returns:
+        tuple: (channel_map_list_or_None, resolved_name_str)
+    """
+    resolved_name = channel_map_name
+    found_in_dataset = False
+
+    # 1) 尝试从数据集 attrs 读取（最高优先级）
+    ds = h5_file.get(dataset_250hz_name)
+    if ds is not None:
+        ds_map = ds.attrs.get('channel_map', None) or ds.attrs.get('channel_map_name', None)
+        if ds_map is not None:
+            if isinstance(ds_map, bytes):
+                ds_map = ds_map.decode('utf-8')
+            resolved_name = str(ds_map)
+            found_in_dataset = True
+
+    # 2) 尝试从文件 attrs 读取（仅当数据集 attrs 未命中时）
+    if not found_in_dataset:
+        file_map = h5_file.attrs.get('channel_map', None) or h5_file.attrs.get('channel_map_name', None)
+        if file_map is not None:
+            if isinstance(file_map, bytes):
+                file_map = file_map.decode('utf-8')
+            resolved_name = str(file_map)
+
+    # 3) 规范化名称并取映射表
+    resolved_name = resolved_name.strip() if resolved_name else 'V2'
+    # 大小写不敏感匹配
+    name_lower = resolved_name.lower()
+    if name_lower in ('physical', 'none', 'identity'):
+        return None, 'physical'
+    if name_lower in ('v1',):
+        return CHANNELS_MAP_V1, 'V1'
+    if name_lower in ('v2',):
+        return CHANNELS_MAP_V2, 'V2'
+    log(f"未知 channel_map 名称 '{resolved_name}'，回退为 V2")
+    return CHANNELS_MAP_V2, 'V2'
+
+
 # 增益映射表
 GAIN_MAP = [1, 2, 3, 4, 6, 8, 12]
 
@@ -70,10 +146,305 @@ SCALE_ACCEL = 16.0 / 32768.0
 SCALE_GYRO = 2000.0 / 32768.0
 SCALE_MAG = 0.15
 
+# ===================== 同步校验配置 =====================
+# 防御性校验阈值 — 任何校验失败将阻止 sync_status 被设为 "synced"
+
+VALIDATION_CONFIG = {
+    'max_duplicate_ratio': 0.0,        # 允许的 frame_id 重复率（0 = 严格不允许重复）
+    'min_coverage_ratio': 0.95,        # SD 帧覆盖率最低要求（实际唯一覆盖/理论覆盖）
+    # 'max_gap_rate' 已废弃 — 任何 gap 都直接判失败，不再按比例放行
+    # 'max_gap_rate': 0.10,
+    'adc_sample_count': 200,           # ADC 一致性校验抽样帧数（均匀抽样）
+    'adc_match_threshold': 0.95,       # ADC 抽样匹配率最低要求
+}
+
 
 def log(message):
     """打印日志"""
     print(f"[bin_sync_tool] {message}")
+
+
+# ===================== 校验辅助函数 =====================
+
+def validate_frame_ids(frame_ids):
+    """校验 frame_id 序列的健康状况。
+
+    检测项：
+      - monotonic: 是否严格递增
+      - duplicates: 重复 frame_id 的数量
+      - gaps: 跳变位置（diff > 1）的数量和位置
+
+    Args:
+        frame_ids: numpy array of frame_id values
+
+    Returns:
+        dict: {
+            'total': int, 'unique': int, 'duplicates': int,
+            'duplicate_ratio': float, 'gap_count': int,
+            'gap_indices': list of (pos, prev_id, curr_id),
+            'max_gap': int, 'is_monotonic': bool,
+            'is_strictly_increasing': bool,
+            'passed': bool, 'reason': str, 'report_lines': list
+        }
+    """
+    total = len(frame_ids)
+    unique = len(set(frame_ids))
+    duplicates = total - unique
+    duplicate_ratio = duplicates / total if total > 0 else 0.0
+
+    report = []
+    report.append(f"frame_id 总数: {total}, 唯一值: {unique}, 重复: {duplicates} ({duplicate_ratio:.2%})")
+
+    # 检测单调性
+    diffs = np.diff(frame_ids.astype(np.int64))
+    non_increasing = np.sum(diffs <= 0)
+    gap_mask = diffs > 1
+    gap_count = int(np.sum(gap_mask))
+    max_gap = int(np.max(diffs)) if len(diffs) > 0 else 0
+
+    is_strictly_increasing = (non_increasing == 0)
+
+    if not is_strictly_increasing:
+        report.append(f"[FAIL] frame_id 非严格递增: {non_increasing} 处 diff<=0 (重复/回退)")
+
+    # 收集 gap 位置（前 10 个）
+    gap_indices = []
+    if gap_count > 0:
+        gap_positions = np.where(gap_mask)[0]
+        for pos in gap_positions[:10]:
+            gap_indices.append({
+                'index': int(pos),
+                'prev_id': int(frame_ids[pos]),
+                'curr_id': int(frame_ids[pos + 1]),
+                'diff': int(diffs[pos])
+            })
+        report.append(f"[FAIL] frame_id 存在 {gap_count} 处 gap (diff>1)，输出 2kHz 数据将缺失对应 SD 帧段")
+        report.append(f"       最大 gap: {max_gap}，前 3 个 gap 位置: {gap_indices[:3]}")
+
+    if gap_count == 0 and is_strictly_increasing:
+        report.append("[PASS] frame_id 严格递增连续，无重复无 gap")
+
+    # 判定：重复或 gap 任一出现即失败
+    passed = True
+    reason = ""
+    if duplicate_ratio > VALIDATION_CONFIG['max_duplicate_ratio']:
+        passed = False
+        reason = f"frame_id 重复率 {duplicate_ratio:.2%} > 阈值 {VALIDATION_CONFIG['max_duplicate_ratio']:.0%}"
+        report.append(f"[FAIL] {reason}")
+
+    if gap_count > 0:
+        passed = False
+        gap_reason = f"frame_id gap detected: {gap_count} 处不连续，缺帧将导致 2kHz 输出不完整"
+        if reason:
+            reason += "; " + gap_reason
+        else:
+            reason = gap_reason
+        report.append(f"[FAIL] {gap_reason}")
+
+    return {
+        'total': total, 'unique': unique, 'duplicates': duplicates,
+        'duplicate_ratio': duplicate_ratio,
+        'non_increasing': int(non_increasing),
+        'gap_count': gap_count,
+        'gap_indices': gap_indices,
+        'max_gap': max_gap,
+        'is_strictly_increasing': is_strictly_increasing,
+        'passed': passed,
+        'reason': reason,
+        'report_lines': report
+    }
+
+
+def validate_sd_coverage(frame_ids, downsample_ratio=8):
+    """校验 SD 帧覆盖率。
+
+    计算 frame_id 通过 sd_frame_id = frame_id * downsample_ratio + j
+    映射后覆盖的唯一 SD 帧数量，与理论覆盖范围对比。
+
+    Args:
+        frame_ids: numpy array of frame_id values
+        downsample_ratio: 降采样比 (默认 8)
+
+    Returns:
+        dict: {
+            'unique_sd_count': int, 'expected_sd_count': int,
+            'coverage_ratio': float,
+            'sd_range_start': int, 'sd_range_end': int,
+            'passed': bool, 'reason': str, 'report_lines': list
+        }
+    """
+    total = len(frame_ids)
+    if total == 0:
+        return {'passed': False, 'reason': 'frame_ids 为空',
+                'unique_sd_count': 0, 'expected_sd_count': 0,
+                'coverage_ratio': 0.0, 'report_lines': ['frame_ids 为空']}
+
+    # 计算映射到的所有 SD 帧号
+    unique_sd_frames = set()
+    sd_range_start = int(frame_ids[0]) * downsample_ratio
+    sd_range_end = int(frame_ids[-1]) * downsample_ratio + (downsample_ratio - 1)
+
+    for fid in frame_ids:
+        sd_base = int(fid) * downsample_ratio
+        for j in range(downsample_ratio):
+            unique_sd_frames.add(sd_base + j)
+
+    unique_sd_count = len(unique_sd_frames)
+    expected_sd_count = total * downsample_ratio
+    coverage_ratio = unique_sd_count / expected_sd_count if expected_sd_count > 0 else 0.0
+
+    report = []
+    report.append(f"SD 帧映射区间: [{sd_range_start}, {sd_range_end}]"
+                  f" (首帧 {int(frame_ids[0])}×{downsample_ratio} ~ 尾帧 {int(frame_ids[-1])}×{downsample_ratio}+{downsample_ratio-1})")
+    report.append(f"SD 帧唯一覆盖: {unique_sd_count}, 理论覆盖: {expected_sd_count}, 覆盖率: {coverage_ratio:.2%}")
+
+    passed = coverage_ratio >= VALIDATION_CONFIG['min_coverage_ratio']
+    reason = ""
+    if not passed:
+        reason = (f"SD 覆盖率 {coverage_ratio:.2%} < 阈值 "
+                  f"{VALIDATION_CONFIG['min_coverage_ratio']:.0%}，"
+                  f"frame_id 存在严重重叠（已知 bug 特征：覆盖率接近 1/{downsample_ratio+1} ≈ {1/(downsample_ratio+1):.0%}）")
+        report.append(f"[FAIL] {reason}")
+    else:
+        report.append(f"[PASS] SD 覆盖率 {coverage_ratio:.2%} >= {VALIDATION_CONFIG['min_coverage_ratio']:.0%}")
+
+    return {
+        'unique_sd_count': unique_sd_count,
+        'expected_sd_count': expected_sd_count,
+        'coverage_ratio': coverage_ratio,
+        'sd_range_start': sd_range_start,
+        'sd_range_end': sd_range_end,
+        'passed': passed,
+        'reason': reason,
+        'report_lines': report
+    }
+
+
+def run_adc_verification(frame_ids, channels_250hz, emg_parser,
+                         sample_count=None, downsample_ratio=8,
+                         channel_map=None, channel_map_name='physical'):
+    """强 ADC 一致性校验。
+
+    均匀抽样 frame_ids，比对 H5 250Hz 的通道数据与 bin 中对应锚点帧（SD 帧号 = frame_id × 8 + 7）的通道数据。
+    不只看第一通道差值，而是对所有 16 通道逐个比对。
+
+    注意：bin 数据为物理通道顺序，H5 数据为 mapped 顺序。比对前会将 bin 数据通过
+    channel_map 转为 mapped 顺序，确保同一 channel index 含义一致。
+
+    Args:
+        frame_ids: numpy array of frame_id values
+        channels_250hz: numpy array of H5 250Hz channel data (shape: [N, 16]) — mapped 顺序
+        emg_parser: EMGBinParser 实例（已 parse）
+        sample_count: 抽样数量（None 则使用 VALIDATION_CONFIG 默认值）
+        downsample_ratio: 降采样比 (默认 8)
+        channel_map: 1-indexed 通道映射表或 None (None=恒等映射/physical)
+        channel_map_name: 映射名称，仅用于日志
+
+    Returns:
+        dict: {
+            'checked': int, 'matched': int, 'mismatched': int, 'missing': int,
+            'match_rate': float, 'mismatch_rate': float,
+            'mismatch_details': list of dict,
+            'passed': bool, 'reason': str, 'report_lines': list,
+            'channel_map_name': str
+        }
+    """
+    if sample_count is None:
+        sample_count = VALIDATION_CONFIG['adc_sample_count']
+
+    total = len(frame_ids)
+    if total == 0:
+        return {'checked': 0, 'matched': 0, 'mismatched': 0, 'missing': 0,
+                'match_rate': 0.0, 'mismatch_rate': 0.0,
+                'mismatch_details': [], 'passed': False,
+                'reason': 'frame_ids 为空', 'report_lines': ['frame_ids 为空']}
+
+    # 均匀抽样
+    actual_sample = min(sample_count, total)
+    indices = np.linspace(0, total - 1, actual_sample, dtype=int)
+
+    matched = 0
+    mismatched = 0
+    missing = 0
+    mismatch_details = []
+
+    for idx in indices:
+        ble_frame_id = int(frame_ids[idx])
+        # 锚点 SD 帧号：该 BLE 帧对应的 8 个原始帧中的最后一帧
+        sd_anchor = ble_frame_id * downsample_ratio + (downsample_ratio - 1)
+        bin_data = emg_parser.get_frame(sd_anchor)
+
+        if bin_data is None:
+            missing += 1
+            if missing <= 3:
+                mismatch_details.append({
+                    'idx': int(idx), 'ble_frame_id': ble_frame_id,
+                    'sd_anchor': sd_anchor, 'error': 'bin frame not found'
+                })
+            continue
+
+        # bin 数据是物理顺序 → 映射到 H5 的 mapped 顺序后再比较
+        bin_data_mapped = map_physical_to_h5_order(bin_data, channel_map)
+
+        # 逐通道比较 H5 250Hz 数据与 bin 数据（相同 mapped 顺序）
+        h5_channels = channels_250hz[idx]
+        # 严格比较：所有 16 通道完全相等（允许 ±1 的舍入差异）
+        all_match = all(abs(int(h5_channels[ch]) - int(bin_data_mapped[ch])) <= 1
+                        for ch in range(16))
+
+        if all_match:
+            matched += 1
+        else:
+            mismatched += 1
+            if mismatched <= 3:
+                # 找出不匹配的通道（使用 mapped 顺序的 bin_data_mapped，与主比较逻辑一致）
+                bad_chs = [ch for ch in range(16)
+                           if abs(int(h5_channels[ch]) - int(bin_data_mapped[ch])) > 1]
+                mismatch_details.append({
+                    'idx': int(idx), 'ble_frame_id': ble_frame_id,
+                    'sd_anchor': sd_anchor,
+                    'mismatched_channels': bad_chs[:5],
+                    'h5_sample': [int(h5_channels[ch]) for ch in bad_chs[:3]],
+                    'bin_sample': [int(bin_data_mapped[ch]) for ch in bad_chs[:3]]
+                })
+
+    checked = matched + mismatched  # 不包括 missing（bin 中找不到的帧）
+    match_rate = matched / checked if checked > 0 else 0.0
+    mismatch_rate = mismatched / checked if checked > 0 else 0.0
+
+    report = []
+    report.append(f"ADC 抽样校验 (通道映射: {channel_map_name}): 抽查 {len(indices)} 帧, "
+                  f"匹配 {matched}, 不匹配 {mismatched}, 缺失 {missing}, "
+                  f"匹配率 {match_rate:.2%}")
+
+    passed = (match_rate >= VALIDATION_CONFIG['adc_match_threshold'] and
+              missing <= len(indices) * 0.05)  # 缺失率不超过 5%
+    reason = ""
+
+    if not passed:
+        if match_rate < VALIDATION_CONFIG['adc_match_threshold']:
+            reason = (f"ADC 匹配率 {match_rate:.2%} < 阈值 "
+                      f"{VALIDATION_CONFIG['adc_match_threshold']:.0%}")
+            report.append(f"[FAIL] {reason}")
+        if missing > len(indices) * 0.05:
+            reason = reason + "; " if reason else ""
+            reason += f"bin 缺失率 {missing}/{len(indices)} 过高"
+            report.append(f"[FAIL] {reason}")
+        for d in mismatch_details[:3]:
+            report.append(f"  不匹配 @帧号{int(d['idx'])}, BLE帧{d['ble_frame_id']}, "
+                          f"SD锚点{d['sd_anchor']}")
+    else:
+        report.append(f"[PASS] ADC 抽样一致性 {match_rate:.2%} >= {VALIDATION_CONFIG['adc_match_threshold']:.0%}")
+
+    return {
+        'checked': checked, 'matched': matched, 'mismatched': mismatched,
+        'missing': missing, 'match_rate': match_rate,
+        'mismatch_rate': mismatch_rate,
+        'mismatch_details': mismatch_details,
+        'passed': passed, 'reason': reason,
+        'report_lines': report,
+        'channel_map_name': channel_map_name,
+    }
 
 
 # ===================== bin文件解析 =====================
@@ -227,9 +598,61 @@ class IMUBinParser:
         return self
 
 
+def _format_validation_report(validation_report):
+    """将校验报告格式化为可写入 H5 attrs 的字符串。
+
+    Args:
+        validation_report: dict，包含 frame_id_check, coverage_check, adc_verify
+
+    Returns:
+        str: 格式化的校验报告
+    """
+    lines = ["=== Sync Validation Report ==="]
+    lines.append(f"Time: {datetime.now().isoformat()}")
+    lines.append(f"Overall: {'PASS' if validation_report.get('all_passed', False) else 'FAIL'}")
+    lines.append(f"Channel Map: {validation_report.get('channel_map_name', 'unknown')}")
+
+    fid = validation_report.get('frame_id_check', {})
+    if fid:
+        lines.append(f"--- Frame ID Check ---")
+        lines.append(f"Total: {fid.get('total', '?')}, Unique: {fid.get('unique', '?')}, "
+                     f"Duplicates: {fid.get('duplicates', '?')} "
+                     f"({fid.get('duplicate_ratio', 0):.2%})")
+        lines.append(f"Gaps: {fid.get('gap_count', '?')}, Max gap: {fid.get('max_gap', '?')}")
+        lines.append(f"Strictly increasing: {fid.get('is_strictly_increasing', '?')}")
+        lines.append(f"Passed: {fid.get('passed', '?')}")
+
+    cov = validation_report.get('coverage_check', {})
+    if cov:
+        lines.append(f"--- SD Coverage Check ---")
+        lines.append(f"Unique SD frames: {cov.get('unique_sd_count', '?')}, "
+                     f"Expected: {cov.get('expected_sd_count', '?')}, "
+                     f"Coverage: {cov.get('coverage_ratio', 0):.2%}")
+        lines.append(f"Passed: {cov.get('passed', '?')}")
+
+    adc = validation_report.get('adc_verify', {})
+    if adc:
+        lines.append(f"--- ADC Verification ---")
+        if adc.get('skipped'):
+            lines.append(f"Status: SKIPPED ({adc.get('reason', 'verify=False')})")
+        else:
+            lines.append(f"Checked: {adc.get('checked', '?')}, Matched: {adc.get('matched', '?')}, "
+                         f"Mismatched: {adc.get('mismatched', '?')}, Missing: {adc.get('missing', '?')}")
+            lines.append(f"Match rate: {adc.get('match_rate', 0):.2%}")
+            lines.append(f"Passed: {adc.get('passed', '?')}")
+
+    if validation_report.get('failure_reasons'):
+        lines.append(f"--- Failure Reasons ---")
+        for r in validation_report['failure_reasons']:
+            lines.append(f"  - {r}")
+
+    return '\n'.join(lines)
+
+
 # ===================== h5文件同步 =====================
 
-def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, verify=True, set_synced=True):
+def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, verify=True, set_synced=True,
+                     channel_map_name='V2'):
     """
     将h5文件与bin文件同步
 
@@ -241,6 +664,8 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
         verify: 是否进行数据校验
         set_synced: 是否在同步完成后设置sync_status为synced（默认True）
                     当需要同步多个设备时，应在最后一个设备同步时才设为True
+        channel_map_name: 通道映射名称 ('V1'/'V2'/'physical')，默认 'V2'
+                          H5 attrs 中的 channel_map 优先于此参数
 
     Returns:
         dict: 同步结果统计
@@ -262,6 +687,14 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
             log("警告: 文件已同步，跳过")
             return {'status': 'skipped', 'reason': 'already_synced'}
 
+        # Phase 4: 检查 collection_status，异常中断 segment 提示但不阻止同步
+        coll_status = f.attrs.get('collection_status', 'unknown')
+        if coll_status == 'abnormal_interrupted':
+            log("⚠️ 注意: 这是异常中断 segment，仅同步已采集到的有效前半段数据")
+            log(f"   中断原因: {f.attrs.get('interrupt_reason', '未知')}")
+        elif coll_status == 'manual_stopped':
+            log("ℹ️ 手动停止 segment，同步已采集数据")
+
         # 获取250Hz ADC数据集
         ds_250hz_name = f"emg{device_id}_250hz_adc"
         if ds_250hz_name not in f:
@@ -277,6 +710,10 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
 
         log(f"250Hz数据集: {num_frames_250hz} 帧")
 
+        # ===== 解析通道映射 =====
+        channel_map, resolved_map_name = _resolve_channel_map(f, ds_250hz_name, channel_map_name)
+        log(f"通道映射: {resolved_map_name} {'(1-indexed, 16ch reorder)' if channel_map else '(physical — 恒等映射)'}")
+
         # 读取250Hz数据和帧号
         data_250hz = ds_250hz[:]
         frame_ids = data_250hz['frame_id']
@@ -285,64 +722,119 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
 
         log(f"BLE帧号范围: [{frame_ids[0]}, {frame_ids[-1]}]")
 
-        # 计算对应的SD卡帧号范围
-        # 映射关系: SD帧号 = BLE帧号 * 8 + 7 (BLE发送的是每8帧中的最后一帧)
+        # ================================================================
+        # == 防御性校验 1：frame_id 序列健康检查 ==
+        # ================================================================
+        log("=" * 50)
+        log("防御性校验 1/3: frame_id 序列健康检查")
+        validation_report = {
+            'frame_id_check': None,
+            'coverage_check': None,
+            'adc_verify': None,
+            'all_passed': False,
+            'failure_reasons': [],
+            'channel_map_name': resolved_map_name,
+        }
+
+        fid_result = validate_frame_ids(frame_ids)
+        validation_report['frame_id_check'] = fid_result
+        for line in fid_result['report_lines']:
+            log(f"  {line}")
+
+        if not fid_result['passed']:
+            validation_report['failure_reasons'].append(fid_result['reason'])
+            validation_report['all_passed'] = False
+
+        # ================================================================
+        # == 防御性校验 2：SD 覆盖率检查 ==
+        # ================================================================
+        log("防御性校验 2/3: SD 覆盖率检查")
+        cov_result = validate_sd_coverage(frame_ids, DOWNSAMPLE_RATIO)
+        validation_report['coverage_check'] = cov_result
+        for line in cov_result['report_lines']:
+            log(f"  {line}")
+
+        if not cov_result['passed']:
+            validation_report['failure_reasons'].append(cov_result['reason'])
+            validation_report['all_passed'] = False
+
+        # 计算对应的SD卡帧号范围（供后续使用）
         sd_frame_start = int(frame_ids[0]) * DOWNSAMPLE_RATIO
         sd_frame_end = int(frame_ids[-1]) * DOWNSAMPLE_RATIO + (DOWNSAMPLE_RATIO - 1)
 
-        log(f"对应SD卡帧号范围: [{sd_frame_start}, {sd_frame_end}]")
-
-        # 校验（可选）- 比较h5中的250Hz数据与bin中对应帧的数值
+        # ================================================================
+        # == 防御性校验 3：ADC 一致性校验（强校验，非仅日志）==
+        # ================================================================
         if verify:
-            log("正在校验数据一致性...")
-            found_count = 0
-            missing_count = 0
-            match_count = 0
-            mismatch_count = 0
+            log(f"防御性校验 3/3: ADC 一致性校验 (通道映射: {resolved_map_name})")
+            adc_result = run_adc_verification(
+                frame_ids, channels_250hz, emg_parser,
+                sample_count=VALIDATION_CONFIG['adc_sample_count'],
+                downsample_ratio=DOWNSAMPLE_RATIO,
+                channel_map=channel_map,
+                channel_map_name=resolved_map_name,
+            )
+            validation_report['adc_verify'] = adc_result
+            for line in adc_result['report_lines']:
+                log(f"  {line}")
 
-            # 检查h5中的SD帧号是否都能在bin中找到，并比较数值
-            sample_count = min(100, len(frame_ids))
-            for i in range(sample_count):
-                ble_frame_id = frame_ids[i]
-                sd_frame_id = int(ble_frame_id) * DOWNSAMPLE_RATIO + (DOWNSAMPLE_RATIO - 1)
-                bin_data = emg_parser.get_frame(sd_frame_id)
+            if not adc_result['passed']:
+                validation_report['failure_reasons'].append(adc_result['reason'])
+        else:
+            log("防御性校验 3/3: ADC 一致性校验 [已跳过] (verify=False)")
+            adc_result = {
+                'skipped': True,
+                'reason': 'verify=False, ADC 校验已跳过',
+                'checked': 0, 'matched': 0, 'mismatched': 0, 'missing': 0,
+                'match_rate': 0.0, 'mismatch_rate': 0.0,
+                'mismatch_details': [],
+                'passed': True,  # 跳过不参与失败判定
+                'report_lines': ['[SKIP] ADC 校验已跳过 (verify=False)'],
+                'channel_map_name': resolved_map_name,
+            }
+            validation_report['adc_verify'] = adc_result
 
-                if bin_data is not None:
-                    found_count += 1
-                    # 比较数值（都是原始ADC值）
-                    h5_channels = channels_250hz[i]
-                    # 检查第一个通道的值是否接近（允许小误差）
-                    if abs(h5_channels[0] - bin_data[0]) < 1:
-                        match_count += 1
-                    else:
-                        mismatch_count += 1
-                        if mismatch_count <= 3:
-                            log(f"  数值不匹配 @帧{sd_frame_id}: h5={h5_channels[0]:.0f}, bin={bin_data[0]}")
-                else:
-                    missing_count += 1
+        # 汇总校验结果
+        validation_report['all_passed'] = (fid_result['passed'] and
+                                           cov_result['passed'] and
+                                           adc_result['passed'])
 
-            if found_count == 0:
-                log(f"错误: bin文件中找不到任何对应的帧号！")
-                log(f"  h5 SD帧号范围: [{sd_frame_start}, {sd_frame_end}]")
-                log(f"  bin帧号范围: [{min(emg_parser.frames.keys())}, {max(emg_parser.frames.keys())}]")
-                return {'status': 'error', 'reason': 'no_matching_frames',
-                        'h5_range': [sd_frame_start, sd_frame_end],
-                        'bin_range': [min(emg_parser.frames.keys()), max(emg_parser.frames.keys())]}
+        if not validation_report['all_passed']:
+            log("=" * 50)
+            log("[FAIL] 防御性校验未通过，拒绝同步:")
+            for reason in validation_report['failure_reasons']:
+                log(f"  - {reason}")
+            log("=" * 50)
 
-            coverage = found_count / (found_count + missing_count) * 100
-            log(f"帧号校验: {found_count}/{found_count + missing_count} 帧在bin中找到 ({coverage:.1f}%)")
+            # 写入失败状态到 H5
+            f.attrs["sync_status"] = "sync_failed"
+            f.attrs["sync_time"] = datetime.now().isoformat()
+            f.attrs["sync_error"] = "; ".join(validation_report['failure_reasons'])
+            f.attrs["sync_validation_report"] = _format_validation_report(validation_report)
+            f.attrs["channel_map_name"] = resolved_map_name
+            log("sync_status 已设为 'sync_failed'，详细信息已写入 H5 attrs")
 
-            if match_count > 0:
-                match_rate = match_count / found_count * 100
-                log(f"数值校验: {match_count}/{found_count} 帧数值匹配 ({match_rate:.1f}%)")
+            result = {
+                'status': 'validation_failed',
+                'reason': '; '.join(validation_report['failure_reasons']),
+                'frames_250hz': num_frames_250hz,
+                'validation_report': {
+                    'frame_id_duplicates': fid_result['duplicates'],
+                    'frame_id_gaps': fid_result['gap_count'],
+                    'sd_coverage_ratio': cov_result['coverage_ratio'],
+                    'adc_match_rate': adc_result['match_rate']
+                }
+            }
+            if imu_parser is not None:
+                result['imu_status'] = 'skipped'
+            return result
 
-            if coverage < 50:
-                log(f"警告: 帧号覆盖率过低，可能选错了bin文件")
-                return {'status': 'error', 'reason': 'low_coverage',
-                        'coverage': coverage}
+        log("=" * 50)
+        log("[PASS] 所有防御性校验通过，继续同步...")
+        log("=" * 50)
 
         # 构建2kHz数据
-        log("正在构建2kHz数据...")
+        log(f"正在构建2kHz数据 (通道顺序: {resolved_map_name})...")
 
         num_frames_2khz = num_frames_250hz * DOWNSAMPLE_RATIO
         # 2kHz数据集类型：使用int32存储原始ADC值（与250Hz一致）
@@ -368,11 +860,14 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
                 bin_data = emg_parser.get_frame(sd_frame_id)
 
                 if bin_data is not None:
-                    data_2khz[idx_2khz]['channels'] = np.array(bin_data, dtype=np.int32)
+                    # bin 数据是物理顺序 → 映射到 mapped 顺序，与 H5 250Hz 数据集一致
+                    bin_data_mapped = map_physical_to_h5_order(bin_data, channel_map)
+                    data_2khz[idx_2khz]['channels'] = np.array(bin_data_mapped, dtype=np.int32)
                     data_2khz[idx_2khz]['sd_frame_id'] = sd_frame_id
                     filled_frames += 1
                 else:
                     # 帧丢失，使用插值或最近邻填充
+                    # channels_250hz[i] 已经是 mapped 顺序，直接使用
                     if j == DOWNSAMPLE_RATIO - 1:
                         # 最后一帧应该和250Hz数据一致
                         data_2khz[idx_2khz]['channels'] = channels_250hz[i].astype(np.int32)
@@ -576,6 +1071,9 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
         if set_synced:
             f.attrs["sync_status"] = "synced"
             f.attrs["sync_time"] = datetime.now().isoformat()
+            f.attrs["channel_map_name"] = resolved_map_name
+            # 写入校验报告供后续审计
+            f.attrs["sync_validation_report"] = _format_validation_report(validation_report)
             log(f"同步完成！EMG 2kHz: {ds_2khz_name}, IMU: {imu_result.get('imu_status', 'skipped')}, 状态已设为synced")
         else:
             log(f"同步完成！EMG 2kHz: {ds_2khz_name}, IMU: {imu_result.get('imu_status', 'skipped')}, 状态保持pending（等待其他设备同步）")
@@ -585,7 +1083,14 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
             'frames_250hz': num_frames_250hz,
             'frames_2khz': num_frames_2khz,
             'filled_frames': filled_frames,
-            'missing_frames': missing_frames
+            'missing_frames': missing_frames,
+            'validation': {
+                'frame_id_duplicates': validation_report['frame_id_check']['duplicates'],
+                'frame_id_gaps': validation_report['frame_id_check']['gap_count'],
+                'sd_coverage_ratio': validation_report['coverage_check']['coverage_ratio'],
+                'adc_match_rate': validation_report['adc_verify']['match_rate'],
+                'all_passed': True
+            }
         }
         result.update(imu_result)
         return result
@@ -895,6 +1400,8 @@ def main():
     parser.add_argument("--imu-bin", help="IMU bin文件路径（可选）")
     parser.add_argument("--device", type=int, default=1, choices=[1, 2], help="设备ID (1或2)")
     parser.add_argument("--no-verify", action="store_true", help="跳过数据校验")
+    parser.add_argument("--channel-map", type=str, default="V2", choices=["V1", "V2", "physical"],
+                        help="通道映射模式 (默认 V2，V1/V2 将 bin 物理顺序映射到 H5 显示顺序)")
     parser.add_argument("--gui", action="store_true", help="启动GUI界面")
 
     args = parser.parse_args()
@@ -917,7 +1424,8 @@ def main():
         args.emg_bin,
         args.imu_bin,
         device_id=args.device,
-        verify=not args.no_verify
+        verify=not args.no_verify,
+        channel_map_name=args.channel_map
     )
 
     if result['status'] == 'success':

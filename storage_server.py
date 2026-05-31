@@ -193,6 +193,7 @@ class HDF5StorageServer:
         self.current_category1 = None
         self.current_category2 = None
         self.current_category4 = None
+        self.current_recording_session_id = None  # Phase 5
         self.is_collecting = False
         
         # 【新增】Session信息
@@ -283,6 +284,63 @@ class HDF5StorageServer:
             filename = f"{safe_user_id}_{safe_stage_name}_session{session_number}_{date_str}_{time_str}.h5"
         return os.path.join(dir_path, filename)
     
+    def _maybe_update_parent_segment_link(self, new_file_path, params):
+        """Phase 5: 补填父 segment H5 的 resumed_by_segment_index / resumed_by_file
+
+        在当前（续采）segment 创建成功后调用。
+        扫描同目录 .h5 找父 segment 并写入反向链路。
+        """
+        is_resumed = params.get("is_resumed", False)
+        parent_seg = params.get("parent_segment_index")
+        session_id = params.get("recording_session_id") or self.current_recording_session_id or ""
+
+        if not is_resumed or not parent_seg or not session_id:
+            return
+
+        new_dir = os.path.dirname(new_file_path)
+        new_rel = os.path.relpath(new_file_path, self.storage_dir)
+        seg_idx = int(params.get("segment_index", 1))
+        found = False
+
+        try:
+            for fname in os.listdir(new_dir):
+                if not fname.endswith('.h5'):
+                    continue
+                parent_path = os.path.join(new_dir, fname)
+                if parent_path == new_file_path:
+                    continue
+
+                try:
+                    with h5py.File(parent_path, 'a') as pf:
+                        p_sid = (pf.attrs.get('collection_session_id') or
+                                 pf.attrs.get('recording_session_id'))
+                        if isinstance(p_sid, bytes):
+                            p_sid = p_sid.decode('utf-8')
+                        p_seg = pf.attrs.get('segment_index', 1)
+                        p_cs = pf.attrs.get('collection_status', '')
+                        if isinstance(p_cs, bytes):
+                            p_cs = p_cs.decode('utf-8')
+
+                        if p_sid != session_id or int(p_seg) != int(parent_seg):
+                            continue
+                        if p_cs != 'abnormal_interrupted':
+                            continue
+
+                        pf.attrs['resumed_by_segment_index'] = int(seg_idx)
+                        pf.attrs['resumed_by_file'] = str(new_rel)
+                        debug_log(f"🔗 已补填父 segment 链路: {os.path.basename(parent_path)}")
+                        debug_log(f"   resumed_by_segment_index={seg_idx}, resumed_by_file={new_rel}")
+                        found = True
+                        break
+                except Exception:
+                    continue
+
+            if not found:
+                debug_log(f"⚠️ 未找到父 segment: session={session_id}, parent_seg={parent_seg}")
+
+        except Exception as e:
+            debug_log(f"⚠️ 补填父 segment 链路失败: {e}")
+
     def create_file(self, params):
         """创建新的HDF5文件（使用多级目录结构，包含受试者层级）"""
         try:
@@ -357,11 +415,20 @@ class HDF5StorageServer:
             self.f.attrs["category4"] = category4
             self.f.attrs["template_name"] = template_name
             self.f.attrs["created_at"] = datetime.now().isoformat()
-            
+
+            # Phase 3: stage 开始时间（从 realtimeEngine 传入）
+            start_time = params.get("start_time")
+            if start_time:
+                self.f.attrs["start_time"] = float(start_time)
+
             # 【新增】保存Session信息到HDF5属性
             self.f.attrs["session_index"] = session_index
             self.f.attrs["session_number"] = session_number
             self.f.attrs["session_count"] = session_count
+
+            # Phase 3: stage_index
+            stage_index = params.get("stage_index", 0)
+            self.f.attrs["stage_index"] = int(stage_index)
 
             # 【新增】保存SD卡bin文件名到HDF5属性（用于数据溯源）
             # 格式: "S001_L_260312_143025" -> 对应SD卡文件 S001_L_260312_143025_emg.bin 和 S001_L_260312_143025_imu.bin
@@ -385,12 +452,53 @@ class HDF5StorageServer:
             # recording_session_id: 录像会话ID，格式 "rec_YYYYMMDD_HHMMSS_N"
             # is_multi_session: 是否为多轮次采集模式
             recording_session_id = params.get("recording_session_id")
+            self.current_recording_session_id = recording_session_id  # Phase 5
             is_multi_session = params.get("is_multi_session", False)
             if recording_session_id:
                 self.f.attrs["recording_session_id"] = recording_session_id
                 self.f.attrs["is_multi_session"] = is_multi_session
                 debug_log(f"   录像会话ID: {recording_session_id}")
                 debug_log(f"   多轮次模式: {is_multi_session}")
+
+            # 【Phase 2】续采模式元数据
+            is_resumed = params.get("is_resumed", False)
+            segment_index = params.get("segment_index", 1)
+            resume_from_interrupted_at = params.get("resume_from_interrupted_at")
+            resume_reason = params.get("resume_reason")
+            resume_parent_recording_session_id = params.get("resume_parent_recording_session_id")
+
+            self.f.attrs["is_resumed"] = bool(is_resumed)
+            self.f.attrs["segment_index"] = int(segment_index)
+            if is_resumed:
+                debug_log(f"   续采模式: 是 (segment_index={segment_index})")
+                if resume_from_interrupted_at:
+                    self.f.attrs["resume_from_interrupted_at"] = str(resume_from_interrupted_at)
+                    debug_log(f"   续采自中断时间: {resume_from_interrupted_at}")
+                if resume_reason:
+                    self.f.attrs["resume_reason"] = str(resume_reason)
+                    debug_log(f"   中断原因: {resume_reason}")
+                if resume_parent_recording_session_id:
+                    self.f.attrs["resume_parent_recording_session_id"] = str(resume_parent_recording_session_id)
+                    debug_log(f"   父录像会话ID: {resume_parent_recording_session_id}")
+                # Phase 3: 父 segment 序号
+                parent_segment_index = params.get("parent_segment_index")
+                if parent_segment_index is not None:
+                    self.f.attrs["parent_segment_index"] = int(parent_segment_index)
+                    debug_log(f"   父segment序号: {parent_segment_index}")
+
+            # ---- Phase 3: segment 身份标识 ----
+            # collection_session_id: 同 recording_session_id，用于跨 segment 关联
+            if recording_session_id:
+                self.f.attrs["collection_session_id"] = str(recording_session_id)
+            # 初始 collection_status（close 时覆盖）
+            self.f.attrs["collection_status"] = "running"
+            # 中断链占位字段
+            rec_id = recording_session_id or "unknown"
+            seg_idx = int(segment_index)
+            interruption_id = f"int_{rec_id}_seg{seg_idx}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            self.f.attrs["interruption_id"] = interruption_id
+            self.f.attrs["resumed_by_segment_index"] = -1
+            self.f.attrs["resumed_by_file"] = ""
 
             # ===================== 创建受试者信息组 =====================
             if subject_info:
@@ -603,7 +711,10 @@ class HDF5StorageServer:
             debug_log(f"✅ 文件创建成功: {rel_path}")
             debug_log(f"   任务: {task_id}, 用户: {user_id}, Stage: {stage_name}")
             debug_log(f"   分类: {category1}/{category2}/{category4}")
-            
+
+            # Phase 5: 补填父 segment 的 resumed_by 链路
+            self._maybe_update_parent_segment_link(self.file_path, params)
+
             return {
                 "status": "success",
                 "msg": f"创建Stage文件成功",
@@ -956,11 +1067,22 @@ class HDF5StorageServer:
         if self.f:
             self.f.flush()
     
-    def close_file(self):
-        """关闭文件"""
+    def close_file(self, params=None):
+        """关闭文件
+
+        Args:
+            params: 可选扩展参数 dict:
+                - collection_status: "completed" | "manual_stopped" | "abnormal_interrupted" | "resumed" | "abandoned"
+                - interrupted_at: ISO 时间字符串（仅 abnormal_interrupted 时写入）
+                - interrupt_reason: 中断原因（仅 abnormal_interrupted 时写入）
+                - resume_progress: JSON 序列化的进度快照（仅 abnormal_interrupted 时写入）
+                - segment_index: segment 序号，默认 1
+        """
+        if params is None:
+            params = {}
         try:
             self.flush()
-            
+
             if self.f:
                 # 写入最终统计信息
                 self.f.attrs["closed_at"] = datetime.now().isoformat()
@@ -974,7 +1096,57 @@ class HDF5StorageServer:
                 self.f.attrs["total_imu1_all_frames"] = self.stats["imu1_all_frames"]
                 self.f.attrs["total_imu2_all_frames"] = self.stats["imu2_all_frames"]
                 self.f.attrs["total_prompts"] = self.stats["prompts"]
-                
+
+                # ==================== 采集状态标记（断点续采支持） ====================
+                # collection_status: 采集完成状态
+                collection_status = params.get("collection_status", "completed")
+                self.f.attrs["collection_status"] = str(collection_status)
+                debug_log(f"   collection_status: {collection_status}")
+
+                # segment_index: 仅当 close 显式传了 segment_index 时才写
+                # 否则保留 create_file 已写入的值（续采模式下为 2+）
+                if "segment_index" in params:
+                    self.f.attrs["segment_index"] = int(params["segment_index"])
+                    debug_log(f"   segment_index (close覆盖): {params['segment_index']}")
+
+                # 异常中断相关属性（仅当 collection_status 为 abnormal_interrupted 时写入）
+                if collection_status == "abnormal_interrupted":
+                    interrupted_at = params.get("interrupted_at")
+                    if interrupted_at:
+                        self.f.attrs["interrupted_at"] = str(interrupted_at)
+                        debug_log(f"   interrupted_at: {interrupted_at}")
+
+                    interrupt_reason = params.get("interrupt_reason")
+                    if interrupt_reason:
+                        self.f.attrs["interrupt_reason"] = str(interrupt_reason)
+                        debug_log(f"   interrupt_reason: {interrupt_reason}")
+
+                    resume_progress = params.get("resume_progress")
+                    if resume_progress:
+                        self.f.attrs["resume_progress"] = str(resume_progress)
+                        debug_log(f"   resume_progress: {resume_progress[:80]}...")
+
+                    # Phase 6 fix: 完整可恢复 breakpoint state（优先于 resume_progress）
+                    breakpoint_state = params.get("breakpoint_state")
+                    if breakpoint_state:
+                        self.f.attrs["breakpoint_state"] = str(breakpoint_state)
+                        debug_log(f"   breakpoint_state: 已写入完整可恢复状态")
+
+                    # Phase 3: interruption_id — 从已有 attrs 复用（create 时已生成）
+                    # 如果 create 时已有，不覆盖；否则在此生成
+                    if "interruption_id" not in self.f.attrs:
+                        rec_id = self.f.attrs.get("recording_session_id", "unknown")
+                        seg_idx = self.f.attrs.get("segment_index", 1)
+                        self.f.attrs["interruption_id"] = (
+                            f"int_{rec_id}_seg{seg_idx}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                        )
+
+                # 注意：sync_status 保持 pending，不受 collection_status 影响
+                # 只有 bin_sync_tool 才能将 sync_status 改为 synced 或 sync_failed
+
+                # ==================== Phase 3: frame/time range 与 segment/bin 元数据 ====================
+                self._write_segment_metadata(params)
+
                 self.f.close()
                 self.f = None
             
@@ -1001,6 +1173,87 @@ class HDF5StorageServer:
             debug_log(f"❌ 关闭文件失败: {e}")
             return {"status": "error", "msg": f"关闭文件失败：{str(e)}"}
     
+    def _write_segment_metadata(self, params):
+        """Phase 3: 写入 frame/time range 和 segment/bin 元数据到 H5 attrs"""
+        try:
+            # ---- 1. end_time ----
+            end_time_val = params.get("end_time")
+            if end_time_val:
+                self.f.attrs["end_time"] = float(end_time_val)
+
+            # ---- 2. 从 H5 dataset 计算 frame_id range ----
+            seg_meta = {"devices": {}}
+
+            for dev_label, ds_250hz_name in [("dev1", "emg1_250hz_adc"), ("dev2", "emg2_250hz_adc")]:
+                if ds_250hz_name not in self.f:
+                    self.f.attrs[f"emg{dev_label[-1]}_frame_id_min"] = -1
+                    self.f.attrs[f"emg{dev_label[-1]}_frame_id_max"] = -1
+                    self.f.attrs[f"emg{dev_label[-1]}_frame_count"] = 0
+                    self.f.attrs[f"emg{dev_label[-1]}_time_min"] = -1.0
+                    self.f.attrs[f"emg{dev_label[-1]}_time_max"] = -1.0
+                    continue
+
+                ds = self.f[ds_250hz_name]
+                n = ds.shape[0]
+                self.f.attrs[f"emg{dev_label[-1]}_frame_count"] = n
+
+                if n > 0:
+                    data = ds[:]
+                    frame_ids = data["frame_id"]
+                    times = data["time"]
+
+                    fid_min = int(np.min(frame_ids))
+                    fid_max = int(np.max(frame_ids))
+                    t_min = float(np.min(times))
+                    t_max = float(np.max(times))
+
+                    self.f.attrs[f"emg{dev_label[-1]}_frame_id_min"] = fid_min
+                    self.f.attrs[f"emg{dev_label[-1]}_frame_id_max"] = fid_max
+                    self.f.attrs[f"emg{dev_label[-1]}_time_min"] = t_min
+                    self.f.attrs[f"emg{dev_label[-1]}_time_max"] = t_max
+
+                    seg_meta["devices"][dev_label] = {
+                        "frame_id_min": fid_min,
+                        "frame_id_max": fid_max,
+                        "frame_count": int(n),
+                        "time_min": t_min,
+                        "time_max": t_max,
+                    }
+                    debug_log(f"   {dev_label}: {n} frames, frame_id [{fid_min}, {fid_max}], "
+                             f"time [{t_min:.3f}, {t_max:.3f}]")
+                else:
+                    self.f.attrs[f"emg{dev_label[-1]}_frame_id_min"] = -1
+                    self.f.attrs[f"emg{dev_label[-1]}_frame_id_max"] = -1
+                    self.f.attrs[f"emg{dev_label[-1]}_time_min"] = -1.0
+                    self.f.attrs[f"emg{dev_label[-1]}_time_max"] = -1.0
+
+            # ---- 3. segment_bin_summary JSON ----
+            for dev_label, dev_key in [("dev1", "sd_bin_dev1"), ("dev2", "sd_bin_dev2")]:
+                ble_key = f"ble_device_{dev_label}"
+                bin_prefix = self.f.attrs.get(dev_key, None)
+                ble_name = self.f.attrs.get(ble_key, None)
+
+                if isinstance(bin_prefix, bytes):
+                    bin_prefix = bin_prefix.decode("utf-8")
+                if isinstance(ble_name, bytes):
+                    ble_name = ble_name.decode("utf-8")
+
+                has_bin = bool(bin_prefix)
+                self.f.attrs[f"segment_has_{dev_label}_bin"] = has_bin
+
+                if dev_label in seg_meta.get("devices", {}):
+                    seg_meta["devices"][dev_label]["sd_bin"] = bin_prefix or None
+                    seg_meta["devices"][dev_label]["ble_device"] = ble_name or None
+
+            dev_count = sum(1 for d in seg_meta.get("devices", {}).values() if d.get("frame_count", 0) > 0)
+            seg_meta["device_count"] = dev_count
+            self.f.attrs["segment_device_count"] = dev_count
+            self.f.attrs["segment_bin_summary"] = json.dumps(seg_meta, ensure_ascii=False)
+            debug_log(f"   segment_bin_summary: {dev_count} devices")
+
+        except Exception as e:
+            debug_log(f"⚠️ 写入 segment metadata 失败: {e}")
+
     def get_stats(self):
         """获取统计信息"""
         return {
@@ -1084,7 +1337,7 @@ class HDF5StorageServer:
                         # 兼容旧版：REP socket 也支持 append
                         response = self.append_data(params)
                     elif cmd == "close":
-                        response = self.close_file()
+                        response = self.close_file(params)
                     elif cmd == "stats":
                         response = {"status": "success", "data": self.get_stats()}
                     elif cmd == "flush":

@@ -1072,9 +1072,10 @@
          * @param {Function} onPromptTriggered - Prompt触发回调
          * @param {Function} onUpcomingGesture - 【新增】即将到达的手势回调（用于更新左下角示范GIF）
          */
-        startShuffleMode(shuffledGestures, executionParams, stageConfig, onComplete, onPromptTriggered, onUpcomingGesture) {
+        startShuffleMode(shuffledGestures, executionParams, stageConfig, onComplete, onPromptTriggered, onUpcomingGesture, startIndex = 0) {
             console.log('[DiscreteGestureAnimation] ★★★ 启动乱序模式 ★★★');
             console.log('[DiscreteGestureAnimation] 手势数量:', shuffledGestures.length);
+            console.log('[DiscreteGestureAnimation] startIndex:', startIndex);
 
             // 初始化Canvas
             if (!this.canvas) {
@@ -1114,6 +1115,7 @@
             this.promptLibrary = {};
 
             // 构建promptSequence，并将每个手势添加到promptLibrary
+            // 【Bugfix】每个 prompt 保存 originalIndex（全局索引），续采时用于回调
             this.promptSequence = [];
             shuffledGestures.forEach((gesture, index) => {
                 const gestureId = `shuffle_${index}_${gesture.id || gesture.name}`;
@@ -1130,7 +1132,8 @@
                     icon: icon,
                     color: gesture.color || '#3b82f6',
                     gestureType: gesture.gestureType || 'instant',
-                    originalGesture: gesture  // 保存原始手势对象（用于GIF显示）
+                    originalGesture: gesture,  // 保存原始手势对象（用于GIF显示）
+                    originalIndex: index        // 【Bugfix】全局索引
                 };
 
                 this.promptSequence.push(gestureId);
@@ -1138,13 +1141,22 @@
 
             console.log('[DiscreteGestureAnimation] 乱序序列长度:', this.promptSequence.length);
 
-            // 重置状态
+            // 【Bugfix】续采：从 startIndex 开始，跳过已执行的手势
+            // executedCount 是已通过指示线的手势数，nextPromptIndex 是已创建 prompt 的索引
+            // 续采时需要把 startIndex 之前的手势视为"已执行"
+            const safeStartIndex = Math.min(startIndex, this.promptSequence.length);
             this.prompts = [];
             this.nextPromptIndex = 0;
-            this.executedCount = 0;
+            this.executedCount = safeStartIndex;  // 跳过 startIndex 个手势
             this.isRunning = true;
             this._shuffleModeActive = true;
-            this._lastUpcomingGestureIndex = -1;  // 用于跟踪即将到达的手势
+            this._lastUpcomingGestureIndex = -1;
+
+            if (safeStartIndex > 0) {
+                console.log('[DiscreteGestureAnimation] 续采：跳过前', safeStartIndex, '个手势');
+                // 设置 nextPromptIndex，让 createInitialShufflePrompts 从正确位置开始创建
+                this.nextPromptIndex = safeStartIndex;
+            }
 
             // 调整Canvas
             this.resizeCanvas();
@@ -1166,23 +1178,28 @@
             // 计算屏幕上能显示多少个手势（估算）
             const visibleCount = Math.ceil(this.config.canvasWidth / this.config.promptSpacing) + 4;
 
+            // 【Bugfix】从 nextPromptIndex 开始创建（续采模式下为 startIndex）
+            const startIdx = this.nextPromptIndex;
+            const remaining = this.promptSequence.length - startIdx;
+            const createCount = Math.min(visibleCount, remaining);
+
             // 【修复】累积计算位置，考虑持续性手势的宽度
             let currentX = this.config.canvasWidth + 50;
 
-            for (let i = 0; i < Math.min(visibleCount, this.promptSequence.length); i++) {
-                const promptName = this.promptSequence[i];
+            for (let i = 0; i < createCount; i++) {
+                const seqIdx = startIdx + i;
+                const promptName = this.promptSequence[seqIdx];
                 const gestureConfig = this.promptLibrary[promptName]?.originalGesture;
-                const prompt = this.createPromptObject(promptName, currentX, i, gestureConfig);
+                // 使用全局索引 seqIdx，保持与 gestures 数组的对应关系
+                const prompt = this.createPromptObject(promptName, currentX, seqIdx, gestureConfig);
                 this.prompts.push(prompt);
-                this.nextPromptIndex = i + 1;
+                this.nextPromptIndex = seqIdx + 1;
 
                 // 【关键】下一个手势的起始位置 = 当前手势的右边缘 + 间隔
-                // 对于持续性手势，右边缘 = x + rectWidth
-                // 对于瞬时手势，右边缘 = x（因为 rectWidth = 0）
                 currentX = currentX + (prompt.rectWidth || 0) + this.config.promptSpacing;
             }
 
-            console.log('[DiscreteGestureAnimation] 初始创建', this.prompts.length, '个提示');
+            console.log('[DiscreteGestureAnimation] 初始创建', this.prompts.length, '个提示 (从索引', startIdx, '开始)');
         }
 
         /**

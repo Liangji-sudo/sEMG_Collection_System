@@ -15,14 +15,19 @@
 
     // ==================== 配置参数 ====================
     const RENDERER_CONFIG = {
-        // 渲染频率 (Hz) - 用于计算总点数
+        // 渲染频率 (Hz) - 用于计算总点数（旧公式，不再用于时间窗）
         RENDER_RATE: 100,
-        // EMG每次渲染的数据点数 - 从9增加到18（加倍）
+        // EMG每次渲染的数据点数（旧公式，不再用于时间窗）
         EMG_POINTS_PER_RENDER: 18,
-        // IMU每次渲染的数据点数
+        // IMU每次渲染的数据点数（旧公式，不再用于时间窗）
         IMU_POINTS_PER_RENDER: 1,
         // 显示窗口时长 (秒)
-        WINDOW_DURATION: 5,
+        WINDOW_DURATION: 3,
+        // EMG 真实显示采样率 (Hz) — BLE 硬件 250Hz，直接写入 Canvas
+        EMG_DISPLAY_SAMPLE_RATE: 250,
+        // IMU 真实显示采样率 (Hz) — 每个 BLE 包 9 个 EMG 样本 + 1 个 IMU 点
+        // 所以 IMU 写入速率 ≈ 250 / 9 ≈ 27.78 Hz
+        IMU_DISPLAY_SAMPLE_RATE: 250 / 9,
         // EMG通道数
         EMG_CHANNELS: 16,
         // IMU轴数
@@ -106,11 +111,12 @@
             this.displayWidth = rect.width;
             this.displayHeight = rect.height;
             
-            // 计算总数据点数
+            // 计算总数据点数 — 按真实信号采样率 × 窗口秒数
+            // EMG: 250 Hz × 3s = 750 点; IMU: (250/9) Hz × 3s ≈ 83 点
             if (this.type === 'emg') {
-                this.totalPoints = RENDERER_CONFIG.RENDER_RATE * RENDERER_CONFIG.EMG_POINTS_PER_RENDER * RENDERER_CONFIG.WINDOW_DURATION;
+                this.totalPoints = Math.round(RENDERER_CONFIG.EMG_DISPLAY_SAMPLE_RATE * RENDERER_CONFIG.WINDOW_DURATION);
             } else {
-                this.totalPoints = RENDERER_CONFIG.RENDER_RATE * RENDERER_CONFIG.IMU_POINTS_PER_RENDER * RENDERER_CONFIG.WINDOW_DURATION;
+                this.totalPoints = Math.round(RENDERER_CONFIG.IMU_DISPLAY_SAMPLE_RATE * RENDERER_CONFIG.WINDOW_DURATION);
             }
             
             this.initState();

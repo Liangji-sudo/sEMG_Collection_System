@@ -101,6 +101,10 @@ class RealtimeEngine extends EventEmitter {
         // 【新增】录像同步相关
         this.recordingSessionId = null;  // 录像会话ID
         this.isMultiSession = false;     // 是否为多轮次采集
+
+        // 【新增】异常中断冻结状态
+        this.abortFreezeActive = false;       // 是否已冻结写入
+        this.pendingAbortFreeze = null;       // { interruptedAt, progress }
     }
 
     start(port = 8080) {
@@ -207,6 +211,8 @@ class RealtimeEngine extends EventEmitter {
                 case 'prompt_start': this.onPromptStart(data.promptName, data.promptIndex); break;
                 case 'prompt_end': this.onPromptEnd(data.promptName, data.promptIndex); break;
                 case 'prompt': this.onPrompt(data.name, data.stageName, data.timestamp); break;
+                case 'abnormal_interrupt_freeze': this.onAbnormalInterruptFreeze(data); break;
+                case 'abnormal_interrupt': this.onAbnormalInterrupt(data); break;
 
                 // 【新增】Mocap命令
                 case 'mocap_set_channel': this.onMocapSetChannel(data.channel); break;
@@ -275,6 +281,20 @@ class RealtimeEngine extends EventEmitter {
             console.log(`[realtimeEngine] 多轮次模式: ${this.isMultiSession}`);
         }
 
+        // 【Phase 2】保存续采模式元数据
+        this.isResume = data.isResume || false;
+        this.resumeSegmentIndex = data.resumeSegmentIndex || 1;
+        this.resumeFromInterruptedAt = data.resumeFromInterruptedAt || null;
+        this.resumeReason = data.resumeReason || null;
+        this.resumeParentRecordingSessionId = data.resumeParentRecordingSessionId || null;
+        this.resumeParentSegmentIndex = data.resumeParentSegmentIndex || null;  // Phase 3
+        if (this.isResume) {
+            console.log(`[realtimeEngine] ★ 续采模式 ★`);
+            console.log(`  segmentIndex: ${this.resumeSegmentIndex}`);
+            console.log(`  resumeFrom: ${this.resumeFromInterruptedAt}`);
+            console.log(`  resumeReason: ${this.resumeReason}`);
+        }
+
         // 注意：不在这里重置sd_filenames，因为sd_filenames_updated事件会在start_all之后到达
         // sd_filenames的管理完全由onSdFilenamesUpdated负责
     }
@@ -284,7 +304,12 @@ class RealtimeEngine extends EventEmitter {
 
     async onCollectionStop(completed) {
         if (this.stageFileOpen && !this.isClosingStageFile) {
-            await this.closeStageFile();
+            // 显式传 collection_status：
+            // completed === true  → "completed"（Stage 正常完成）
+            // completed === false → "manual_stopped"（工作人员手动点停止）
+            await this.closeStageFile({
+                collection_status: completed ? 'completed' : 'manual_stopped'
+            });
         }
         this.isCollecting = false;
         this.collectionPaused = false;
@@ -294,6 +319,54 @@ class RealtimeEngine extends EventEmitter {
         // 原因：在同一个采集会话中（从进入采集界面到离开），ESP32 持续录制到同一个 bin 文件
         // sd_filenames 由 sd_filenames_updated 事件更新，只有在 start_all 时才会变化
         // 如果在这里清空，第二次点击采集按钮时 sd_filenames 为空，导致 H5 文件缺少 bin 字段
+    }
+
+    // 【新增】异常中断冻结 — 立即停止 append，不关闭 H5
+    onAbnormalInterruptFreeze(data) {
+        const { interruptedAt, progress } = data || {};
+        console.log(`[realtimeEngine] ========== 异常中断冻结 ==========`);
+        console.log(`[realtimeEngine] 时间: ${interruptedAt || '未知'}`);
+
+        // 立即停止写入
+        this.isCollecting = false;
+        this.collectionPaused = true;
+        this.abortFreezeActive = true;
+        this.pendingAbortFreeze = { interruptedAt, progress };
+
+        console.log(`[realtimeEngine] H5 数据写入已冻结 (文件保持 open)`);
+        console.log(`[realtimeEngine] isCollecting=${this.isCollecting}, collectionPaused=${this.collectionPaused}`);
+    }
+
+    // 【新增】异常中断处理 — 关闭 H5 并标记 abnormal_interrupted
+    async onAbnormalInterrupt(data) {
+        const { reason, interruptedAt, progress, breakpointState } = data || {};
+        console.log(`[realtimeEngine] ========== 异常中断 ==========`);
+        console.log(`[realtimeEngine] 原因: ${reason || '未知'}`);
+        console.log(`[realtimeEngine] 时间: ${interruptedAt || '未知'}`);
+
+        if (this.stageFileOpen && !this.isClosingStageFile) {
+            // 关闭当前 H5，写入异常中断标记
+            // 注意：不传 segment_index，保留 create_file 写入的值
+            // （续采 H5 的 segment_index 由 create_file 写入，close 不覆盖）
+            await this.closeStageFile({
+                collection_status: 'abnormal_interrupted',
+                interrupted_at: interruptedAt || new Date().toISOString(),
+                interrupt_reason: reason || '未知',
+                resume_progress: progress ? JSON.stringify(progress) : null,
+                breakpoint_state: breakpointState ? JSON.stringify(breakpointState) : null
+            });
+        } else {
+            console.log('[realtimeEngine] 没有打开的 H5 文件，跳过关闭');
+        }
+
+        // 重置采集状态（但不改变 sd_filenames）
+        this.isCollecting = false;
+        this.collectionPaused = false;
+        this.isTestMode = false;
+        // 清理 freeze 状态
+        this.abortFreezeActive = false;
+        this.pendingAbortFreeze = null;
+        // 注意：不调用 onCollectionStop，避免覆盖 H5 标记
     }
 
     // 【新增】处理SD卡文件名和设备名称更新事件
@@ -334,6 +407,11 @@ class RealtimeEngine extends EventEmitter {
     onPromptEnd(promptName, promptIndex) {}
 
     onPrompt(name, stageName, timestamp) {
+        // 【新增】异常中断冻结状态下跳过 prompt
+        if (this.abortFreezeActive) {
+            console.log(`[realtimeEngine] 冻结状态：跳过保存 prompt (${name})`);
+            return;
+        }
         // 【新增】测试模式下不保存 prompt
         if (this.isTestMode) {
             console.log(`[realtimeEngine] 测试模式：跳过保存 prompt (${name})`);
@@ -504,7 +582,15 @@ class RealtimeEngine extends EventEmitter {
                 ble_dev2: this.device_names.dev2,  // 例如 "WristBand_5B12"
                 // 【新增】录像同步信息
                 recording_session_id: this.recordingSessionId,  // 例如 "rec_20260314_153045_5"
-                is_multi_session: this.isMultiSession           // 是否为多轮次采集
+                is_multi_session: this.isMultiSession,          // 是否为多轮次采集
+                // 【Phase 2】续采模式元数据
+                is_resumed: this.isResume || false,
+                segment_index: this.resumeSegmentIndex || 1,
+                resume_from_interrupted_at: this.resumeFromInterruptedAt || null,
+                resume_reason: this.resumeReason || null,
+                resume_parent_recording_session_id: this.resumeParentRecordingSessionId || null,
+                // Phase 3: 父 segment 序号
+                parent_segment_index: this.resumeParentSegmentIndex || null
             });
 
             if (response.status === 'success') {
@@ -518,15 +604,19 @@ class RealtimeEngine extends EventEmitter {
         }
     }
 
-    async closeStageFile() {
+    async closeStageFile(extraParams = {}) {
         if (!this.stageFileOpen || this.isClosingStageFile) return;
 
         this.isClosingStageFile = true;
 
         try {
-            const response = await this.sendStorageCommand('close', { end_time: Date.now() });
+            const params = { end_time: Date.now() / 1000, ...extraParams };
+            const response = await this.sendStorageCommand('close', params);
             this.stageFileOpen = false;
-            if (response.status === 'success') console.log(`[realtimeEngine] ✅ 文件已关闭`);
+            if (response.status === 'success') {
+                const status = params.collection_status || 'completed';
+                console.log(`[realtimeEngine] ✅ 文件已关闭 (collection_status: ${status})`);
+            }
             return response;
         } catch (error) {
             console.error('[realtimeEngine] 关闭Stage文件失败:', error);
