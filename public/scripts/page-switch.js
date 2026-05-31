@@ -37,7 +37,10 @@
             if (startCollectionBtn) {
                 startCollectionBtn.addEventListener('click', () => {
                     console.log('[PageSwitch] 点击开始采集');
-                    
+
+                    // 清除续采按钮标记（用户选择普通新任务）
+                    delete window.__showBreakpointResumeAfterAbort;
+
                     // 使用新的采集选择流程
                     if (window.collectionSelector) {
                         window.collectionSelector.open();
@@ -55,6 +58,15 @@
                 backendBtn.addEventListener('click', () => {
                     console.log('[PageSwitch] 点击后台按钮');
                     this.showBackend();
+                });
+            }
+
+            // 【Phase 2】断点续采按钮（首页）
+            const resumeBtn = document.getElementById('resumeBreakpointBtn');
+            if (resumeBtn) {
+                resumeBtn.addEventListener('click', () => {
+                    console.log('[PageSwitch] 点击断点续采');
+                    this.resumeBreakpoint();
                 });
             }
 
@@ -517,25 +529,143 @@
          * Phase 1 不实现续采按钮，只做检测提示
          */
         _checkBreakpointState() {
+            const resumeBtn = document.getElementById('resumeBreakpointBtn');
             const breakpointExists = localStorage.getItem('emg_breakpoint_exists');
-            if (breakpointExists === 'true') {
-                console.log('[PageSwitch] ⚠️ 检测到异常中断断点状态');
-                try {
-                    const breakpointState = JSON.parse(localStorage.getItem('emg_breakpoint_state') || '{}');
-                    console.log('[PageSwitch] 断点信息:', {
-                        interruptedAt: breakpointState.interruptedAt,
-                        reason: breakpointState.interruptReason,
-                        taskId: breakpointState.currentTaskId,
-                        session: (breakpointState.currentSessionIndex || 0) + 1,
-                        stage: breakpointState.currentStageIndex,
-                        gesture: breakpointState.currentGestureIndex
-                    });
-                } catch (e) {
-                    console.log('[PageSwitch] 断点状态解析失败:', e);
-                }
-                // Phase 1: 仅在 console 提示，不做 UI 入口
-                // Phase 2: 在此显示"断点续采"按钮
+
+            // 只在 localStorage 有断点 AND 通过异常中断自动返回首页时显示按钮
+            if (breakpointExists !== 'true' || !window.__showBreakpointResumeAfterAbort) {
+                if (resumeBtn) resumeBtn.style.display = 'none';
+                return;
             }
+
+            // 尝试解析断点状态
+            try {
+                const breakpointState = JSON.parse(localStorage.getItem('emg_breakpoint_state') || '{}');
+
+                // 校验必要字段
+                if (!breakpointState.version || !breakpointState.collectionConfig || !breakpointState.currentTaskId) {
+                    console.warn('[PageSwitch] 断点状态不完整，隐藏续采按钮');
+                    if (resumeBtn) resumeBtn.style.display = 'none';
+                    return;
+                }
+
+                console.log('[PageSwitch] ⚠️ 检测到异常中断断点状态');
+                console.log('[PageSwitch] 断点信息:', {
+                    interruptedAt: breakpointState.interruptedAt,
+                    reason: breakpointState.interruptReason,
+                    taskId: breakpointState.currentTaskId,
+                    session: (breakpointState.currentSessionIndex || 0) + 1,
+                    stage: breakpointState.currentStageIndex,
+                    gesture: breakpointState.currentGestureIndex
+                });
+
+                // Phase 2: 显示"断点续采"按钮
+                if (resumeBtn) {
+                    resumeBtn.style.display = '';
+                    console.log('[PageSwitch] "断点续采"按钮已显示');
+                }
+
+            } catch (e) {
+                console.error('[PageSwitch] 断点状态解析失败:', e);
+                if (resumeBtn) resumeBtn.style.display = 'none';
+            }
+        }
+
+        /**
+         * 【Phase 2】断点续采 — 确认弹窗 + 恢复流程
+         */
+        resumeBreakpoint() {
+            let breakpointState;
+            try {
+                breakpointState = JSON.parse(localStorage.getItem('emg_breakpoint_state') || '{}');
+            } catch (e) {
+                this.showToast('断点数据损坏，无法续采', 'error');
+                return;
+            }
+
+            if (!breakpointState.version || !breakpointState.collectionConfig) {
+                this.showToast('断点数据不完整，无法续采', 'error');
+                return;
+            }
+
+            // 任务名称映射
+            const taskNames = {
+                'discrete_gesture': '离散手势采集',
+                'continual_gesture_1': '连续手势采集1',
+                'continual_gesture_2': '连续手势采集2',
+                'continual_gesture_3': '连续手势采集3'
+            };
+
+            const taskName = taskNames[breakpointState.currentTaskId] || breakpointState.currentTaskId;
+            const sessionNum = (breakpointState.currentSessionIndex || 0) + 1;
+            const stageName = breakpointState.stages?.[breakpointState.currentStageIndex]?.name || '未知';
+            const gestureNum = (breakpointState.currentGestureIndex || 0) + 1;
+
+            // ---- 确认弹窗 ----
+            const confirmed = confirm(
+                '════════ 断点续采确认 ════════\n\n' +
+                `中断时间: ${new Date(breakpointState.interruptedAt).toLocaleString()}\n` +
+                `中断原因: ${breakpointState.interruptReason || '未知'}\n` +
+                `任务: ${taskName}\n` +
+                `轮次: 第 ${sessionNum}/${breakpointState.sessionCount || '?'} 轮\n` +
+                `Stage: ${stageName}\n` +
+                `手势进度: 第 ${gestureNum} 个\n\n` +
+                '请确认两只腕带已重新连接并正常。\n' +
+                '确认后将进入采集界面继续采集中断的任务。\n\n' +
+                '════════════════════════════'
+            );
+
+            if (!confirmed) {
+                console.log('[PageSwitch] 用户取消断点续采');
+                return;
+            }
+
+            console.log('[PageSwitch] ===== 开始断点续采恢复 =====');
+
+            // 清除续采按钮一次性标记
+            delete window.__showBreakpointResumeAfterAbort;
+
+            // ---- 1. 恢复采集配置到全局和 localStorage ----
+            window.currentCollectionConfig = breakpointState.collectionConfig;
+            localStorage.setItem('emg_current_collection_config', JSON.stringify(breakpointState.collectionConfig));
+
+            // ---- 2. 恢复用户信息 ----
+            if (breakpointState.collectionConfig.subject) {
+                this.currentUser = breakpointState.collectionConfig.subject;
+                this.updateUserDisplay();
+                localStorage.setItem('emg_current_user', JSON.stringify(breakpointState.collectionConfig.subject));
+            }
+
+            // ---- 3. 切换到采集页面 ----
+            console.log('[PageSwitch] 切换到采集页面...');
+
+            // 启动 BLE 数据流（仅腕带 streaming，不启动 H5 记录）
+            // H5 记录在用户点击"开始续采"后由 startTask() 触发
+            if (window.BleControl && window.BleControl.isConnected) {
+                window.BleControl.startAll();
+                console.log('[PageSwitch] BLE 数据流已启动（仅streaming，未开始H5记录）');
+            }
+
+            setTimeout(() => {
+                this.showCollection();
+
+                // ---- 4. 恢复 collectionController 状态 ----
+                if (window.collectionController) {
+                    window.collectionController.selectTask(
+                        breakpointState.currentTaskId === 'discrete_gesture' ? 'discrete' :
+                        breakpointState.currentTaskId === 'continual_gesture_1' ? 'continuous1' :
+                        breakpointState.currentTaskId === 'continual_gesture_2' ? 'continuous2' :
+                        breakpointState.currentTaskId === 'continual_gesture_3' ? 'continuous3' :
+                        'discrete'
+                    );
+                    window.collectionController.loadBreakpointState(breakpointState);
+                } else {
+                    console.error('[PageSwitch] collectionController 未找到');
+                    this.showToast('采集控制器未加载，恢复失败', 'error');
+                }
+            }, 500);
+
+            console.log('[PageSwitch] 断点续采恢复完成');
         }
     }
 

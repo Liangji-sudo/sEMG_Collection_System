@@ -83,6 +83,11 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             // ===== 乱序模式相关状态 =====
             this._shuffleMode = false;          // 当前Stage是否为乱序模式
 
+            // ===== 断点续采相关状态（Phase 2） =====
+            this._isResumeMode = false;         // 是否为续采模式
+            this._resumeState = null;           // 断点状态快照
+            this._resumeSegmentIndex = 1;       // 当前 segment 序号
+
             console.log('[Collection] 构造函数结束');
         }
 
@@ -256,6 +261,77 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 console.warn('[Collection] 未找到采集配置，使用默认值');
                 this.loadDefaultConfig();
             }
+        }
+
+        /**
+         * 【Phase 2 - Bug 1 fix】轻量重载执行参数
+         * 仅刷新 executionParams / currentExecutionParams，不重建 gestures 和进度。
+         * 用于续采模式下避免 loadCollectionConfig() 覆盖断点恢复的状态。
+         */
+        _reloadExecutionParams() {
+            const template = this.getLatestTemplate();
+            const config = this.collectionConfig || {};
+
+            // 优先从 collectionConfig.execution，其次从 template.execution
+            const executionSource = config.execution || template.execution;
+            if (executionSource) {
+                if (executionSource[this.currentTaskId]) {
+                    this.executionParams = { ...executionSource };
+                    this.currentExecutionParams = { ...executionSource[this.currentTaskId] };
+                } else if (executionSource.repeatPerGesture !== undefined) {
+                    this.executionParams.discrete_gesture = { ...executionSource };
+                    this.currentExecutionParams = this.executionParams[this.currentTaskId] || this.executionParams.discrete_gesture;
+                }
+            }
+
+            console.log('[Collection] ★ _reloadExecutionParams (续采模式) ★');
+            console.log('[Collection]   taskId:', this.currentTaskId);
+            console.log('[Collection]   params:', JSON.stringify(Object.keys(this.currentExecutionParams || {})));
+        }
+
+        /**
+         * 【Phase 2 - Bug fix】按任务类型校验执行参数完整性
+         * discrete_gesture: 需要 repeatPerGesture
+         * continual_gesture_*: 需要 trialsPerStage
+         */
+        _hasValidExecutionParamsForTask(taskId) {
+            const p = this.currentExecutionParams;
+            if (!p) return false;
+            if (taskId === 'discrete_gesture') {
+                return typeof p.repeatPerGesture === 'number' &&
+                       typeof p.gestureDisplayTime === 'number' &&
+                       typeof p.preparationTime === 'number';
+            }
+            // continual_gesture_1 / 2 / 3
+            return typeof p.trialsPerStage === 'number' &&
+                   typeof p.preparationTime === 'number';
+        }
+
+        /**
+         * 【Phase 2 - Bug fix】用任务类型对应的默认执行参数兜底
+         * 仅在续采模式下 _reloadExecutionParams() 失败时调用。
+         * 不调用 loadCollectionConfig()，不重建 gestures。
+         */
+        _applyExecutionDefaultsForTask(taskId) {
+            const defaults = this.getDefaultTemplate().execution;
+            if (defaults[taskId]) {
+                this.executionParams = { ...defaults };
+                this.currentExecutionParams = { ...defaults[taskId] };
+            } else {
+                // ultimate fallback
+                this.currentExecutionParams = {
+                    repeatPerGesture: 5,
+                    intervalBetweenRepeat: 1.0,
+                    restBetweenGestures: 30.0,
+                    preparationTime: 3.0,
+                    gestureDisplayTime: 2.0,
+                    trialsPerStage: 10,
+                    stageTimeout: 120,
+                    dwellTime: 0.5,
+                    targetSize: 0.12
+                };
+            }
+            console.warn('[Collection] 已应用默认执行参数兜底:', this.currentExecutionParams);
         }
 
         /**
@@ -878,22 +954,41 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             console.log('[Collection] ===== 开始采集任务 =====');
             console.log('[Collection] 任务类型:', this.currentTaskId);
             console.log('[Collection] 测试模式:', isTestMode ? '是（不保存H5文件）' : '否');
+            console.log('[Collection] 续采模式:', this._isResumeMode ? '是' : '否');
             console.log('[Collection] 当前Stage:', this.stages[this.currentStageIndex]?.name);
 
-            // 【关键修复】重新从localStorage读取最新配置
-            this.loadCollectionConfig();
-            console.log('[Collection] ★★★ 重新加载配置后 ★★★');
+            // 【Phase 2 - Bug 1 fix】续采模式仅重载执行参数，不覆盖断点恢复的 gestures/进度
+            if (!this._isResumeMode) {
+                this.loadCollectionConfig();
+            } else {
+                this._reloadExecutionParams();
+                // 按任务类型校验；缺失时用默认值兜底，绝不调 loadCollectionConfig()
+                if (!this._hasValidExecutionParamsForTask(this.currentTaskId)) {
+                    console.warn('[Collection] 续采模式执行参数不完整，使用默认值兜底');
+                    this._applyExecutionDefaultsForTask(this.currentTaskId);
+                }
+            }
+            console.log('[Collection] ★★★ 配置加载后 ★★★');
             console.log('[Collection] currentExecutionParams:', this.currentExecutionParams);
-            console.log('[Collection] trialsPerStage:', this.currentExecutionParams.trialsPerStage);
+            console.log('[Collection] gestures 数量:', this.gestures.length);
 
             // 【关键修复】重置动画模块状态
             this.resetAnimationModules();
 
             this._isRunning = true;
             this._isPaused = false;
-            this.currentGestureIndex = 0;
-            this.gestureRepeatCount = 0;
-            this.continualTrialCount = 0;
+
+            // 【Phase 2】续采模式下不重置进度索引
+            if (!this._isResumeMode) {
+                this.currentGestureIndex = 0;
+                this.gestureRepeatCount = 0;
+                this.continualTrialCount = 0;
+            } else {
+                console.log('[Collection] 续采模式：保留进度');
+                console.log('[Collection]   gestureIndex:', this.currentGestureIndex);
+                console.log('[Collection]   repeatCount:', this.gestureRepeatCount);
+                console.log('[Collection]   trialCount:', this.continualTrialCount);
+            }
 
             this.updateControlButtons(true);
 
@@ -917,18 +1012,22 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                            this.collectionConfig?.subject?.id ||
                            `S${Date.now().toString().slice(-6)}`;
 
-            // 【新增】单轮采集时生成新的录像会话ID，全部轮次模式下复用已有ID
-            if (!this._isAllSessionsMode) {
-                // 单轮采集：生成新的录像会话ID
-                this._recordingSessionId = this._generateRecordingSessionId(1);
-                console.log('[Collection] 单轮采集，生成录像会话ID:', this._recordingSessionId);
+            // 【Phase 2】续采模式下保留断点的 recordingSessionId，其他情况正常生成
+            if (!this._isResumeMode) {
+                if (!this._isAllSessionsMode) {
+                    this._recordingSessionId = this._generateRecordingSessionId(1);
+                    console.log('[Collection] 单轮采集，生成录像会话ID:', this._recordingSessionId);
+                }
+                // 全部轮次模式下，录像会话ID在 startAllSessions 中已生成
+            } else {
+                console.log('[Collection] 续采模式，复用录像会话ID:', this._recordingSessionId);
             }
-            // 全部轮次模式下，录像会话ID在 startAllSessions 中已生成
 
             // 【新增】启用空格键监听
             this._enableSpaceKey();
 
-            this.sendToRealtimeEngine('collection_start', {
+            // 构建 collection_start payload
+            const startPayload = {
                 taskId: this.currentTaskId,
                 sessionIndex: this.currentSessionIndex,
                 sessionNumber: this.currentSessionIndex + 1,
@@ -944,7 +1043,22 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 // 文件名建议格式: userId_session{N}_{stageName}_{timestamp}
                 suggestedFileName: `${userId}_session${this.currentSessionIndex + 1}_${currentStage?.name || currentStage?.id || 'stage'}`,
                 config: this.collectionConfig
-            });
+            };
+
+            // 【Phase 2】续采模式下附加 resume 元数据
+            if (this._isResumeMode && this._resumeState) {
+                startPayload.isResume = true;
+                startPayload.resumeFromInterruptedAt = this._resumeState.interruptedAt;
+                startPayload.resumeReason = this._resumeState.interruptReason;
+                startPayload.resumeSegmentIndex = this._resumeSegmentIndex;
+                startPayload.resumeParentRecordingSessionId = this._resumeState.recordingSessionId;
+                console.log('[Collection] 续采元数据已附加:');
+                console.log('  isResume:', true);
+                console.log('  resumeSegmentIndex:', this._resumeSegmentIndex);
+                console.log('  resumeReason:', this._resumeState.interruptReason);
+            }
+
+            this.sendToRealtimeEngine('collection_start', startPayload);
 
             if (this.currentTaskId === 'discrete_gesture') {
                 this.startDiscreteGestureCollection();
@@ -1176,18 +1290,21 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
         // ==================== 异常中断 ====================
 
         /**
-         * 【新增】异常中断采集任务 — Phase 1
-         * 1. 弹出确认对话框，让工作人员选择中断原因
-         * 2. 保存 breakpoint state 到 localStorage
-         * 3. 发送 abnormal_interrupt 到 realtimeEngine
-         * 4. 清理前端状态
-         *
-         * 限制：仅在 _isRunning && !_isTestMode 时可用
+         * 【Bugfix】异常中断采集任务
+         * 点击按钮瞬间立即冻结业务 + 创建 _pendingAbortSnapshot，
+         * 然后弹出原因选择对话框（不可取消）。
+         * 断点以"点击按钮那一刻"的状态为准，不再继续采集。
          */
         abortTask(reason) {
             // 如果已经传了 reason（从弹窗回调），直接执行中断
             if (reason !== undefined) {
                 this._executeAbort(reason);
+                return;
+            }
+
+            // 续采准备态：处理"放弃断点"
+            if (!this._isRunning && this._isResumeMode) {
+                this._confirmAbandonBreakpoint();
                 return;
             }
 
@@ -1203,114 +1320,12 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 return;
             }
 
-            // 弹出原因选择对话框
-            this._showAbortReasonDialog((selectedReason) => {
-                if (selectedReason) {
-                    this._executeAbort(selectedReason);
-                }
-                // 取消则不做任何事
-            });
-        }
+            // ===== 立即冻结业务，创建断点快照 =====
+            console.log('[Collection] ===== 点击异常中断，立即冻结 =====');
 
-        /**
-         * 【新增】显示异常中断原因选择对话框
-         */
-        _showAbortReasonDialog(callback) {
-            // 移除已有的对话框
-            const existing = document.getElementById('abortReasonDialog');
-            if (existing) existing.remove();
+            const interruptedAt = new Date().toISOString();
 
-            const overlay = document.createElement('div');
-            overlay.id = 'abortReasonDialog';
-            overlay.style.cssText = `
-                position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-                background: rgba(0,0,0,0.5); display: flex; align-items: center;
-                justify-content: center; z-index: 10000;
-            `;
-
-            const reasons = [
-                { value: '设备没电', label: '🔋 设备没电' },
-                { value: '丢包严重', label: '📉 丢包严重' },
-                { value: '双设备不同步', label: '🔗 双设备不同步' },
-                { value: '信号异常', label: '📊 信号异常' },
-                { value: '其他', label: '📝 其他' }
-            ];
-
-            overlay.innerHTML = `
-                <div style="
-                    background: white; border-radius: 16px; padding: 32px;
-                    min-width: 420px; max-width: 520px;
-                    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-                ">
-                    <h3 style="margin:0 0 8px 0; font-size:20px; color:#dc2626;">
-                        ⚠️ 确认异常中断
-                    </h3>
-                    <p style="margin:0 0 20px 0; color:#6b7280; font-size:14px;">
-                        请选择中断原因，确认后当前采集进度将被保存。
-                    </p>
-                    <div id="abortReasonList" style="display:flex; flex-direction:column; gap:10px; margin-bottom:24px;">
-                        ${reasons.map((r, i) => `
-                            <button class="abort-reason-btn" data-reason="${r.value}"
-                                style="
-                                    padding:12px 16px; border:2px solid #e5e7eb; border-radius:8px;
-                                    background:white; cursor:pointer; font-size:14px; text-align:left;
-                                    transition: all 0.2s;
-                                "
-                                onmouseover="this.style.borderColor='#f97316';this.style.background='#fff7ed';"
-                                onmouseout="this.style.borderColor='#e5e7eb';this.style.background='white';"
-                            >${r.label}</button>
-                        `).join('')}
-                    </div>
-                    <div style="display:flex; gap:12px; justify-content:flex-end;">
-                        <button id="abortCancelBtn" style="
-                            padding:10px 24px; border:1px solid #d1d5db; border-radius:8px;
-                            background:white; cursor:pointer; font-size:14px;
-                        ">取消</button>
-                    </div>
-                </div>
-            `;
-
-            document.body.appendChild(overlay);
-
-            // 绑定原因选择事件
-            const reasonButtons = overlay.querySelectorAll('.abort-reason-btn');
-            reasonButtons.forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const selectedReason = btn.dataset.reason;
-                    overlay.remove();
-                    callback(selectedReason);
-                });
-            });
-
-            // 绑定取消按钮
-            const cancelBtn = overlay.querySelector('#abortCancelBtn');
-            if (cancelBtn) {
-                cancelBtn.addEventListener('click', () => {
-                    overlay.remove();
-                    callback(null);
-                });
-            }
-
-            // 点击遮罩关闭
-            overlay.addEventListener('click', (e) => {
-                if (e.target === overlay) {
-                    overlay.remove();
-                    callback(null);
-                }
-            });
-        }
-
-        /**
-         * 【新增】执行异常中断
-         */
-        _executeAbort(reason) {
-            console.log('[Collection] ===== 异常中断 =====');
-            console.log('[Collection] 中断原因:', reason);
-            console.log('[Collection] 当前进度: Session', this.currentSessionIndex + 1,
-                ', Stage', this.currentStageIndex, ', Gesture', this.currentGestureIndex,
-                ', Repeat', this.gestureRepeatCount);
-
-            // ---- 1. 采集进度快照 ----
+            // 进度快照（必须在停止前复制）
             const progress = {
                 currentSessionIndex: this.currentSessionIndex,
                 currentStageIndex: this.currentStageIndex,
@@ -1336,77 +1351,42 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 _repeatTotal: g._repeatTotal !== undefined ? g._repeatTotal : null
             }));
 
-            const interruptedAt = new Date().toISOString();
+            const currentSegmentIndex = this._isResumeMode ? this._resumeSegmentIndex : 1;
 
-            // ---- 2. 写入 localStorage ----
-            const breakpointState = {
-                version: 1,
-                status: 'abnormal_interrupted',
-                interruptedAt: interruptedAt,
-                interruptReason: reason,
+            // 保存到待决快照，供 _executeAbort 使用
+            this._pendingAbortSnapshot = {
+                interruptedAt,
+                progress,
+                gesturesSnapshot,
+                currentSegmentIndex,
                 collectionConfig: this.collectionConfig,
                 currentTaskId: this.currentTaskId,
-                currentSessionIndex: this.currentSessionIndex,
-                currentStageIndex: this.currentStageIndex,
-                currentGestureIndex: this.currentGestureIndex,
-                gestureRepeatCount: this.gestureRepeatCount,
-                continualTrialCount: this.continualTrialCount,
-                currentPhase: this.currentPhase,
-                _shuffleMode: this._shuffleMode,
+                recordingSessionId: this._recordingSessionId,
                 isAllSessionsMode: this._isAllSessionsMode,
                 sessionCount: this.sessionCount,
-                gesturesSnapshot: gesturesSnapshot,
-                recordingSessionId: this._recordingSessionId,
                 stages: this.stages.map(s => ({ id: s.id, name: s.name }))
             };
 
-            localStorage.setItem('emg_breakpoint_state', JSON.stringify(breakpointState));
-            localStorage.setItem('emg_breakpoint_exists', 'true');
-            console.log('[Collection] breakpoint 状态已写入 localStorage');
-            console.log('[Collection] breakpoint:', breakpointState);
+            console.log('[Collection] 断点快照已创建:');
+            console.log('  session:', progress.currentSessionIndex + 1);
+            console.log('  stage:', progress.currentStageIndex);
+            console.log('  gestureIndex:', progress.currentGestureIndex);
+            console.log('  repeatCount:', progress.gestureRepeatCount);
+            console.log('  shuffleMode:', progress._shuffleMode);
 
-            // ---- 3. 发送异常中断到 realtimeEngine ----
-            this.sendToRealtimeEngine('abnormal_interrupt', {
-                reason: reason,
-                interruptedAt: interruptedAt,
-                progress: progress
-            });
-
-            // ---- 4. 清理前端状态（复用 stopTask 的清理逻辑） ----
+            // ===== 停止业务推进 =====
             this._isRunning = false;
             this._isPaused = false;
 
             // 取消全部轮次模式
             this.cancelAllSessionsMode();
 
-            if (this.phaseTimer) {
-                clearTimeout(this.phaseTimer);
-                this.phaseTimer = null;
-            }
-            if (this.countdownTimer) {
-                clearInterval(this.countdownTimer);
-                this.countdownTimer = null;
-            }
-            if (this.continualProgressTimer) {
-                clearInterval(this.continualProgressTimer);
-                this.continualProgressTimer = null;
-            }
-
-            // 清理标定状态
-            if (this.calibrationTimer) {
-                clearInterval(this.calibrationTimer);
-                this.calibrationTimer = null;
-            }
-            this.isCalibrating = false;
-            this.calibrationPhase = null;
-
-            // 隐藏标定指导动画
-            if (window.calibrationGuideAnimation) {
-                window.calibrationGuideAnimation.hide();
-            }
-
-            // 隐藏手势示范 GIF
-            this.hideGestureGif();
+            // 清除所有定时器
+            if (this.phaseTimer) { clearTimeout(this.phaseTimer); this.phaseTimer = null; }
+            if (this.countdownTimer) { clearInterval(this.countdownTimer); this.countdownTimer = null; }
+            if (this.continualProgressTimer) { clearInterval(this.continualProgressTimer); this.continualProgressTimer = null; }
+            if (this.calibrationTimer) { clearInterval(this.calibrationTimer); this.calibrationTimer = null; }
+            if (this._restCountdownTimer) { clearInterval(this._restCountdownTimer); this._restCountdownTimer = null; }
 
             // 停止动画
             if (window.discreteGestureAnimation) {
@@ -1415,18 +1395,16 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                     window.discreteGestureAnimation.stopShuffleMode();
                 }
             }
-            if (window.continualGesture1Animation) {
-                window.continualGesture1Animation.stop();
-            }
-            if (window.continualGesture2Animation) {
-                window.continualGesture2Animation.stop();
-            }
-            if (window.animationController) {
-                window.animationController.stop();
-            }
+            if (window.continualGesture1Animation) { window.continualGesture1Animation.stop(); }
+            if (window.continualGesture2Animation) { window.continualGesture2Animation.stop(); }
+            if (window.animationController) { window.animationController.stop(); }
 
-            // 重置乱序模式标志
-            this._shuffleMode = false;
+            // 隐藏 UI
+            this.hideGestureGif();
+            if (window.calibrationGuideAnimation) { window.calibrationGuideAnimation.hide(); }
+
+            // 禁用空格键
+            this._disableSpaceKey();
 
             // 重新启用选择器
             const sessionSelect = document.getElementById('sessionSwitchSelect');
@@ -1434,26 +1412,178 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             const stageSelect = document.getElementById('stageSwitchSelect');
             if (stageSelect) stageSelect.disabled = false;
 
-            // 禁用空格键监听
-            this._disableSpaceKey();
+            // 重置乱序模式标志
+            this._shuffleMode = false;
 
-            // 恢复按钮状态
+            // 更新 UI
             this.updateControlButtons(false);
             this.updateNextStageButton();
             this.updateGestureList();
-            this.updateStatus('已中断');
+            this.updateStatus('已冻结-等待选择中断原因');
 
             // 恢复质量颜色指示
             if (window.waveformController) {
                 window.waveformController.refreshQualityVisibility();
             }
 
+            // ===== 发送冻结信号到 realtimeEngine，立即停止 H5 append =====
+            this.sendToRealtimeEngine('abnormal_interrupt_freeze', {
+                interruptedAt: this._pendingAbortSnapshot.interruptedAt,
+                progress: this._pendingAbortSnapshot.progress
+            });
+            console.log('[Collection] abnormal_interrupt_freeze 已发送，H5 写入已冻结');
+
+            // ===== 弹出原因选择对话框（不可取消） =====
+            this._showAbortReasonDialog((selectedReason) => {
+                // selectedReason 必然非 null（无取消按钮）
+                this._executeAbort(selectedReason);
+            });
+        }
+
+        /**
+         * 【Bugfix】显示异常中断原因选择对话框
+         *
+         * 采集已在 abortTask() 中冻结，弹窗只用于选择中断原因。
+         * 不可取消 — 点击中断按钮即确定中断。
+         */
+        _showAbortReasonDialog(callback) {
+            const existing = document.getElementById('abortReasonDialog');
+            if (existing) existing.remove();
+
+            const overlay = document.createElement('div');
+            overlay.id = 'abortReasonDialog';
+            overlay.style.cssText = `
+                position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+                background: rgba(15,23,42,0.92); display: flex; align-items: center;
+                justify-content: center; z-index: 10000;
+            `;
+
+            const reasons = [
+                { value: '设备没电', label: '🔋 设备没电' },
+                { value: '丢包严重', label: '📉 丢包严重' },
+                { value: '双设备不同步', label: '🔗 双设备不同步' },
+                { value: '信号异常', label: '📊 信号异常' },
+                { value: '其他', label: '📝 其他' }
+            ];
+
+            overlay.innerHTML = `
+                <div style="
+                    background: white; border-radius: 16px; padding: 32px;
+                    min-width: 420px; max-width: 520px;
+                    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                ">
+                    <h3 style="margin:0 0 8px 0; font-size:20px; color:#dc2626;">
+                        ⚠️ 异常中断
+                    </h3>
+                    <p style="margin:0 0 12px 0; color:#6b7280; font-size:14px;">
+                        采集已冻结，请选择中断原因。
+                    </p>
+                    <p style="margin:0 0 20px 0; padding:10px 14px; background:#fef3c7; border-radius:8px;
+                        color:#92400e; font-size:12px; line-height:1.5;">
+                        💡 当前采集进度已保存为断点<br>
+                        选择原因后将自动返回首页，后续可从首页继续采集。
+                    </p>
+                    <div id="abortReasonList" style="display:flex; flex-direction:column; gap:10px; margin-bottom:24px;">
+                        ${reasons.map((r, i) => `
+                            <button class="abort-reason-btn" data-reason="${r.value}"
+                                style="
+                                    padding:12px 16px; border:2px solid #e5e7eb; border-radius:8px;
+                                    background:white; cursor:pointer; font-size:14px; text-align:left;
+                                    transition: all 0.2s;
+                                "
+                                onmouseover="this.style.borderColor='#f97316';this.style.background='#fff7ed';"
+                                onmouseout="this.style.borderColor='#e5e7eb';this.style.background='white';"
+                            >${r.label}</button>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(overlay);
+
+            // 绑定原因选择事件（无取消按钮，点击即确定）
+            const reasonButtons = overlay.querySelectorAll('.abort-reason-btn');
+            reasonButtons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const selectedReason = btn.dataset.reason;
+                    overlay.remove();
+                    callback(selectedReason);
+                });
+            });
+
+            // 不再绑定取消按钮或点击遮罩关闭 — 中断不可取消
+        }
+
+        /**
+         * 【新增】执行异常中断
+         */
+        _executeAbort(reason) {
+            console.log('[Collection] ===== 异常中断执行 =====');
+            console.log('[Collection] 中断原因:', reason);
+
+            // 【Bugfix】优先使用 _pendingAbortSnapshot（点击中断按钮瞬间的快照）
+            const snap = this._pendingAbortSnapshot;
+            if (!snap) {
+                console.error('[Collection] _pendingAbortSnapshot 缺失，无法执行中断');
+                return;
+            }
+            this._pendingAbortSnapshot = null;  // 清理
+
+            console.log('[Collection] 快照进度: Session', snap.progress.currentSessionIndex + 1,
+                ', Stage', snap.progress.currentStageIndex,
+                ', Gesture', snap.progress.currentGestureIndex,
+                ', Repeat', snap.progress.gestureRepeatCount);
+
+            // ---- 1. 写入 localStorage（使用快照数据） ----
+            const breakpointState = {
+                version: 1,
+                status: 'abnormal_interrupted',
+                interruptedAt: snap.interruptedAt,
+                interruptReason: reason,
+                collectionConfig: snap.collectionConfig,
+                currentTaskId: snap.currentTaskId,
+                currentSessionIndex: snap.progress.currentSessionIndex,
+                currentStageIndex: snap.progress.currentStageIndex,
+                currentGestureIndex: snap.progress.currentGestureIndex,
+                gestureRepeatCount: snap.progress.gestureRepeatCount,
+                continualTrialCount: snap.progress.continualTrialCount,
+                currentPhase: snap.progress.currentPhase,
+                _shuffleMode: snap.progress._shuffleMode,
+                segmentIndex: snap.currentSegmentIndex,
+                isAllSessionsMode: snap.progress.isAllSessionsMode,
+                sessionCount: snap.progress.sessionCount,
+                gesturesSnapshot: snap.gesturesSnapshot,
+                recordingSessionId: snap.recordingSessionId,
+                stages: snap.stages
+            };
+
+            localStorage.setItem('emg_breakpoint_state', JSON.stringify(breakpointState));
+            localStorage.setItem('emg_breakpoint_exists', 'true');
+            console.log('[Collection] breakpoint 状态已写入 localStorage');
+
+            // ---- 2. 发送异常中断到 realtimeEngine（使用快照进度） ----
+            this.sendToRealtimeEngine('abnormal_interrupt', {
+                reason: reason,
+                interruptedAt: snap.interruptedAt,
+                progress: snap.progress
+            });
+
+            // ---- 3. 前端清理已在 abortTask() 中完成，此处无需重复 ----
+
+            // 更新状态
+            this.updateStatus('已中断');
             this.showToast(`已保存断点: ${reason}`, 'success');
 
             console.log('[Collection] 异常中断流程完成，breakpoint 已保存');
 
-            // ---- 5. 建议返回首页（Phase 1 不做强制跳转，由用户手动返回） ----
-            // 后续 Phase 2 实现断点续采按钮时，可在此自动返回首页
+            // ---- 4. 自动返回首页（设置一次性标记，仅此次显示续采按钮） ----
+            window.__showBreakpointResumeAfterAbort = true;
+            setTimeout(() => {
+                if (window.pageSwitchController) {
+                    console.log('[Collection] 自动返回首页 (续采按钮标记已设置)');
+                    window.pageSwitchController.showWelcome();
+                }
+            }, 400);
         }
 
         // 【已移除】togglePause 方法已被测试模式替代
@@ -1651,10 +1781,11 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             this.currentPhase = 'prepare';
 
-            // 【新增】乱序模式使用专用的动画方法
+            // 【Bugfix】续采模式下传递 startIndex，从断点索引继续
             if (this._shuffleMode) {
+                const startIndex = this._isResumeMode ? this.currentGestureIndex : 0;
                 this.showPreparation(() => {
-                    this.startShuffleModeAnimation();
+                    this.startShuffleModeAnimation({ startIndex });
                 });
             } else {
                 this.showPreparation(() => {
@@ -1667,9 +1798,11 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
          * 【新增】启动乱序模式动画
          * 所有手势连续滚动显示，不进入休息时间
          */
-        startShuffleModeAnimation() {
+        startShuffleModeAnimation(opts = {}) {
+            const { startIndex = 0 } = opts;
             console.log('[Collection] ★★★ 启动乱序模式动画 ★★★');
             console.log('[Collection] 乱序手势数量:', this.gestures.length);
+            console.log('[Collection] startIndex:', startIndex);
 
             const currentStage = this.stages[this.currentStageIndex];
 
@@ -1680,9 +1813,16 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 instruction: currentStage?.instruction || '请跟随手势指示执行动作'
             };
 
-            // 显示第一个手势的GIF
+            // 【Bugfix】续采时显示 startIndex 对应的手势 GIF，不是 gestures[0]
             if (this.gestures.length > 0) {
-                this.showGestureGif(this.gestures[0]);
+                const gifIndex = Math.min(startIndex, this.gestures.length - 1);
+                this.showGestureGif(this.gestures[gifIndex]);
+            }
+
+            // 【Bugfix】续采时跳过已执行的手势，从 startIndex 推进 currentGestureIndex
+            if (startIndex > 0 && this._isResumeMode) {
+                this.currentGestureIndex = startIndex;
+                console.log('[Collection] 续采从手势索引', startIndex, '开始');
             }
 
             this.currentPhase = 'gesture';
@@ -1704,7 +1844,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                     (upcomingGesture) => {
                         // 即将到达的手势回调 - 更新左下角GIF示范
                         this.showGestureGif(upcomingGesture);
-                    }
+                    },
+                    startIndex                         // 【Bugfix】传给动画模块
                 );
             } else {
                 console.error('[Collection] 未找到离散手势动画模块');
@@ -2001,6 +2142,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             this._isRunning = false;
 
+            // 【Phase 2】resumed Stage 正常完成 → 清除断点状态
+            this._clearBreakpointState();
+
             // 重新启用Session和Stage选择器
             const sessionSelect = document.getElementById('sessionSwitchSelect');
             if (sessionSelect) sessionSelect.disabled = false;
@@ -2259,6 +2403,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             this._isRunning = false;
 
+            // 【Phase 2】resumed Stage 完成 → 清除断点状态
+            this._clearBreakpointState();
+
             // 重新启用Session和Stage选择器
             const sessionSelect = document.getElementById('sessionSwitchSelect');
             if (sessionSelect) sessionSelect.disabled = false;
@@ -2372,12 +2519,33 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             const stopBtn = document.getElementById('stopTaskBtn');
             const abortBtn = document.getElementById('abortTaskBtn');
 
-            if (startBtn) startBtn.disabled = running;
-            if (testBtn) testBtn.disabled = running;  // 测试按钮在运行时禁用
-            if (stopBtn) stopBtn.disabled = !running;
-            // 【新增】异常中断按钮：采集中且非测试模式时启用，否则禁用
-            if (abortBtn) {
-                abortBtn.disabled = !running || this._isTestMode;
+            if (this._isResumeMode && !running) {
+                // 续采准备态：startTaskBtn 改为"开始续采"，全轮次/测试禁用
+                if (startBtn) {
+                    startBtn.innerHTML = '<i class="fas fa-redo-alt"></i> 开始续采';
+                    startBtn.disabled = false;
+                }
+                if (testBtn) testBtn.disabled = true;
+                if (stopBtn) stopBtn.disabled = true;
+                // abortBtn 作为"放弃断点"
+                if (abortBtn) {
+                    abortBtn.innerHTML = '<i class="fas fa-times-circle"></i> 放弃断点';
+                    abortBtn.style.background = '#9ca3af';
+                    abortBtn.disabled = false;
+                }
+            } else {
+                // 普通模式
+                if (startBtn) {
+                    startBtn.innerHTML = '<i class="fas fa-play"></i> 开始采集（单轮）';
+                    startBtn.disabled = running;
+                }
+                if (testBtn) testBtn.disabled = running;
+                if (stopBtn) stopBtn.disabled = !running;
+                if (abortBtn) {
+                    abortBtn.innerHTML = '<i class="fas fa-exclamation-triangle"></i> 异常中断';
+                    abortBtn.style.background = '#f97316';
+                    abortBtn.disabled = !running || this._isTestMode;
+                }
             }
         }
 
@@ -2781,7 +2949,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             const taskIdMap = {
                 'discrete': 'discrete_gesture',
                 'continuous1': 'continual_gesture_1',
-                'continuous2': 'continual_gesture_2'
+                'continuous2': 'continual_gesture_2',
+                'continuous3': 'continual_gesture_3'
             };
             
             this.currentTaskId = taskIdMap[htmlTaskId] || htmlTaskId;
@@ -2806,6 +2975,218 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
         getCurrentExecutionParams() {
             return this.currentExecutionParams;
+        }
+
+        // ==================== 断点续采（Phase 2） ====================
+
+        /**
+         * 【Phase 2】从断点状态恢复采集进度
+         *
+         * @param {Object} state - localStorage emg_breakpoint_state 解析后的对象
+         */
+        loadBreakpointState(state) {
+            console.log('[Collection] ===== loadBreakpointState 开始恢复 =====');
+            console.log('[Collection] 断点状态:', state);
+
+            // 校验
+            if (!state || state.status !== 'abnormal_interrupted') {
+                console.error('[Collection] 无效的断点状态');
+                this.showToast('断点状态无效，无法恢复', 'error');
+                return;
+            }
+
+            // ---- 恢复采集配置 ----
+            this.collectionConfig = state.collectionConfig;
+            this.currentTaskId = state.currentTaskId;
+
+            // ---- 恢复进度 ----
+            this.currentSessionIndex = state.currentSessionIndex ?? 0;
+            this.currentStageIndex = state.currentStageIndex ?? 0;
+            this.currentGestureIndex = state.currentGestureIndex ?? 0;
+            this.gestureRepeatCount = state.gestureRepeatCount ?? 0;
+            this.continualTrialCount = state.continualTrialCount ?? 0;
+            this.currentPhase = state.currentPhase || null;
+            this._shuffleMode = state._shuffleMode || false;
+            this.sessionCount = state.sessionCount || 3;
+            this._isAllSessionsMode = state.isAllSessionsMode || false;
+
+            // ---- 恢复 stages ----
+            if (state.stages && state.stages.length > 0) {
+                this.stages = state.stages;
+            }
+
+            // ---- 恢复手势库（优先使用快照）----
+            if (state.gesturesSnapshot && state.gesturesSnapshot.length > 0) {
+                // 乱序模式下 gesturesSnapshot 保留了打乱后的完整序列
+                this.gestures = state.gesturesSnapshot;
+                console.log('[Collection] 从快照恢复手势库:', this.gestures.length, '个');
+            } else {
+                // 无快照时重新加载
+                this.loadGesturesForCurrentStage();
+                console.log('[Collection] 无快照，重新加载手势库:', this.gestures.length, '个');
+            }
+
+            // ---- 恢复 recordingSessionId ----
+            this._recordingSessionId = state.recordingSessionId || null;
+
+            // ---- 设置续采模式标志 ----
+            this._isResumeMode = true;
+            this._resumeState = state;
+            // segment_index 自动递增（第一个续采 segment = 2）
+            this._resumeSegmentIndex = (state.segmentIndex || 1) + 1;
+
+            console.log('[Collection] 恢复结果:');
+            console.log('  taskId:', this.currentTaskId);
+            console.log('  session:', this.currentSessionIndex + 1, '/', this.sessionCount);
+            console.log('  stage:', this.currentStageIndex, this.stages[this.currentStageIndex]?.name);
+            console.log('  gestureIndex:', this.currentGestureIndex, '/', this.gestures.length);
+            console.log('  repeatCount:', this.gestureRepeatCount);
+            console.log('  trialCount:', this.continualTrialCount);
+            console.log('  shuffleMode:', this._shuffleMode);
+            console.log('  resumeSegmentIndex:', this._resumeSegmentIndex);
+
+            // ---- 恢复UI ----
+            this.updateSessionSelect();
+            this.updateStageSelect();
+            this.updateGestureList();
+            this.updateNextStageButton();
+            this.updateControlButtons(false);
+            this.updateStatus('就绪（续采模式）');
+
+            this.showToast(`已恢复断点: 第 ${this.currentSessionIndex + 1} 轮 ${this.stages[this.currentStageIndex]?.name || ''}`, 'success');
+
+            // Phase 2 限制提示：连续手势只能恢复到 stage 级别
+            if (this.currentTaskId !== 'discrete_gesture' && this.continualTrialCount > 0) {
+                console.warn('[Collection] ⚠️ 连续手势续采限制：动画将从 trial 0 重新开始');
+                console.warn('[Collection] 已恢复的 trialCount:', this.continualTrialCount);
+                console.warn('[Collection] Phase 2 仅恢复计数，动画模块不支持从 trialIndex 开始');
+                this.showToast('注意：连续手势将从当前Stage重新开始', 'warning');
+            }
+
+            // ---- UX fix: 更新续采准备态 UI ----
+            this._updateResumeReadyUI();
+        }
+
+        /**
+         * 【UX fix】更新续采准备态 UI
+         * - startTaskBtn 文案改为"开始续采"
+         * - startAllSessionsBtn / testModeBtn 禁用
+         * - 显示"取消续采"按钮
+         * - 更新状态文本
+         */
+        _updateResumeReadyUI() {
+            // 按钮文案
+            const startBtn = document.getElementById('startTaskBtn');
+            if (startBtn) {
+                startBtn.innerHTML = '<i class="fas fa-redo-alt"></i> 开始续采';
+                startBtn.disabled = false;
+            }
+
+            // 全轮次/测试按钮禁用
+            const startAllBtn = document.getElementById('startAllSessionsBtn');
+            if (startAllBtn) startAllBtn.disabled = true;
+            const testBtn = document.getElementById('testModeBtn');
+            if (testBtn) testBtn.disabled = true;
+
+            // 显示放弃断点按钮
+            const abortBtn = document.getElementById('abortTaskBtn');
+            if (abortBtn) {
+                abortBtn.innerHTML = '<i class="fas fa-times-circle"></i> 放弃断点';
+                abortBtn.style.background = '#9ca3af';
+                abortBtn.disabled = false;
+            }
+
+            // 更新状态显示
+            const stageName = this.stages[this.currentStageIndex]?.name || '未知';
+            this.updateStatus(`续采就绪 | 第 ${this.currentSessionIndex + 1}/${this.sessionCount} 轮 | ${stageName} | 手势 ${this.currentGestureIndex + 1}/${this.gestures.length}`);
+
+            console.log('[Collection] 续采准备态 UI 已更新');
+        }
+
+        /**
+         * 【UX fix】退出续采模式，恢复普通 UI
+         * @param {Object} opts - {clearBreakpoint: boolean}
+         */
+        exitResumeMode(opts = {}) {
+            const { clearBreakpoint = false } = opts;
+
+            if (clearBreakpoint) {
+                localStorage.removeItem('emg_breakpoint_state');
+                localStorage.setItem('emg_breakpoint_exists', 'false');
+                console.log('[Collection] 断点已清除');
+            }
+
+            this._isResumeMode = false;
+            this._resumeState = null;
+            this._resumeSegmentIndex = 1;
+
+            // 恢复按钮文案和状态
+            const startBtn = document.getElementById('startTaskBtn');
+            if (startBtn) {
+                startBtn.innerHTML = '<i class="fas fa-play"></i> 开始采集（单轮）';
+                startBtn.disabled = false;
+            }
+            const startAllBtn = document.getElementById('startAllSessionsBtn');
+            if (startAllBtn) startAllBtn.disabled = false;
+            const testBtn = document.getElementById('testModeBtn');
+            if (testBtn) testBtn.disabled = false;
+
+            // 恢复异常中断按钮
+            const abortBtn = document.getElementById('abortTaskBtn');
+            if (abortBtn) {
+                abortBtn.innerHTML = '<i class="fas fa-exclamation-triangle"></i> 异常中断';
+                abortBtn.style.background = '#f97316';
+                abortBtn.disabled = true;
+            }
+
+            this.updateControlButtons(false);
+            this.updateStatus('准备就绪');
+
+            // 清除续采按钮一次性标记
+            delete window.__showBreakpointResumeAfterAbort;
+
+            console.log('[Collection] 已退出续采模式');
+        }
+
+        /**
+         * 【UX fix】确认放弃断点
+         */
+        _confirmAbandonBreakpoint() {
+            const stageName = this.stages[this.currentStageIndex]?.name || '未知';
+            const confirmed = confirm(
+                '确定要放弃断点吗？\n\n' +
+                `中断任务: ${this.currentTaskId}\n` +
+                `轮次: 第 ${this.currentSessionIndex + 1}/${this.sessionCount} 轮\n` +
+                `Stage: ${stageName}\n` +
+                `手势进度: 第 ${this.currentGestureIndex + 1}/${this.gestures.length} 个\n\n` +
+                '放弃后断点将被清除，需重新开始新采集。'
+            );
+
+            if (!confirmed) {
+                console.log('[Collection] 用户取消放弃断点');
+                return;
+            }
+
+            console.log('[Collection] 确认放弃断点');
+            this.exitResumeMode({ clearBreakpoint: true });
+            this.showToast('断点已放弃', 'info');
+
+            // 返回首页
+            setTimeout(() => {
+                if (window.pageSwitchController) {
+                    window.pageSwitchController.showWelcome();
+                }
+            }, 300);
+        }
+
+        /**
+         * 【Phase 2】清除断点状态（resumed Stage 正常完成后调用）
+         */
+        _clearBreakpointState() {
+            if (!this._isResumeMode) return;
+            console.log('[Collection] 清除断点状态...');
+            // 使用 exitResumeMode 统一处理 UI 恢复 + localStorage 清除
+            this.exitResumeMode({ clearBreakpoint: true });
         }
 
         // ==================== 录像同步相关方法 ====================

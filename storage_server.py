@@ -392,6 +392,27 @@ class HDF5StorageServer:
                 debug_log(f"   录像会话ID: {recording_session_id}")
                 debug_log(f"   多轮次模式: {is_multi_session}")
 
+            # 【Phase 2】续采模式元数据
+            is_resumed = params.get("is_resumed", False)
+            segment_index = params.get("segment_index", 1)
+            resume_from_interrupted_at = params.get("resume_from_interrupted_at")
+            resume_reason = params.get("resume_reason")
+            resume_parent_recording_session_id = params.get("resume_parent_recording_session_id")
+
+            self.f.attrs["is_resumed"] = bool(is_resumed)
+            self.f.attrs["segment_index"] = int(segment_index)
+            if is_resumed:
+                debug_log(f"   续采模式: 是 (segment_index={segment_index})")
+                if resume_from_interrupted_at:
+                    self.f.attrs["resume_from_interrupted_at"] = str(resume_from_interrupted_at)
+                    debug_log(f"   续采自中断时间: {resume_from_interrupted_at}")
+                if resume_reason:
+                    self.f.attrs["resume_reason"] = str(resume_reason)
+                    debug_log(f"   中断原因: {resume_reason}")
+                if resume_parent_recording_session_id:
+                    self.f.attrs["resume_parent_recording_session_id"] = str(resume_parent_recording_session_id)
+                    debug_log(f"   父录像会话ID: {resume_parent_recording_session_id}")
+
             # ===================== 创建受试者信息组 =====================
             if subject_info:
                 subject_grp = self.f.create_group("subject")
@@ -992,9 +1013,11 @@ class HDF5StorageServer:
                 self.f.attrs["collection_status"] = str(collection_status)
                 debug_log(f"   collection_status: {collection_status}")
 
-                # segment_index: 当前 segment 序号（默认 1）
-                segment_index = params.get("segment_index", 1)
-                self.f.attrs["segment_index"] = int(segment_index)
+                # segment_index: 仅当 close 显式传了 segment_index 时才写
+                # 否则保留 create_file 已写入的值（续采模式下为 2+）
+                if "segment_index" in params:
+                    self.f.attrs["segment_index"] = int(params["segment_index"])
+                    debug_log(f"   segment_index (close覆盖): {params['segment_index']}")
 
                 # 异常中断相关属性（仅当 collection_status 为 abnormal_interrupted 时写入）
                 if collection_status == "abnormal_interrupted":

@@ -735,3 +735,300 @@ S001_坐姿_手心朝上_session1_20260531_143000_seg3.h5  # 再次中断后恢�
 - ❌ Manifest JSON 文件落盘（Phase 3）
 - ❌ hdf5_tool 展示 `collection_status` 标记（Phase 4）
 - ❌ bin_sync_tool 批量 segment 同步（Phase 4）
+
+---
+
+## 12. Phase 2 实现结果（2026-05-31）
+
+### 12.1 修改文件列表
+
+| 文件 | 改动行数 | 说明 |
+|------|---------|------|
+| [index.html](public/index.html) | +15 行 | 新增"断点续采"按钮 HTML + CSS（蓝绿色渐变，默认隐藏） |
+| [page-switch.js](public/scripts/page-switch.js) | +80 行 | `_checkBreakpointState()` 控制按钮显隐；`resumeBreakpoint()` 确认弹窗 + 恢复流程 |
+| [collection-controller.js](public/scripts/collection-controller.js) | +120 行 | `loadBreakpointState()` 恢复进度；`_clearBreakpointState()` 清理；startTask resume mode；_executeAbort 更新 segmentIndex |
+| [realtimeEngine.js](realtimeEngine.js) | +20 行 | `onCollectionStart()` 保存 resume 字段；`openStageFile()` 传递 resume attrs 到 create 命令 |
+| [storage_server.py](storage_server.py) | +20 行 | `create_file()` 接受并写入 `is_resumed`、`segment_index`、`resume_from_interrupted_at`、`resume_reason`、`resume_parent_recording_session_id` |
+
+### 12.2 首页按钮显示逻辑
+
+```
+showWelcome()
+  └─ _checkBreakpointState()
+       ├─ emg_breakpoint_exists !== "true" → 隐藏按钮
+       ├─ state 解析失败 / 缺少必要字段 → 隐藏按钮
+       └─ state 有效 → 显示"断点续采"按钮
+```
+
+- **按钮样式**：蓝绿色渐变 (`#06b6d4` → `#0891b2`)，与其他按钮并列
+- **点击确认弹窗**：显示中断时间、原因、任务名、session/stage/gesture 进度、腕带重连提醒
+- **取消**：不做任何事
+- **确认**：恢复配置 → 切换到采集页 → 调用 `loadBreakpointState()`
+
+### 12.3 恢复流程
+
+```
+page-switch.resumeBreakpoint()
+  ├─ 校验 state.version / collectionConfig / currentTaskId
+  ├─ 确认弹窗（中断时间、原因、任务、进度）
+  ├─ window.currentCollectionConfig = state.collectionConfig
+  ├─ localStorage: emg_current_collection_config
+  ├─ showCollection() → startWaveform()
+  └─ collectionController.loadBreakpointState(state)
+       ├─ 恢复 collectionConfig, currentTaskId
+       ├─ 恢复 currentSessionIndex, currentStageIndex
+       ├─ 恢复 currentGestureIndex, gestureRepeatCount, continualTrialCount
+       ├─ 恢复 _shuffleMode, sessionCount, _isAllSessionsMode
+       ├─ 恢复 stages, gestures（优先快照）
+       ├─ 设置 _isResumeMode=true, _resumeState=state
+       ├─ _resumeSegmentIndex = (state.segmentIndex || 1) + 1
+       └─ 更新 UI（session/stage selector, gesture list, status）
+```
+
+### 12.4 startTask 在 resume mode 和 normal mode 的差异
+
+| 行为 | Normal Mode | Resume Mode |
+|------|------------|-------------|
+| 重置 currentGestureIndex | ✅ → 0 | ❌ 保留 |
+| 重置 gestureRepeatCount | ✅ → 0 | ❌ 保留 |
+| 重置 continualTrialCount | ✅ → 0 | ❌ 保留 |
+| 生成新 recordingSessionId | ✅ | ❌ 复用断点的 |
+| collection_start.isResume | 不传 | `true` |
+| collection_start.resumeSegmentIndex | 不传 | `N+1` |
+| collection_start.resumeFromInterruptedAt | 不传 | ISO 时间 |
+| collection_start.resumeReason | 不传 | 中断原因 |
+| collection_start.resumeParentRecordingSessionId | 不传 | 父录像 ID |
+| Stage 完成后清除 breakpoint | 不触发 | ✅ `_clearBreakpointState()` |
+
+### 12.5 H5 新增 Attrs
+
+| 属性 | 类型 | 何时写入 | 示例值 |
+|------|------|---------|--------|
+| `is_resumed` | bool | create_file（续采模式） | `true` / `false` |
+| `segment_index` | int | create_file（始终写入） | `1`（普通）/ `2`（首次续采） |
+| `resume_from_interrupted_at` | string | create_file（续采模式） | `"2026-05-31T14:20:00.000Z"` |
+| `resume_reason` | string | create_file（续采模式） | `"设备没电"` |
+| `resume_parent_recording_session_id` | string | create_file（续采模式） | `"rec_20260531_141000_3"` |
+
+### 12.6 支持和不支持的恢复粒度
+
+| 场景 | 恢复粒度 | 状态 |
+|------|---------|------|
+| 离散手势-普通顺序 | 恢复到 currentGestureIndex | ✅ 完整支持 |
+| 离散手势-乱序模式 | 从 gesturesSnapshot 恢复完整序列 + currentGestureIndex | ✅ 支持 |
+| 连续手势 (continual) | 恢复到 currentStageIndex | ⚠️ 仅恢复计数，动画从 trial 0 重新开始 |
+
+**连续手势限制说明**：现有动画模块（`continualGesture1Animation`、`continualGesture2Animation`）不支持从指定 `trialIndex` 开始。Phase 2 恢复 `continualTrialCount` 用于记录，但动画实际从第 0 个 trial 重新开始。`loadBreakpointState()` 会 toast 提示此限制。
+
+### 12.7 验证结果
+
+| 验证项 | 状态 |
+|--------|------|
+| `node --check page-switch.js` | ✅ 通过 |
+| `node --check collection-controller.js` | ✅ 通过 |
+| `node --check realtimeEngine.js` | ✅ 通过 |
+| `python -m py_compile storage_server.py` | ✅ 通过 |
+| emg_breakpoint_exists=true 时按钮显示 | ✅ `_checkBreakpointState()` 控制 |
+| state 无效时按钮隐藏 | ✅ 缺字段/解析失败 → 隐藏 |
+| loadBreakpointState 恢复 session/stage/gesture | ✅ 数据流模拟通过 |
+| 续采 payload 带 isResume/resumeSegmentIndex | ✅ 数据流模拟通过 |
+| 普通采集不带 resume 字段 | ✅ `isResume: false`, `segment_index: 1` |
+| 新 H5 含 resume attrs | ✅ `is_resumed`, `segment_index`, `resume_from_interrupted_at`, `resume_reason`, `resume_parent_recording_session_id` |
+| 普通采集不破坏断点 | ✅ 不清 localStorage，不传 resume 字段 |
+| resumed Stage 完成后清除断点 | ✅ `_clearBreakpointState()` 在 completion 中调用 |
+| 重新中断更新 segmentIndex | ✅ `_executeAbort` 写当前 `_resumeSegmentIndex` |
+| 普通 stopTask 不生成/清除 breakpoint | ✅ `manual_stopped` 流程不变 |
+
+### 12.8 Phase 3/4 待办
+
+- ❌ Manifest JSON 文件落盘（Phase 3）
+- ❌ segment 列表维护与合并视图（Phase 3）
+- ❌ hdf5_tool 展示 `is_resumed` / `segment_index` / `collection_status`（Phase 4）
+- ❌ bin_sync_tool 批量 segment 同步（Phase 4）
+- ❌ 连续手势从指定 trialIndex 恢复（动画模块需改造）
+
+---
+
+## 13. Phase 2 审查修复（2026-05-31）
+
+### Bug 1：续采乱序序列被 startTask() 覆盖
+
+**根因**：`startTask()` 无条件调用 `loadCollectionConfig()`，内部会 `loadGesturesForCurrentStage()`，把 `loadBreakpointState()` 恢复的 `this.gestures`（快照）重建为正常顺序。
+
+**修复**：
+- 新增 `_reloadExecutionParams()` 轻量方法，仅刷新 `executionParams` / `currentExecutionParams`，不触碰 `gestures`、`stages`、`sessionCount` 等断点状态。
+- `startTask()` 中判断 `this._isResumeMode`：续采模式调 `_reloadExecutionParams()`，普通模式调 `loadCollectionConfig()`。
+- 文件：[collection-controller.js](public/scripts/collection-controller.js) — `_reloadExecutionParams()` + `startTask()` guard。
+
+**验证**：resume mode 下 `gestures` 保留快照顺序（`ordered,ordered,shuffled,shuffled,shuffled`），`executionParams` 正确加载。
+
+### Bug 2：resumed H5 的 segment_index 被 close_file 覆盖回 1
+
+**根因**：`storage_server.close_file()` 写 `segment_index = params.get("segment_index", 1)` — 默认值 1 覆盖 `create_file` 写入的 2+。
+
+**修复**：
+- `close_file()` 改为仅当 `"segment_index" in params` 时才写入，否则保留已有 attrs。
+- `onAbnormalInterrupt()` 不再传 `segment_index: 1`，交由 `create_file` 的值保持。
+- 文件：[storage_server.py](storage_server.py) — `close_file()` guard；[realtimeEngine.js](realtimeEngine.js) — `onAbnormalInterrupt()` 移除 hardcoded segment_index。
+
+**验证**：
+- `close(completed)` 不传 segment_index → H5 保持 2 ✅
+- `close(abnormal_interrupt)` 显式传 segment_index=3 → H5 更新为 3 ✅
+
+### Bug 3：continual_gesture_3 映射缺失
+
+**根因**：`page-switch.js` `resumeBreakpoint()` 的 ternary chain 和 `collection-controller.js` `selectTask()` 的 `taskIdMap` 都没有 `continual_gesture_3` / `continuous3` 映射。
+
+**修复**：
+- `page-switch.js` ternary chain 增加 `continual_gesture_3 → continuous3`
+- `collection-controller.js` `taskIdMap` 增加 `continuous3: continual_gesture_3`
+- 文件：[page-switch.js](public/scripts/page-switch.js) — `resumeBreakpoint()` ternary；[collection-controller.js](public/scripts/collection-controller.js) — `selectTask()` taskIdMap。
+
+**验证**：`continual_gesture_3 → continuous3 → continual_gesture_3` 往返映射正确 ✅
+
+### Bug 4（Phase 2 审查第 3 轮）：startTask resume mode 的 execution 完整性检查用错字段
+
+**根因**：Bug 1 修复中，resume mode fallback 检查用 `!this.currentExecutionParams.trialsPerStage` 判断参数是否完整，但离散手势没有 `trialsPerStage` 字段（只有 `repeatPerGesture`），因此离散断点续采会误判"参数不完整"并调用 `loadCollectionConfig()`，再次覆盖 `gesturesSnapshot`。
+
+**修复**：
+- 新增 `_hasValidExecutionParamsForTask(taskId)` — 按任务类型校验：
+  - `discrete_gesture`：检查 `repeatPerGesture`、`gestureDisplayTime`、`preparationTime` 是否都是 number
+  - `continual_gesture_*`：检查 `trialsPerStage`、`preparationTime` 是否都是 number
+- 新增 `_applyExecutionDefaultsForTask(taskId)` — 参数缺失时用默认值兜底，**不调用 `loadCollectionConfig()`**，不触碰 `this.gestures`
+- `startTask()` resume mode 用新 helper 替代原来的 `trialsPerStage` 检查
+- 文件：[collection-controller.js](public/scripts/collection-controller.js) — `_hasValidExecutionParamsForTask()` + `_applyExecutionDefaultsForTask()` + `startTask()` guard
+
+**验证**：
+- 离散 resume state（只有 `repeatPerGesture`，无 `trialsPerStage`）→ 旧检查 `!p.trialsPerStage = true`（误触发）→ 新检查 `true`（✅ 不触发 fallback）
+- 连续 resume state（有 `trialsPerStage`）→ 通过 ✅
+- 兜底路径不碰 `this.gestures` ✅
+- `node --check collection-controller.js` ✅
+
+---
+
+## 14. Phase 2 UX 修复（2026-05-31）
+
+### 策略变更：从"暂停动画+恢复"改为"非侵入式遮挡"
+
+**审查风险**：上一版 UX 修复在弹窗打开时 stop 动画和清 timer，取消弹窗后用 `startNextGesture()` / `startContinualAnimation()` 恢复，可能重复发送 prompt、重启当前手势/连续动画，污染 H5 数据。
+
+**修订策略**：弹窗期间后台采集照常运行，只做 UI 遮挡。不停止任何业务 timer 或动画模块。取消弹窗仅关闭 overlay + 恢复状态文案，不重新进入任何采集阶段。
+
+### 修复 1：弹窗采用非侵入式遮挡
+
+- 移除 `_pauseForAbortDialog()` 和 `_resumeFromAbortDialog()` 方法。
+- `abortTask()` 弹窗回调改为：
+  - 确认 → `_executeAbort(reason)`（仅在此处停止动画和清理 timer）
+  - 取消 → `updateStatus('采集中')`（无其他操作）
+- 弹窗 overlay 背景改为 `rgba(15,23,42,0.88)` 接近不透明，遮挡后台动画。
+- 弹窗内容增加黄色提示框："采集仍在后台进行中 / 如确认异常中断将保存断点并返回首页 / 如取消将关闭本窗口继续当前采集"。
+- **关键保证**：取消弹窗后不调 `startNextGesture()`、`startContinualAnimation()`、`showRestPeriod()`、`showPreparation()`，不重复 prompt，不污染 H5。
+
+### 修复 2：确认中断后自动返回首页（不变）
+
+`_executeAbort()` 末尾 `setTimeout 400ms → pageSwitchController.showWelcome()`。
+
+### 修复 3：续采准备态 UI（不变）
+
+`loadBreakpointState()` → `_updateResumeReadyUI()`；按钮状态矩阵；`exitResumeMode()` / `_confirmAbandonBreakpoint()`。
+
+### resumeBreakpoint 中 BleControl.startAll()
+
+- `page-switch.js` `resumeBreakpoint()` 中 `BleControl.startAll()` 仅启动 BLE 数据流（腕带 streaming），不启动 H5 记录。
+- H5 记录在用户点击"开始续采"后由 `startTask()` 触发。
+- 代码注释和日志已标注"仅 streaming，未开始 H5 记录"。
+
+### 按钮状态矩阵（不变）
+
+| 模式 | startTaskBtn | startAllBtn | testBtn | abortBtn |
+|------|-------------|------------|---------|----------|
+| 普通-就绪 | "开始采集（单轮）" enabled | enabled | enabled | "异常中断" disabled |
+| 普通-采集中 | disabled | disabled | disabled | "异常中断" enabled |
+| 续采-就绪 | **"开始续采"** enabled | disabled | disabled | **"放弃断点"** enabled |
+| 续采-采集中 | disabled | disabled | disabled | "异常中断" enabled |
+
+### 验证结果
+
+```
+node --check collection-controller.js ✅
+node --check page-switch.js           ✅
+弹窗 overlay 接近不透明 (0.88)         ✅
+取消弹窗后不重新进入采集阶段            ✅
+取消弹窗后不重复 prompt                ✅
+确认中断后才停止动画和清理              ✅
+确认中断后自动回首页                    ✅
+续采准备态按钮→"开始续采"              ✅
+放弃断点→清除 breakpoint→回首页        ✅
+resumed Stage 完成后 UI 恢复           ✅
+```
+
+---
+
+## 15. 2026-05-31 bugfix: abort freeze and resume index
+
+### 问题
+
+1. **断点时机错误**：点击"异常中断"按钮后，原因选择弹窗打开期间后台采集动画和 prompt 仍在继续推动。断点进度以"选完原因那一刻"为准，而不是"点击按钮那一刻"，导致 prompt 可能从 5 推进到 6、7。
+2. **续采索引回退到 0**：点击"断点续采"→"开始续采"后，动画和进度显示 0/72，而不是从断点保存的手势索引继续。
+
+### 修复方案
+
+#### Bug A：点击中断瞬间冻结
+
+**策略变更**：从"非侵入式遮挡"改为"点击即冻结 + 不可取消"。
+
+**collection-controller.js** `abortTask()`：
+- 点击按钮后**立即**创建 `_pendingAbortSnapshot`（包含 progress、gesturesSnapshot、interruptedAt、segmentIndex）
+- 立即停止所有业务推进：`_isRunning = false`、清除所有 timer（countdownTimer/phaseTimer/continualProgressTimer/calibrationTimer）、stop 所有动画（discreteGestureAnimation/continualGesture1/continualGesture2）、disable 空格键、更新按钮状态
+- **不发送** `collection_stop`（避免写入 `manual_stopped`）
+- 弹出原因选择对话框（**不可取消**：无取消按钮，无遮罩关闭）
+
+**collection-controller.js** `_executeAbort(reason)`：
+- 优先使用 `_pendingAbortSnapshot` 构建 breakpointState 和 abnormal_interrupt payload
+- 不在 `_executeAbort` 中重复读取 `this.currentGestureIndex`（此时已被 freeze 清零）
+- 完成后清空 `_pendingAbortSnapshot`
+
+**collection-controller.js** `_showAbortReasonDialog()`：
+- 移除取消按钮和遮罩关闭事件
+- 文案改为"采集已冻结，请选择中断原因"
+- overlay 背景 `rgba(15,23,42,0.92)`
+
+#### Bug B：续采从断点索引恢复
+
+**collection-controller.js** `startDiscreteGestureCollection()`：
+- 续采乱序模式下计算 `startIndex = this.currentGestureIndex`
+- 传递给 `startShuffleModeAnimation({ startIndex })`
+
+**collection-controller.js** `startShuffleModeAnimation()`：
+- 接受 `startIndex` 参数
+- GIF 显示 `gestures[startIndex]` 而非 `gestures[0]`
+- 将 `startIndex` 传给 `discreteGestureAnimation.startShuffleMode()`
+
+**discrete-gesture-animation.js** `startShuffleMode()`：
+- 新增 `startIndex` 参数（默认 0）
+- `executedCount = safeStartIndex`（跳过已执行的手势）
+- `nextPromptIndex = safeStartIndex`（后续 prompt 从正确位置创建）
+- `promptLibrary[gestureId].originalIndex = index`（全局索引映射）
+- `createInitialShufflePrompts()` 从 `nextPromptIndex` 位置开始创建 prompt
+- 使用全局索引 `seqIdx` 创建 prompt，保证 `triggerPrompt` 回调的 index 正确映射到 `gestures` 数组
+
+### 关键保证
+
+| 验证项 | 状态 |
+|--------|------|
+| 点击中断瞬间 gestureIndex 被快照保存 | ✅ |
+| 弹窗期间不再产生新 prompt | ✅ |
+| 弹窗不可取消 | ✅ |
+| localStorage breakpointState 使用快照 | ✅ |
+| 续采 prepare UI 显示 18/72 而非 0/72 | ✅ |
+| startShuffleMovie 从 startIndex 构建 promptSequence | ✅ |
+| 第一个 prompt 回调 index = safeStartIndex | ✅ |
+| GIF 显示 gestures[startIndex] | ✅ |
+| 普通模式 startIndex=0 不受影响 | ✅ |
+| abnormal_interrupt H5 attrs 正确 | ✅ |
+| manual_stopped/collection_stop 不被异常中断触发 | ✅ |
+
+### 剩余限制
+
+- **普通顺序离散手势**（非乱序模式）：`startNextGesture()` 已通过 `currentGestureIndex` 自动从断点位置开始（`startTask()` 不重置该值），无需额外改动。
+- **连续手势**：`continualTrialCount` 恢复仅做计数记录，动画仍从 trial 0 开始。完整支持需动画模块改造（Phase 3+）。

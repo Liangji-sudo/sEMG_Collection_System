@@ -181,6 +181,17 @@
             box-shadow: 0 8px 20px rgba(59, 130, 246, 0.15);
         }
 
+        .action-btn.resume {
+            background: linear-gradient(145deg, #06b6d4 0%, #0891b2 100%);
+            color: white;
+            box-shadow: 0 8px 24px rgba(6, 182, 212, 0.35);
+        }
+
+        .action-btn.resume:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 32px rgba(6, 182, 212, 0.45);
+        }
+
         .action-btn:active {
             transform: translateY(-2px);
         }
@@ -4991,6 +5002,12 @@
                     <i class="fas fa-play-circle"></i>
                     <div class="btn-title">采集</div>
                     <div class="btn-desc">开始数据采集任务</div>
+                </button>
+                <!-- 【Phase 2】断点续采按钮 — 默认隐藏，有 breakpoint 时显示 -->
+                <button class="action-btn resume" id="resumeBreakpointBtn" style="display:none;">
+                    <i class="fas fa-redo-alt"></i>
+                    <div class="btn-title">断点续采</div>
+                    <div class="btn-desc">恢复上次异常中断任务</div>
                 </button>
                 <button class="action-btn secondary" id="backendBtn">
                     <i class="fas fa-database"></i>
