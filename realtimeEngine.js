@@ -287,6 +287,7 @@ class RealtimeEngine extends EventEmitter {
         this.resumeFromInterruptedAt = data.resumeFromInterruptedAt || null;
         this.resumeReason = data.resumeReason || null;
         this.resumeParentRecordingSessionId = data.resumeParentRecordingSessionId || null;
+        this.resumeParentSegmentIndex = data.resumeParentSegmentIndex || null;  // Phase 3
         if (this.isResume) {
             console.log(`[realtimeEngine] ★ 续采模式 ★`);
             console.log(`  segmentIndex: ${this.resumeSegmentIndex}`);
@@ -586,7 +587,9 @@ class RealtimeEngine extends EventEmitter {
                 segment_index: this.resumeSegmentIndex || 1,
                 resume_from_interrupted_at: this.resumeFromInterruptedAt || null,
                 resume_reason: this.resumeReason || null,
-                resume_parent_recording_session_id: this.resumeParentRecordingSessionId || null
+                resume_parent_recording_session_id: this.resumeParentRecordingSessionId || null,
+                // Phase 3: 父 segment 序号
+                parent_segment_index: this.resumeParentSegmentIndex || null
             });
 
             if (response.status === 'success') {
@@ -606,7 +609,7 @@ class RealtimeEngine extends EventEmitter {
         this.isClosingStageFile = true;
 
         try {
-            const params = { end_time: Date.now(), ...extraParams };
+            const params = { end_time: Date.now() / 1000, ...extraParams };
             const response = await this.sendStorageCommand('close', params);
             this.stageFileOpen = false;
             if (response.status === 'success') {

@@ -1052,9 +1052,11 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 startPayload.resumeReason = this._resumeState.interruptReason;
                 startPayload.resumeSegmentIndex = this._resumeSegmentIndex;
                 startPayload.resumeParentRecordingSessionId = this._resumeState.recordingSessionId;
+                startPayload.resumeParentSegmentIndex = this._resumeState.segmentIndex || null;  // Phase 3
                 console.log('[Collection] 续采元数据已附加:');
                 console.log('  isResume:', true);
                 console.log('  resumeSegmentIndex:', this._resumeSegmentIndex);
+                console.log('  resumeParentSegmentIndex:', this._resumeState.segmentIndex);
                 console.log('  resumeReason:', this._resumeState.interruptReason);
             }
 

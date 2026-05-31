@@ -1032,3 +1032,112 @@ resumed Stage 完成后 UI 恢复           ✅
 
 - **普通顺序离散手势**（非乱序模式）：`startNextGesture()` 已通过 `currentGestureIndex` 自动从断点位置开始（`startTask()` 不重置该值），无需额外改动。
 - **连续手势**：`continualTrialCount` 恢复仅做计数记录，动画仍从 trial 0 开始。完整支持需动画模块改造（Phase 3+）。
+
+---
+
+## 16. Phase 3: segment/bin 元数据写入（2026-05-31）
+
+### 16.1 修改文件列表
+
+| 文件 | 改动 | 说明 |
+|------|------|------|
+| [storage_server.py](storage_server.py) | +80 行 | `close_file()` 新增 `_write_segment_metadata()`；`create_file()` 新增 `start_time`、`stage_index`、`interruption_id`、`resumed_by_segment_index`、`resumed_by_file`、`collection_session_id`、`parent_segment_index` |
+| [realtimeEngine.js](realtimeEngine.js) | +3 行 | `onCollectionStart()` 提取 `resumeParentSegmentIndex`；`openStageFile()` 传递 `parent_segment_index` |
+| [collection-controller.js](public/scripts/collection-controller.js) | +2 行 | `startPayload` 新增 `resumeParentSegmentIndex` |
+
+### 16.2 新增 H5 Attrs 总览
+
+#### create_file 阶段写入
+
+| 属性 | 类型 | 何时有效 | 说明 |
+|------|------|---------|------|
+| `start_time` | float | 始终 | Stage 开始时间戳（从 realtimeEngine 传入） |
+| `stage_index` | int | 始终 | 当前 stage 序号 |
+| `collection_status` | string | 始终 | create 时写 `"running"`，close 时覆盖 |
+| `collection_session_id` | string | 有 recording_session_id 时 | 同 recording_session_id，跨 segment 关联 |
+| `interruption_id` | string | 始终 | `int_{session_id}_seg{N}_{timestamp}`，唯一标识 |
+| `resumed_by_segment_index` | int | 始终 | 占位 `-1`，续采后由后续 segment 补填 |
+| `resumed_by_file` | string | 始终 | 占位 `""`，续采后由后续 segment 补填 |
+| `parent_segment_index` | int | is_resumed 时 | 父 segment 序号（从 `resumeParentSegmentIndex` 传入） |
+
+#### close_file 阶段写入
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `end_time` | float | Stage 结束时间戳 |
+| `emg1_frame_count` | int | 250Hz 数据集帧数 |
+| `emg1_frame_id_min` | int | 最小 BLE frame_id（无数据时 -1） |
+| `emg1_frame_id_max` | int | 最大 BLE frame_id（无数据时 -1） |
+| `emg1_time_min` | float | 最早时间戳（无数据时 -1.0） |
+| `emg1_time_max` | float | 最晚时间戳（无数据时 -1.0） |
+| `emg2_frame_count` / `emg2_frame_id_min` / `emg2_frame_id_max` / `emg2_time_min` / `emg2_time_max` | 同上 | 同上 |
+| `segment_has_dev1_bin` | bool | 设备 1 是否有 bin 文件 |
+| `segment_has_dev2_bin` | bool | 设备 2 是否有 bin 文件 |
+| `segment_device_count` | int | 有数据的设备数（frame_count > 0） |
+| `segment_bin_summary` | JSON string | 包含 dev1/dev2 的 frame range、bin 名称、BLE 设备名 |
+| `interruption_id` | string | 仅在 `abnormal_interrupted` 的 close 中补充生成 |
+
+Frame range 计算基于 H5 中实际的 `emg1_250hz_adc` / `emg2_250hz_adc` dataset，使用 `np.min` / `np.max` 提取 `frame_id` 和 `time` 字段。
+
+### 16.3 三种状态的字段差异
+
+| 场景 | `collection_status` | `interruption_id` | `resume_*` attrs | frame range |
+|------|---------------------|-------------------|-----------------|-------------|
+| **completed**（正常完成） | `"completed"` | create 时生成（占位） | 无 | ✅ 完整 |
+| **manual_stopped**（手动停止） | `"manual_stopped"` | create 时生成（占位） | 无 | ✅ 完整 |
+| **abnormal_interrupted**（异常中断） | `"abnormal_interrupted"` | create 时生成 + close 确认 | `interrupted_at`、`interrupt_reason`、`resume_progress` | ✅ 完整 |
+| **is_resumed=true**（续采 segment） | `"completed"` / `"manual_stopped"` / `"abnormal_interrupted"` | create 时生成 | `is_resumed`、`segment_index`、`resume_from_interrupted_at`、`resume_reason`、`resume_parent_recording_session_id`、`parent_segment_index` | ✅ 完整 |
+
+### 16.4 segment_bin_summary 示例
+
+```json
+{
+  "device_count": 2,
+  "devices": {
+    "dev1": {
+      "frame_id_min": 0,
+      "frame_id_max": 1498,
+      "frame_count": 750,
+      "time_min": 1000.0,
+      "time_max": 1002.996,
+      "sd_bin": "S001_L_260531_141000",
+      "ble_device": "WristBand_3A76"
+    },
+    "dev2": {
+      "frame_id_min": 0,
+      "frame_id_max": 1498,
+      "frame_count": 750,
+      "time_min": 1000.0,
+      "time_max": 1002.996,
+      "sd_bin": "S001_R_260531_141000",
+      "ble_device": "WristBand_5B12"
+    }
+  }
+}
+```
+
+### 16.5 已知限制
+
+- **MAC 地址**：`ble_server.py` 当前不向 realtimeEngine 传递 BLE MAC 地址，因此 `ble_mac_dev1`/`ble_mac_dev2` 暂缺。H5 中已有 `ble_device_dev1`/`ble_device_dev2`（设备名称），bin_sync_tool 通过 `sd_bin_dev1`/`sd_bin_dev2`（bin 文件前缀）已经能正确匹配。
+- **IMU/mocap frame range**：当前只统计 EMG 250Hz 的 frame range。IMU 和 mocap 的 frame range 可在 Phase 4 按需补充。
+- **resumed_by_file**：占位字段，Phase 4 实现跨 segment 关联时填入。
+
+### 16.6 验证结果
+
+```
+node --check realtimeEngine.js          ✅
+node --check collection-controller.js   ✅
+python -m py_compile storage_server.py  ✅
+frame range 计算逻辑                    ✅ (750 frames, frame_id [0, 1498])
+segment_bin_summary JSON 格式           ✅
+empty dataset → -1 兜底                ✅
+interruption_id 生成                    ✅
+普通采集不受影响                        ✅
+```
+
+### 16.7 Phase 4 建议
+
+- hdf5_tool 展示新增 attrs：`collection_status`、`segment_index`、`is_resumed`、`interruption_id`、frame range、`segment_bin_summary`
+- hdf5_tool 按 `collection_session_id` 聚合 segment 列表视图
+- bin_sync_tool 利用 `segment_has_dev1_bin` / `segment_bin_summary` 判断是否需要同步
+- 跨 segment resumed_by 链路补填
