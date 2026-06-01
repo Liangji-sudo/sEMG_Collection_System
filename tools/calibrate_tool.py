@@ -126,8 +126,14 @@ class CalibrateTool(QMainWindow):
         self.emg2_data = None
         self.imu1a_data = None
         self.imu1b_data = None
+        self.imu1c_data = None
         self.imu2a_data = None
         self.imu2b_data = None
+        self.imu2c_data = None
+
+        # IMU 数量（2 或 3），从 H5 attrs 或 all_ble 推断
+        self.imu1_imu_count = 2
+        self.imu2_imu_count = 2
 
         # Prompt标签数据
         self.prompt_names = None
@@ -149,6 +155,10 @@ class CalibrateTool(QMainWindow):
         self.update_timer.timeout.connect(self._do_update_plots)
         self.pending_update = False
         self.is_dragging = False  # 是否正在拖动滑块
+
+        # 降采样参数：拖动时限制绘图点数以提升流畅度
+        self.max_plot_points_fast = 800
+        self.max_plot_points_normal = 2500
 
         self.init_ui()
 
@@ -310,16 +320,17 @@ class CalibrateTool(QMainWindow):
         self.ax_emg1_channels[-1].set_xlabel('时间 (秒)', fontsize=8)
         self.ax_emg2_channels[-1].set_xlabel('时间 (秒)', fontsize=8)
 
-        # IMU图表：使用GridSpec，每个IMU 3行（X/Y/Z），共4列
+        # IMU图表：使用GridSpec，每个IMU 3行（X/Y/Z），共6列
         from matplotlib.gridspec import GridSpec as GridSpecIMU
-        gs_imu = GridSpecIMU(3, 4, figure=self.fig_imu, hspace=0.05, wspace=0.15)
+        gs_imu = GridSpecIMU(3, 6, figure=self.fig_imu, hspace=0.05, wspace=0.15)
 
-        # IMU1A (列0), IMU1B (列1), IMU2A (列2), IMU2B (列3)
+        # IMU1A(0), IMU1B(1), IMU1C(2), IMU2A(3), IMU2B(4), IMU2C(5)
         self.ax_imu_channels = {
-            'imu1a': [], 'imu1b': [], 'imu2a': [], 'imu2b': []
+            'imu1a': [], 'imu1b': [], 'imu1c': [],
+            'imu2a': [], 'imu2b': [], 'imu2c': [],
         }
-        imu_names = ['imu1a', 'imu1b', 'imu2a', 'imu2b']
-        imu_titles = ['IMU1A', 'IMU1B', 'IMU2A', 'IMU2B']
+        imu_names = ['imu1a', 'imu1b', 'imu1c', 'imu2a', 'imu2b', 'imu2c']
+        imu_titles = ['IMU1A', 'IMU1B', 'IMU1C', 'IMU2A', 'IMU2B', 'IMU2C']
         axis_labels = ['X', 'Y', 'Z']
         axis_colors = ['#d62728', '#2ca02c', '#1f77b4']  # 红、绿、蓝
 
@@ -425,15 +436,31 @@ class CalibrateTool(QMainWindow):
         seg = _safe_int(f.attrs.get('segment_index'), 1)
         resumed = 'R' if _safe_bool(f.attrs.get('is_resumed')) else ''
         cm = _s('channel_map_name')
+        sfv = f.attrs.get('stream_format_version')
+        sm = _s('sync_mode')
+        sync_alignment = _s('sync_time_alignment')
 
         if sync not in ('-', 'unknown'):
             parts.append(f'sync: {sync}')
+        if sm not in ('-',):
+            parts.append(f'mode: {sm}')
+        if sync_alignment not in ('-',):
+            parts.append(f'align: {sync_alignment}')
         if cs != '-':
             parts.append(f'collection: {cs}')
         if resumed or seg > 1:
             parts.append(f'seg: {seg}{resumed}')
+        if sfv is not None:
+            parts.append(f'fmt: v{sfv}')
+        else:
+            parts.append('fmt: legacy')
         if cm != '-':
             parts.append(f'chan: {cm}')
+        # IMU counts
+        for dev in (1, 2):
+            ni = f.attrs.get(f'imu{dev}_num_imus')
+            if ni is not None:
+                parts.append(f'imu{dev}: {int(ni)}IMU')
         # show which data source is loaded
         ds_info = []
         if getattr(self, 'emg1_loaded_name', None):
@@ -459,29 +486,49 @@ class CalibrateTool(QMainWindow):
         else:
             self.lbl_status.setStyleSheet('color: #666; font-size: 9px;')
 
-        # 2kHz warning
+        # ── 2kHz / legacy frame_id 风险提示（不弹窗阻塞，仅状态栏 WARN）──
         has_2khz_loaded = (getattr(self, 'emg1_loaded_name', '') and '2khz' in self.emg1_loaded_name) or \
                           (getattr(self, 'emg2_loaded_name', '') and '2khz' in self.emg2_loaded_name)
-        if has_2khz_loaded and sync != 'synced':
-            QMessageBox.warning(self, '2kHz 数据警告',
-                '当前查看的是 2kHz 同步数据，但 sync_status 不是 synced，结果可能不可信。\n'
-                '建议优先查看 250Hz 原始数据，或使用 hdf5_tool 同步工具重新同步。')
+        reliable_sync_modes = ('one_to_many_adc_search', 'one_to_one')
 
-        # diagnose old bug risk
+        # 2kHz 未可靠同步 → 状态栏警告（不弹窗）
+        if has_2khz_loaded and sync != 'synced' and sm not in reliable_sync_modes:
+            self.lbl_status.setText(
+                (self.lbl_status.text() or '') + ' | WARN: 2kHz data, sync not verified')
+
+        # diagnose legacy frame_id bug（新版同步不依赖 frame_id，不弹窗）
         try:
             from bin_sync_tool import diagnose_frame_ids
             diag = diagnose_frame_ids(self.h5_path)
+            frame_risk = None
             for dev in ('emg1', 'emg2'):
                 d = diag.get(dev, {})
-                if d.get('risk') == 'high':
-                    QMessageBox.warning(self, '旧同步风险',
-                        f'{dev}: {d.get("risk_reason", "")}\n\n'
-                        '此 H5 疑似使用旧版包号映射采集，2kHz 同步数据不可信。\n'
-                        '建议使用 hdf5_tool 同步工具重新同步。\n\n250Hz 原始数据仍可正常查看。')
+                risk = d.get('risk')
+                reason = d.get('risk_reason', '')
+                if risk == 'high':
+                    frame_risk = (dev, risk, reason)
                     break
-                elif d.get('risk') == 'medium':
+                elif risk == 'medium' and frame_risk is None:
+                    frame_risk = (dev, risk, reason)
+
+            if frame_risk:
+                dev, risk, reason = frame_risk
+                is_reliably_synced = (sync == 'synced' and sm in reliable_sync_modes)
+
+                if is_reliably_synced:
+                    # 新版 sync（ADC search / one_to_one）不依赖 frame_id
+                    print(f'[CalibrateTool] legacy frame_id {risk} ({dev}: {reason}), '
+                          f'ignored: sync_mode={sm} via ADC search')
                     self.lbl_status.setText(
-                        (self.lbl_status.text() or '') + f' | WARN: {dev} frame_id issue')
+                        (self.lbl_status.text() or '') + ' | legacy frame_id ignored; synced by ADC search')
+                elif has_2khz_loaded:
+                    # 2kHz + 不可靠同步 → 明显警告
+                    self.lbl_status.setText(
+                        (self.lbl_status.text() or '') + f' | WARN: 2kHz may be unreliable (frame_id {risk})')
+                else:
+                    # 250Hz + frame_id 问题 → 轻提示（250Hz 原始值可正常查看）
+                    self.lbl_status.setText(
+                        (self.lbl_status.text() or '') + f' | WARN: frame_id {risk}, 250Hz ok')
         except Exception:
             pass
 
@@ -545,56 +592,131 @@ class CalibrateTool(QMainWindow):
         return np.array(data)
 
     def load_imu_data(self):
-        """加载IMU数据"""
+        """加载IMU数据（支持 a/b/c、100hz/BLE/legacy、imu*_all_ble 拆分）"""
         self.imu1a_data = None
         self.imu1b_data = None
+        self.imu1c_data = None
         self.imu2a_data = None
         self.imu2b_data = None
+        self.imu2c_data = None
 
-        # 尝试不同的数据集名称
+        # ── 1. 独立 dataset：100hz（同步后）> BLE 原始 > bare name ──
         imu_mapping = {
             'imu1a': ['imu1a_100hz', 'imu1a_ble', 'imu1a'],
             'imu1b': ['imu1b_100hz', 'imu1b_ble', 'imu1b'],
+            'imu1c': ['imu1c_100hz', 'imu1c_ble', 'imu1c'],
             'imu2a': ['imu2a_100hz', 'imu2a_ble', 'imu2a'],
             'imu2b': ['imu2b_100hz', 'imu2b_ble', 'imu2b'],
-            # legacy single-IMU names
-            'imu1_legacy': ['imu1_100hz', 'imu1_ble', 'imu1'],
-            'imu2_legacy': ['imu2_100hz', 'imu2_ble', 'imu2'],
+            'imu2c': ['imu2c_100hz', 'imu2c_ble', 'imu2c'],
         }
 
         for attr_name, possible_names in imu_mapping.items():
             for name in possible_names:
                 if name in self.h5_file:
                     imu_data = self._extract_imu_acc(self.h5_file[name][:])
-                    setattr(self, f'{attr_name}_data', imu_data)
-                    print(f'[CalibrateTool] 已加载 {name}: shape={imu_data.shape}')
+                    if imu_data is not None and len(imu_data) > 0:
+                        setattr(self, f'{attr_name}_data', imu_data)
+                        print(f'[CalibrateTool] 已加载 {name}: shape={imu_data.shape}')
                     break
 
+        # ── 2. imu*_all_ble 按 imu_index 拆分（仅填充未由独立 dataset 加载的项） ──
+        self._load_all_ble(1)
+        self._load_all_ble(2)
+
+        # ── 3. 推断 IMU 数量 ──
+        self._infer_imu_counts()
+
+    def _load_all_ble(self, device_id):
+        """从 imu{device}_all_ble 按 imu_index 拆分到 a/b/c"""
+        all_name = f'imu{device_id}_all_ble'
+        if all_name not in self.h5_file:
+            return
+
+        ds = self.h5_file[all_name]
+        if not hasattr(ds, 'dtype') or ds.dtype.names is None:
+            return
+        if 'imu_index' not in ds.dtype.names or 'acc' not in ds.dtype.names:
+            return
+
+        labels = ['a', 'b', 'c', 'd']
+        for idx, label in enumerate(labels):
+            attr_name = f'imu{device_id}{label}_data'
+            # 独立 dataset 优先，不覆盖
+            if getattr(self, attr_name, None) is not None:
+                continue
+            try:
+                mask = ds['imu_index'][:] == idx
+                if np.any(mask):
+                    acc_data = self._extract_imu_acc(ds[mask])
+                    if acc_data is not None and len(acc_data) > 0:
+                        setattr(self, attr_name, acc_data)
+                        print(f'[CalibrateTool] 从 {all_name} 拆分 imu_index={idx} -> {attr_name}: shape={acc_data.shape}')
+            except Exception as e:
+                print(f'[CalibrateTool] 拆分 {all_name} imu_index={idx} 失败: {e}')
+
+    def _infer_imu_counts(self):
+        """推断 IMU 数量：H5 attrs > all_ble imu_index > 已加载 c 数据"""
+        for dev in (1, 2):
+            count = 2  # 默认 2 IMU
+            # 优先从 H5 attrs
+            for attr_key in (f'imu{dev}_num_imus', 'num_imus'):
+                val = self.h5_file.attrs.get(attr_key)
+                if val is not None:
+                    try:
+                        count = max(1, min(4, int(val)))
+                        break
+                    except (ValueError, TypeError):
+                        pass
+            else:
+                # 从 all_ble imu_index 推断
+                all_name = f'imu{dev}_all_ble'
+                if all_name in self.h5_file:
+                    ds = self.h5_file[all_name]
+                    if hasattr(ds, 'dtype') and ds.dtype.names and 'imu_index' in ds.dtype.names:
+                        try:
+                            max_idx = int(ds['imu_index'][:].max())
+                            count = max(1, min(4, max_idx + 1))
+                        except Exception:
+                            pass
+                # fallback: 从 c 数据是否已加载推断
+                if count < 3:
+                    c_data = getattr(self, f'imu{dev}c_data', None)
+                    if c_data is not None and len(c_data) > 0:
+                        count = 3
+            self.__dict__[f'imu{dev}_imu_count'] = count
+            print(f'[CalibrateTool] IMU{dev} imu_count={count}')
+
     def _extract_imu_acc(self, data):
-        """从结构化数组中提取IMU加速度数据"""
+        """从结构化数组或普通数组中提取IMU加速度数据；返回 (N, 3) 或 None"""
+        if data is None or len(data) == 0:
+            return None
+
         print(f'[CalibrateTool] IMU数据类型: {data.dtype}, 字段: {data.dtype.names}')
 
-        if data.dtype.names is not None:
+        if hasattr(data, 'dtype') and data.dtype.names is not None:
             if 'acc' in data.dtype.names:
                 acc_data = data['acc']
                 print(f'[CalibrateTool] acc字段 shape: {acc_data.shape}')
-                # 确保返回 (N, 3) 的形状
                 if acc_data.ndim == 1:
+                    # 结构化 acc 字段，每行是 tuple/list
                     result = np.array([list(row) for row in acc_data])
                 else:
                     result = np.array(acc_data)
                 print(f'[CalibrateTool] 提取后 shape: {result.shape}')
                 return result
-            # 尝试其他可能的字段名
+            # 尝试其他字段名
             for name in data.dtype.names:
                 if 'acc' in name.lower():
                     return np.array(data[name])
 
-        # 普通数组，假设前3列是加速度
-        if data.ndim == 2 and data.shape[1] >= 3:
-            return data[:, :3]
+        # 普通数组：假设前 3 列是加速度
+        data_arr = np.array(data)
+        if data_arr.ndim == 2 and data_arr.shape[1] >= 3:
+            return data_arr[:, :3]
+        if data_arr.ndim == 1:
+            return data_arr.reshape(-1, 1)
 
-        return np.array(data)
+        return data_arr
 
     def load_prompt_data(self):
         """加载Prompt标签数据"""
@@ -678,7 +800,8 @@ class CalibrateTool(QMainWindow):
 
         # 计算IMU的范围（所有IMU使用相同的范围）
         all_imu_data = []
-        for imu_data in [self.imu1a_data, self.imu1b_data, self.imu2a_data, self.imu2b_data]:
+        for imu_data in [self.imu1a_data, self.imu1b_data, self.imu1c_data,
+                         self.imu2a_data, self.imu2b_data, self.imu2c_data]:
             if imu_data is not None and len(imu_data) > 0:
                 all_imu_data.append(imu_data)
 
@@ -714,18 +837,11 @@ class CalibrateTool(QMainWindow):
         self._do_update_plots()
 
     def on_slider_changed(self, value):
-        """滑块值改变 - 使用节流机制提升流畅度"""
-        self.current_pos = value
-        self.lbl_pos.setText(f'位置: {value}')
-
-        # 使用节流：拖动时每50ms最多更新一次，不拖动时立即更新
-        if self.is_dragging:
-            # 拖动过程中使用节流
-            if not self.update_timer.isActive():
-                self.update_timer.start(50)  # 50ms节流间隔
-        else:
-            # 非拖动（如点击滑槽）立即更新
-            self._do_update_plots()
+        """滑块值改变 - debounce 防抖，拖动 100ms / 点按 40ms"""
+        self.current_pos = int(value)
+        self.lbl_pos.setText(f'位置: {self.current_pos}')
+        delay = 100 if self.is_dragging else 40
+        self.update_timer.start(delay)
 
     def _do_update_plots(self):
         """执行实际的图表更新"""
@@ -736,14 +852,23 @@ class CalibrateTool(QMainWindow):
         self.window_size = value
         max_len = self.get_max_data_length()
         self.slider.setMaximum(max(0, max_len - self.window_size))
-        self.update_plots()
+        self.update_timer.start(40)
 
     def update_plots(self):
         """更新所有图表"""
-        # 拖动时使用快速模式（降采样绘制）
+        # 没有打开文件时不绘制
+        if self.h5_file is None:
+            return
         fast_mode = self.is_dragging
         self.update_emg_plot(fast_mode)
         self.update_imu_plot(fast_mode)
+
+    def _downsample_for_plot(self, data, max_points):
+        """降采样到最多 max_points 个点，返回 (data_downsampled, step)"""
+        if data is None or len(data) == 0:
+            return data, 1
+        step = max(1, int(np.ceil(len(data) / max_points)))
+        return data[::step], step
 
     def update_emg_plot(self, fast_mode=False):
         """更新EMG图表
@@ -760,18 +885,19 @@ class CalibrateTool(QMainWindow):
 
         # LSB转换系数
         lsb_uv = calculate_lsb_uv()
-        use_filter = self.chk_filter.isChecked()
+        # 拖动时不滤波，松手后精绘
+        use_filter = self.chk_filter.isChecked() and not fast_mode
 
         # 计算时间轴（秒），相对于数据开始的时间
         sample_rate = getattr(self, 'emg1_sample_rate', 2000)
         time_start = start / sample_rate  # 窗口开始时间（秒）
         time_end = end / sample_rate      # 窗口结束时间（秒）
 
-        # 滤波时使用的padding大小（避免边缘效应）
-        filter_padding = 500  # 前后各取500个采样点
+        # 滤波 padding：按采样率自适应，未滤波时无需 padding（减少无效切片）
+        filter_padding = 0 if not use_filter else min(1000, max(50, int(sample_rate * 0.25)))
 
-        # 快速模式：降采样以提升绘制速度
-        downsample = 4 if fast_mode else 1
+        # 动态降采样目标点数
+        max_plot_points = self.max_plot_points_fast if fast_mode else self.max_plot_points_normal
 
         # 绘制EMG1的16个通道（左列）
         # 使用不同颜色区分通道
@@ -795,10 +921,9 @@ class CalibrateTool(QMainWindow):
                 actual_end = actual_start + (end - start)
                 data_uv = data_uv_padded[actual_start:actual_end]
 
-                if downsample > 1:
-                    data_uv = data_uv[::downsample]
+                data_uv, step = self._downsample_for_plot(data_uv, max_plot_points)
 
-                x = np.linspace(time_start, time_start + len(data_uv) * downsample / sample_rate, len(data_uv))
+                x = np.linspace(time_start, time_start + len(data_uv) * step / sample_rate, len(data_uv))
 
                 num_channels = min(16, data_uv.shape[1] if data_uv.ndim > 1 else 1)
                 for ch in range(num_channels):
@@ -827,10 +952,9 @@ class CalibrateTool(QMainWindow):
                 actual_end = actual_start + (end - start)
                 data_uv = data_uv_padded[actual_start:actual_end]
 
-                if downsample > 1:
-                    data_uv = data_uv[::downsample]
+                data_uv, step = self._downsample_for_plot(data_uv, max_plot_points)
 
-                x = np.linspace(time_start, time_start + len(data_uv) * downsample / sample_rate, len(data_uv))
+                x = np.linspace(time_start, time_start + len(data_uv) * step / sample_rate, len(data_uv))
 
                 num_channels = min(16, data_uv.shape[1] if data_uv.ndim > 1 else 1)
                 for ch in range(num_channels):
@@ -912,22 +1036,29 @@ class CalibrateTool(QMainWindow):
         axis_colors = ['#d62728', '#2ca02c', '#1f77b4']  # X红、Y绿、Z蓝
         axis_labels = ['X', 'Y', 'Z']
 
+        # 动态降采样目标点数
+        max_plot_points = self.max_plot_points_fast if fast_mode else self.max_plot_points_normal
+
         imu_data_map = {
             'imu1a': self.imu1a_data,
             'imu1b': self.imu1b_data,
+            'imu1c': self.imu1c_data,
             'imu2a': self.imu2a_data,
             'imu2b': self.imu2b_data,
+            'imu2c': self.imu2c_data,
         }
-        imu_titles = {'imu1a': 'IMU1A', 'imu1b': 'IMU1B', 'imu2a': 'IMU2A', 'imu2b': 'IMU2B'}
+        imu_titles = {'imu1a': 'IMU1A', 'imu1b': 'IMU1B', 'imu1c': 'IMU1C',
+                      'imu2a': 'IMU2A', 'imu2b': 'IMU2B', 'imu2c': 'IMU2C'}
 
-        for col_idx, imu_name in enumerate(['imu1a', 'imu1b', 'imu2a', 'imu2b']):
+        for col_idx, imu_name in enumerate(['imu1a', 'imu1b', 'imu1c', 'imu2a', 'imu2b', 'imu2c']):
             imu_data = imu_data_map[imu_name]
             axes = self.ax_imu_channels[imu_name]
 
             if imu_data is not None and len(imu_data) > 0:
                 data = imu_data[imu_start:imu_end]
                 if len(data) > 0:
-                    x = np.linspace(time_start, time_start + len(data) / imu_sample_rate, len(data))
+                    data, step = self._downsample_for_plot(data, max_plot_points)
+                    x = np.linspace(time_start, time_start + len(data) * step / imu_sample_rate, len(data))
                     num_axes = min(3, data.shape[1] if data.ndim > 1 else 1)
                     for i in range(num_axes):
                         ax = axes[i]
