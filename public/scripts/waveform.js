@@ -198,6 +198,12 @@
 
             // ===== IMU1数据渲染（仅当设备1有数据时） =====
             if (data.imu1) {
+                const imu1Chips = Array.isArray(data.imu1) ? data.imu1 : [data.imu1];
+                const imu1Acc = rm.get('imu1Acc');
+                const imu1Gyr = rm.get('imu1Gyr');
+                if (imu1Acc) imu1Acc.renderPoints(imu1Chips);
+                if (imu1Gyr) imu1Gyr.renderPoints(imu1Chips);
+
                 // 加速度计: acc = [ax, ay, az]
                 if (data.imu1.acc) {
                     const accData = data.imu1.acc.map(v => [v]);  // 转为 [[ax], [ay], [az]]
@@ -239,6 +245,12 @@
 
             // ===== IMU2数据渲染（仅当设备2有数据时） =====
             if (data.imu2) {
+                const imu2Chips = Array.isArray(data.imu2) ? data.imu2 : [data.imu2];
+                const imu2Acc = rm.get('imu2Acc');
+                const imu2Gyr = rm.get('imu2Gyr');
+                if (imu2Acc) imu2Acc.renderPoints(imu2Chips);
+                if (imu2Gyr) imu2Gyr.renderPoints(imu2Chips);
+
                 if (data.imu2.acc) {
                     const accData = data.imu2.acc.map(v => [v]);
                     const imu2Acc = rm.get('imu2Acc');
@@ -324,14 +336,14 @@
         }
 
         init() {
-            // 创建EMG渲染器
+            // 创建EMG渲染器 (供应商堆叠模式，含 clamp checkbox)
             this.rendererManager.createEMGRenderer(
-                'emg1', 'emg1-canvas', 'emg1-container', 'emg1-pointer', 
-                'emg1-offset', 'emg1-channel'
+                'emg1', 'emg1-canvas', 'emg1-container', 'emg1-pointer',
+                'emg1-offset', 'emg1-channel', 'emg1-clamp'
             );
             this.rendererManager.createEMGRenderer(
-                'emg2', 'emg2-canvas', 'emg2-container', 'emg2-pointer', 
-                'emg2-offset', 'emg2-channel'
+                'emg2', 'emg2-canvas', 'emg2-container', 'emg2-pointer',
+                'emg2-offset', 'emg2-channel', 'emg2-clamp'
             );
 
             // 创建IMU渲染器 - IMU1

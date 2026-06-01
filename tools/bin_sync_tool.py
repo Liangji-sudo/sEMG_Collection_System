@@ -587,7 +587,7 @@ class IMUBinParser:
 
                 # 解析每个 IMU 芯片
                 def parse_chip(b):
-                    ag = struct.unpack('>6h', b[0:12])
+                    ag = struct.unpack('<6h', b[0:12])
                     m = struct.unpack('<3h', b[12:18])
                     return {
                         'acc': [x * SCALE_ACCEL for x in ag[0:3]],

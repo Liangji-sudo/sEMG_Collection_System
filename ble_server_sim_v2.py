@@ -74,7 +74,7 @@ MOCK_DEVICES = [
 CHANNELS_MAP_V2 = [15, 16, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
 SCALE_ACCEL = 32.0 / 32768.0           # V2 LSM6DSV32X ±32g
 SCALE_GYRO = 2000.0 / 32768.0
-BASE_LSB_24BIT = 0.2861                 # μV per LSB (24-bit, 2.4V ref / 2^23 * 1e6)
+BASE_LSB_24BIT = 0.476837                 # μV per LSB — 对齐供应商 V3
 HARDWARE_FRONTEND_GAIN = 12             # V2 硬件前端增益
 
 # ==================== 模拟 V2 固定配置 ====================

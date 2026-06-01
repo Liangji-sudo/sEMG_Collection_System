@@ -1020,6 +1020,13 @@
             padding: 3px;
         }
 
+        .control-bar:has(+ #imu1-mag-container),
+        .control-bar:has(+ #imu2-mag-container),
+        #imu1-mag-container,
+        #imu2-mag-container {
+            display: none !important;
+        }
+
         .stats-bar {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -5273,7 +5280,10 @@
                         <div class="control-bar">
                             <div class="control-group">
                                 <span>Offset:</span>
-                                <input type="number" id="emg1-offset" value="150" min="50" max="10000" step="50">
+                                <input type="number" id="emg1-offset" value="300" min="50" max="10000" step="50">
+                            </div>
+                            <div class="control-group">
+                                <label><input type="checkbox" id="emg1-clamp"> Clamp</label>
                             </div>
                             <div class="control-group">
                                 <span>通道:</span>
@@ -5305,7 +5315,10 @@
                         <div class="control-bar">
                             <div class="control-group">
                                 <span>Offset:</span>
-                                <input type="number" id="emg2-offset" value="150" min="50" max="10000" step="50">
+                                <input type="number" id="emg2-offset" value="300" min="50" max="10000" step="50">
+                            </div>
+                            <div class="control-group">
+                                <label><input type="checkbox" id="emg2-clamp"> Clamp</label>
                             </div>
                             <div class="control-group">
                                 <span>通道:</span>

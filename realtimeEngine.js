@@ -989,13 +989,9 @@ class RealtimeEngine extends EventEmitter {
 
                 this.emg_packet_count += framesInPacket;
 
-                // Frontend display: imu1/imu2 use respective 0th IMU
-                const frontImu1 = imu1Norm?.imus?.[0] || null;
-                const frontImu2 = imu2Norm?.imus?.[0] || null;
-
                 const dataItem = {
                     emg1: emg1Data, emg2: emg2Data,
-                    imu1: frontImu1, imu2: frontImu2,
+                    imu1: imu1Norm?.imus || null, imu2: imu2Norm?.imus || null,
                     timestamp, packetCount: this.emg_packet_count, framesInPacket,
                     stats1, stats2, activeDevices: packet.active || []
                 };

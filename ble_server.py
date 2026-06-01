@@ -106,8 +106,8 @@ SCALE_ACCEL = 32.0 / 32768.0              # V2 默认: LSM6DSV32X ±32g
 SCALE_ACCEL_V1 = 16.0 / 32768.0           # V1: ICM-20948 ±16g
 SCALE_GYRO = 2000.0 / 32768.0             # V1/V2 相同
 SCALE_MAG = 0.15                           # 仅 V1 使用, V2 无磁力计
-# 【修正】与供应商代码保持一致
-BASE_LSB_24BIT = 0.2861        # 2.4V ref / 2^23 * 1e6 (μV)
+# 【修正】与供应商代码/bin_sync_tool 保持一致
+BASE_LSB_24BIT = 0.476837     # 4.0V ref / 2^23 * 1e6 (μV) — 对齐供应商 V3
 HARDWARE_FRONTEND_GAIN = 10    # 硬件前端增益
 
 # ================= IMU 配置 =================
@@ -520,7 +520,7 @@ def parse_imu_v1(data: bytearray, emg_len: int) -> list:
     imu_bytes = data[imu_start: imu_start + imu_len]
 
     def parse_chip(b):
-        ag = struct.unpack('>6h', b[0:12])
+        ag = struct.unpack('<6h', b[0:12])
         m = struct.unpack('<3h', b[12:18])
         return [
             [x * SCALE_ACCEL_V1 for x in ag[0:3]],

@@ -21,8 +21,8 @@
         EMG_POINTS_PER_RENDER: 18,
         // IMU每次渲染的数据点数（旧公式，不再用于时间窗）
         IMU_POINTS_PER_RENDER: 1,
-        // 显示窗口时长 (秒)
-        WINDOW_DURATION: 3,
+        // 显示窗口时长 (秒) — 对齐供应商 5s
+        WINDOW_DURATION: 5,
         // EMG 真实显示采样率 (Hz) — BLE 硬件 250Hz，直接写入 Canvas
         EMG_DISPLAY_SAMPLE_RATE: 250,
         // IMU 真实显示采样率 (Hz) — 每个 BLE 包 9 个 EMG 样本 + 1 个 IMU 点
@@ -65,29 +65,37 @@
             this.canvas = document.getElementById(canvasId);
             this.container = document.getElementById(containerId);
             this.pointer = document.getElementById(pointerId);
-            
+
             if (!this.canvas || !this.container) {
                 console.error(`Canvas or container not found: ${canvasId}, ${containerId}`);
                 return;
             }
-            
+
             this.ctx = this.canvas.getContext('2d');
-            
+
             // 配置
             this.channels = options.channels || 16;
             this.colors = options.colors || RENDERER_CONFIG.COLORS.emg;
             this.offsetInputId = options.offsetInputId;
             this.channelSelectId = options.channelSelectId;
             this.type = options.type || 'emg';
-            
+            this.signalKind = options.signalKind || null;
+
+            // 供应商风格堆叠视图 (仅 EMG)
+            this.stackedMode = (this.type === 'emg') && (options.stackedMode !== false);
+            this.imuStackedMode = (this.type === 'imu') && (options.imuStackedMode === true);
+            this.clampEnabled = options.clampEnabled || false;
+            this.clampCheckboxId = options.clampCheckboxId || null;
+            this._labelFont = '8px sans-serif';
+
             // 状态
             this.writeIndex = 0;
             this.totalPoints = 0;
-            
+
             // 每个通道的上一个点位置（用于连线）
             this.lastX = [];
             this.lastY = [];
-            
+
             // 初始化
             this.init();
             this.setupResizeHandler();
@@ -185,6 +193,47 @@
         }
 
         /**
+         * 获取 Clamp 状态（从 checkbox 或实例属性）
+         */
+        getClampEnabled() {
+            if (this.clampCheckboxId) {
+                var cb = document.getElementById(this.clampCheckboxId);
+                if (cb) return cb.checked;
+            }
+            return this.clampEnabled;
+        }
+
+        /**
+         * 绘制堆叠视图的 CH1-CH16 标签（左侧 overlay）
+         */
+        drawChannelLabels() {
+            var ctx = this.ctx;
+            var dpr = window.devicePixelRatio || 1;
+            ctx.save();
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            // 清除左侧标签区域
+            ctx.clearRect(0, 0, 32 * dpr, this.canvas.height);
+            ctx.scale(dpr, dpr);
+
+            var offset = this.getOffset();
+            var totalHeight = this.channels * offset;
+            var scaleY = this.displayHeight / totalHeight;
+
+            ctx.fillStyle = '#666';
+            ctx.font = this._labelFont;
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'middle';
+
+            for (var ch = 0; ch < this.channels; ch++) {
+                var yBase = (15 - ch) * offset * scaleY;
+                if (yBase >= 0 && yBase <= this.displayHeight) {
+                    ctx.fillText('CH' + (ch + 1), 28, yBase);
+                }
+            }
+            ctx.restore();
+        }
+
+        /**
          * 更新时间指针位置
          */
         updatePointer() {
@@ -196,49 +245,163 @@
 
         /**
          * 渲染数据点 - 核心接口
-         * 
+         *
          * @param {Array<Array<number>>} data - 多通道数据
          *   格式: [[ch0_p1, ch0_p2, ...], [ch1_p1, ch1_p2, ...], ...]
-         *   EMG: 16个通道，每个通道18个点（加倍后）
+         *   EMG: 16个通道，每个通道 N 个点 (250Hz 实时)
          *   IMU: 3个通道(xyz)，每个通道1个点
          */
         renderPoints(data) {
             if (!data || data.length === 0) return;
-            
+
+            if (this.imuStackedMode) {
+                this._renderIMUStacked(data);
+            } else if (this.stackedMode) {
+                this._renderPointsStacked(data);
+            } else {
+                this._renderPointsBanded(data);
+            }
+            this.updatePointer();
+        }
+
+        /**
+         * 供应商风格堆叠渲染: 16 通道同轴堆叠，Offset 分离
+         */
+        _normalizeIMUChips(data) {
+            if (!data || data.length === 0) return [];
+
+            if (Array.isArray(data[0]) && typeof data[0][0] === 'number') {
+                return [{
+                    index: 0,
+                    values: [data[0][0] || 0, data[1]?.[0] || 0, data[2]?.[0] || 0]
+                }];
+            }
+
+            return data.map((chip, idx) => {
+                const values = chip.values || chip[this.signalKind] || chip.acc || chip.gyr || [0, 0, 0];
+                return {
+                    index: chip.index !== undefined ? chip.index : idx,
+                    values: [
+                        Number(values[0]) || 0,
+                        Number(values[1]) || 0,
+                        Number(values[2]) || 0
+                    ]
+                };
+            });
+        }
+
+        _drawIMULabels() {
+            const ctx = this.ctx;
+            const dpr = window.devicePixelRatio || 1;
+            ctx.save();
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.clearRect(0, 0, 34 * dpr, this.canvas.height);
+            ctx.scale(dpr, dpr);
+
             const offset = this.getOffset();
-            const visibleChannels = this.getVisibleChannels();
-            const channelCount = visibleChannels.end - visibleChannels.start;
-            
-            const totalHeight = this.displayHeight;
-            const channelSpacing = totalHeight / channelCount;
-            const channelHeight = channelSpacing * 0.8;
-            
-            const pointsCount = data[0] ? data[0].length : 0;
-            if (pointsCount === 0) return;
-            
+            const scaleY = this.displayHeight / (3 * offset);
+            const labels = ['X', 'Y', 'Z'];
+
+            ctx.fillStyle = '#444';
+            ctx.font = this._labelFont;
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'middle';
+
+            for (let axis = 0; axis < 3; axis++) {
+                const yBase = (2 - axis) * offset * scaleY;
+                ctx.fillText(labels[axis], 28, yBase);
+            }
+            ctx.restore();
+        }
+
+        _renderIMUStacked(data) {
+            const chips = this._normalizeIMUChips(data);
+            if (chips.length === 0) return;
+
             const dpr = window.devicePixelRatio || 1;
             const ctx = this.ctx;
-            
-            // 逐点绘制
-            for (let i = 0; i < pointsCount; i++) {
-                const currentIndex = this.writeIndex;
-                const currentX = (currentIndex / this.totalPoints) * this.displayWidth;
-                
-                // 清除当前位置前方的区域
-                const clearWidth = Math.max(3, (this.displayWidth / this.totalPoints) * 2);
+            const offset = this.getOffset();
+            const scaleY = this.displayHeight / (3 * offset);
+            const currentIndex = this.writeIndex;
+            const currentX = (currentIndex / this.totalPoints) * this.displayWidth;
+            const clearWidth = Math.max(3, (this.displayWidth / this.totalPoints) * 2);
+            const dashStyles = [[], [5, 3], [1, 3], [6, 2, 1, 2]];
+
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.clearRect(34 * dpr, 0, clearWidth * dpr + 34 * dpr, this.canvas.height);
+            ctx.scale(dpr, dpr);
+
+            for (let c = 0; c < chips.length; c++) {
+                const chip = chips[c];
+                const chipIndex = Math.max(0, Math.min(3, chip.index || c));
+                const dash = dashStyles[chipIndex] || [];
+
+                for (let axis = 0; axis < 3; axis++) {
+                    const value = chip.values[axis] || 0;
+                    const yBase = (2 - axis) * offset;
+                    const y = (yBase - value) * scaleY;
+                    const stateIndex = chipIndex * 3 + axis;
+
+                    if (this.lastX[stateIndex] >= 0 && this.lastY[stateIndex] >= 0) {
+                        if (Math.abs(currentX - this.lastX[stateIndex]) < this.displayWidth * 0.5) {
+                            ctx.beginPath();
+                            ctx.strokeStyle = this.colors[axis % this.colors.length];
+                            ctx.lineWidth = RENDERER_CONFIG.LINE_WIDTH;
+                            ctx.setLineDash(dash);
+                            ctx.lineCap = 'round';
+                            ctx.lineJoin = 'round';
+                            ctx.moveTo(this.lastX[stateIndex], this.lastY[stateIndex]);
+                            ctx.lineTo(currentX, y);
+                            ctx.stroke();
+                            ctx.setLineDash([]);
+                        }
+                    }
+
+                    this.lastX[stateIndex] = currentX;
+                    this.lastY[stateIndex] = y;
+                }
+            }
+
+            this.writeIndex = (currentIndex + 1) % this.totalPoints;
+            this._drawIMULabels();
+        }
+
+        _renderPointsStacked(data) {
+            var offset = this.getOffset();
+            var clampEnabled = this.getClampEnabled();
+            var clipLimit = offset * 0.48;  // 供应商 clamp 阈值
+            var pointsCount = data[0] ? data[0].length : 0;
+            if (pointsCount === 0) return;
+
+            var dpr = window.devicePixelRatio || 1;
+            var ctx = this.ctx;
+            var totalHeight = this.channels * offset;  // 总 uV 高度
+            var scaleY = this.displayHeight / totalHeight;
+
+            var channelSelect = this.getVisibleChannels();
+
+            for (var i = 0; i < pointsCount; i++) {
+                var currentIndex = this.writeIndex;
+                var currentX = (currentIndex / this.totalPoints) * this.displayWidth;
+
+                // 清除当前位置前方的区域（包含左侧标签区）
+                var clearWidth = Math.max(3, (this.displayWidth / this.totalPoints) * 2);
                 ctx.setTransform(1, 0, 0, 1, 0, 0);
-                ctx.clearRect(currentX * dpr, 0, clearWidth * dpr, this.canvas.height);
+                ctx.clearRect(32 * dpr, 0, clearWidth * dpr + 32 * dpr, this.canvas.height);
                 ctx.scale(dpr, dpr);
-                
-                // 绘制每个可见通道
-                for (let ch = visibleChannels.start; ch < visibleChannels.end; ch++) {
-                    const value = data[ch] ? data[ch][i] : 0;
-                    
-                    const displayIndex = ch - visibleChannels.start;
-                    const centerY = channelSpacing * (displayIndex + 0.5);
-                    const scale = channelHeight / (2 * offset);
-                    const y = centerY - value * scale;
-                    
+
+                for (var ch = channelSelect.start; ch < channelSelect.end; ch++) {
+                    var value = (data[ch] && data[ch][i] !== undefined) ? data[ch][i] : 0;
+
+                    // Clamp: limit waveform amplitude within channel spacing
+                    if (clampEnabled) {
+                        value = Math.max(-clipLimit, Math.min(clipLimit, value));
+                    }
+
+                    // CH1 at top (y=15*offset), CH16 at bottom (y=0*offset)
+                    var yBase = (15 - ch) * offset;
+                    var y = (yBase - value) * scaleY;
+
                     // 连接上一个点
                     if (this.lastX[ch] >= 0 && this.lastY[ch] >= 0) {
                         if (Math.abs(currentX - this.lastX[ch]) < this.displayWidth * 0.5) {
@@ -252,15 +415,69 @@
                             ctx.stroke();
                         }
                     }
-                    
+
                     this.lastX[ch] = currentX;
                     this.lastY[ch] = y;
                 }
-                
+
                 this.writeIndex = (currentIndex + 1) % this.totalPoints;
             }
-            
-            this.updatePointer();
+
+            // 重绘通道标签
+            this.drawChannelLabels();
+        }
+
+        /**
+         * 原有 banded 模式: 每个通道独立垂直 band
+         */
+        _renderPointsBanded(data) {
+            var offset = this.getOffset();
+            var visibleChannels = this.getVisibleChannels();
+            var channelCount = visibleChannels.end - visibleChannels.start;
+
+            var totalHeight = this.displayHeight;
+            var channelSpacing = totalHeight / channelCount;
+            var channelHeight = channelSpacing * 0.8;
+
+            var pointsCount = data[0] ? data[0].length : 0;
+            if (pointsCount === 0) return;
+
+            var dpr = window.devicePixelRatio || 1;
+            var ctx = this.ctx;
+
+            for (var i = 0; i < pointsCount; i++) {
+                var currentIndex = this.writeIndex;
+                var currentX = (currentIndex / this.totalPoints) * this.displayWidth;
+
+                var clearWidth = Math.max(3, (this.displayWidth / this.totalPoints) * 2);
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                ctx.clearRect(currentX * dpr, 0, clearWidth * dpr, this.canvas.height);
+                ctx.scale(dpr, dpr);
+
+                for (var ch = visibleChannels.start; ch < visibleChannels.end; ch++) {
+                    var value = data[ch] ? data[ch][i] : 0;
+                    var displayIndex = ch - visibleChannels.start;
+                    var centerY = channelSpacing * (displayIndex + 0.5);
+                    var scale = channelHeight / (2 * offset);
+                    var y = centerY - value * scale;
+
+                    if (this.lastX[ch] >= 0 && this.lastY[ch] >= 0) {
+                        if (Math.abs(currentX - this.lastX[ch]) < this.displayWidth * 0.5) {
+                            ctx.beginPath();
+                            ctx.strokeStyle = this.colors[ch % this.colors.length];
+                            ctx.lineWidth = RENDERER_CONFIG.LINE_WIDTH;
+                            ctx.lineCap = 'round';
+                            ctx.lineJoin = 'round';
+                            ctx.moveTo(this.lastX[ch], this.lastY[ch]);
+                            ctx.lineTo(currentX, y);
+                            ctx.stroke();
+                        }
+                    }
+                    this.lastX[ch] = currentX;
+                    this.lastY[ch] = y;
+                }
+                this.writeIndex = (currentIndex + 1) % this.totalPoints;
+            }
         }
 
         /**
@@ -288,14 +505,16 @@
         }
 
         /**
-         * 创建EMG渲染器
+         * 创建EMG渲染器 (供应商堆叠模式 + clamp 支持)
          */
-        createEMGRenderer(name, canvasId, containerId, pointerId, offsetInputId, channelSelectId) {
+        createEMGRenderer(name, canvasId, containerId, pointerId, offsetInputId, channelSelectId, clampCheckboxId) {
             this.renderers[name] = new WaveformRenderer(canvasId, containerId, pointerId, {
                 channels: RENDERER_CONFIG.EMG_CHANNELS,
                 colors: RENDERER_CONFIG.COLORS.emg,
                 offsetInputId: offsetInputId,
                 channelSelectId: channelSelectId,
+                clampCheckboxId: clampCheckboxId || null,
+                stackedMode: true,     // 供应商堆叠视图
                 type: 'emg'
             });
             return this.renderers[name];
@@ -309,6 +528,8 @@
                 channels: RENDERER_CONFIG.IMU_AXES,
                 colors: RENDERER_CONFIG.COLORS.imu,
                 offsetInputId: offsetInputId,
+                imuStackedMode: true,
+                signalKind: name.toLowerCase().includes('gyr') ? 'gyr' : 'acc',
                 type: 'imu'
             });
             return this.renderers[name];

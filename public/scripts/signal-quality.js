@@ -24,10 +24,10 @@
     var DEAD_VARIANCE_THRESHOLD = 0.1;
 
     // clipLimitUv 计算 (与 ble_server.py 一致)
-    // BASE_LSB_24BIT = 0.2861, gain=12, HARDWARE_FRONTEND_GAIN=10
-    // lsb_uv = 0.2861 / (12 * 10) = 0.002384...
-    // clip_limit_uv = lsb_uv * 8388607 ≈ 20000 uV
-    var BASE_LSB_24BIT = 0.2861;
+    // BASE_LSB_24BIT = 0.476837 (对齐供应商 V3 / bin_sync_tool)
+    // lsb_uv = 0.476837 / (12 * 10) = 0.003974 uV/LSB (gain=12)
+    // clip_limit_uv = lsb_uv * 8388607 ≈ 33333 uV
+    var BASE_LSB_24BIT = 0.476837;
     var DEFAULT_GAIN = 12;
     var HARDWARE_FRONTEND_GAIN = 10;
 
