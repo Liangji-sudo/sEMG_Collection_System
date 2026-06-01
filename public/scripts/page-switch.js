@@ -187,6 +187,12 @@
 
             this.stopWaveform();
 
+            // 【新增】返回首页时停止所有活跃的 stream（preview 或 collection）
+            if (window.BleControl && window.BleControl.isConnected) {
+                console.log('[PageSwitch] 停止所有 stream（返回首页）');
+                window.BleControl.stopAnyStream();
+            }
+
             // 【新增】离开采集页后隐藏质量颜色指示
             if (window.waveformController) {
                 window.waveformController.refreshQualityVisibility();
@@ -201,20 +207,29 @@
          */
         showCollection() {
             console.log('[PageSwitch] 切换到采集页面');
-            
+
             const welcomeScreen = document.getElementById('welcomeScreen');
             const collectionScreen = document.getElementById('collectionScreen');
             const backendPage = document.getElementById('backend-page');
-            
+
             if (welcomeScreen) welcomeScreen.classList.add('hidden');
             if (collectionScreen) collectionScreen.style.display = 'flex';
             if (backendPage) backendPage.classList.add('hidden');
-            
+
             this.startWaveform();
 
             // 【新增】进入采集页后刷新质量颜色指示（如果设备已连接且未采集则显示）
             if (window.waveformController) {
                 window.waveformController.refreshQualityVisibility();
+            }
+
+            // 【新增】如果设备已连接且未在 streaming，自动启动 preview stream
+            if (window.BleControl && window.BleControl.isConnected) {
+                // 延迟启动，给页面渲染和 WebSocket 一些时间
+                setTimeout(() => {
+                    console.log('[PageSwitch] 启动 preview stream（进入采集页）');
+                    window.BleControl.startPreviewStream();
+                }, 300);
             }
 
             // 通知采集控制器页面已显示
@@ -288,14 +303,15 @@
                 if (!confirm('采集任务正在进行中，确定要返回吗？')) {
                     return;
                 }
-                // 停止采集任务
-                window.collectionController.stopTask();
+                // 【修复 Issue 5】停止采集任务，但禁止自动切回 preview（我们要返回首页）
+                window.collectionController.stopTask({ restartPreview: false });
             }
-            
-            // 停止BLE数据流
+
+            // 停止所有活跃的 stream（preview 或 collection）
+            // stopAnyStream 会发送 STOP 到 ESP32，不启动新 stream
             if (window.BleControl && window.BleControl.isConnected) {
-                window.BleControl.stopAll();
-                console.log('[PageSwitch] 发送 stop_all 命令');
+                window.BleControl.stopAnyStream();
+                console.log('[PageSwitch] 发送 stop_any_stream 命令');
             }
             
             this.showWelcome();
@@ -330,11 +346,9 @@
             this.hideUserModal();
             this.showToast('用户信息保存成功！');
 
-            // 启动BLE数据流
-            if (window.BleControl && window.BleControl.isConnected) {
-                window.BleControl.startAll();
-                console.log('[PageSwitch] 发送 start_all 命令');
-            }
+            // 【修复】不再调用 startAll()，连接/录入后只进入采集页
+            // preview stream 由 showCollection() 自动启动
+            console.log('[PageSwitch] 用户信息已保存，进入采集页（不主动 start stream）');
 
             // 延迟切换到采集页面
             setTimeout(() => {
@@ -653,11 +667,11 @@
             // ---- 3. 切换到采集页面 ----
             console.log('[PageSwitch] 切换到采集页面...');
 
-            // 启动 BLE 数据流（仅腕带 streaming，不启动 H5 记录）
-            // H5 记录在用户点击"开始续采"后由 startTask() 触发
+            // 启动 preview stream（仅腕带 streaming，用于波形预览）
+            // H5 记录在用户点击"开始续采"后由 startTask() 触发（内部走 switch_preview_to_collection）
             if (window.BleControl && window.BleControl.isConnected) {
-                window.BleControl.startAll();
-                console.log('[PageSwitch] BLE 数据流已启动（仅streaming，未开始H5记录）');
+                window.BleControl.startPreviewStream();
+                console.log('[PageSwitch] preview stream 已启动（仅 preview，未开始 H5 记录）');
             }
 
             setTimeout(() => {

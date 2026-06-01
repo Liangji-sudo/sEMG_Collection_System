@@ -252,7 +252,20 @@ async function decodeData(buffer) {
     
     function handleResponse(msg) {
         const action = msg.action;
-        
+
+        // 【新增】检查是否有待处理的 Promise 响应
+        if (BleState._pendingResponse && BleState._pendingResponse.action === action) {
+            const pending = BleState._pendingResponse;
+            clearTimeout(pending.timeoutId);
+            delete BleState._pendingResponse;
+            if (msg.success !== false) {
+                pending.resolve(msg);
+            } else {
+                pending.reject(new Error(msg.error || `BLE 命令失败: ${action}`));
+            }
+            // 即使有 pending response，仍然继续执行下面的 UI 更新逻辑
+        }
+
         // 扫描结果
         if (action === 'scan') {
             console.log('liangji scan over');
@@ -630,14 +643,56 @@ async function decodeData(buffer) {
         },
         stopAll: () => send({ action: 'stop_all' }),
 
+        // 【新增】Preview / Collection 流管理 API
+        // 启动 preview stream（进入采集页时使用）
+        startPreviewStream: () => send({ action: 'start_preview_stream' }),
+        // 停止 preview stream
+        stopPreviewStream: () => send({ action: 'stop_preview_stream' }),
+        // 核心：preview → collection 切流（开始采集前使用）
+        switchPreviewToCollection: () => send({ action: 'switch_preview_to_collection' }),
+        // 核心：collection → preview 切流（采集完成后使用）
+        switchCollectionToPreview: () => send({ action: 'switch_collection_to_preview' }),
+        // 停止 collection stream
+        stopCollectionStream: () => send({ action: 'stop_collection_stream' }),
+        // 停止任意活跃流（返回首页/断开连接时使用）
+        stopAnyStream: () => send({ action: 'stop_any_stream' }),
+
         // 【新增】设置会话ID
         setSessionId: (sessionId) => {
             return send({ action: 'set_session_id', session_id: sessionId || '' });
         },
+
+        // 【新增】设置会话ID并等待确认（用于采集流切换前确保 session_id 生效）
+        setSessionIdAndWait: (sessionId) => {
+            return BleControl.sendAndWait('set_session_id', { session_id: sessionId || '' }, 5000);
+        },
         
         // 获取状态
         getStatus: () => send({ action: 'status' }),
-        
+
+        // 【新增】发送命令并等待响应（用于 stream 切换等需要确认的异步操作）
+        // 返回 Promise，成功时 resolve(msg)，失败/超时时 reject(error)
+        sendAndWait: (action, extraData = {}, timeoutMs = 12000) => {
+            return new Promise((resolve, reject) => {
+                const timeoutId = setTimeout(() => {
+                    if (BleState._pendingResponse && BleState._pendingResponse.action === action) {
+                        delete BleState._pendingResponse;
+                    }
+                    reject(new Error(`BLE 命令超时 (${timeoutMs}ms): ${action}`));
+                }, timeoutMs);
+                BleState._pendingResponse = { action, resolve, reject, timeoutId };
+                const sent = send(Object.assign({ action }, extraData));
+                if (!sent) {
+                    clearTimeout(timeoutId);
+                    delete BleState._pendingResponse;
+                    reject(new Error(`BLE 未连接，无法发送: ${action}`));
+                }
+            });
+        },
+
+        // 【新增】检查是否有待处理的响应
+        getPendingAction: () => BleState._pendingResponse?.action || null,
+
         // 状态访问
         get state() { return BleState; },
         get isConnected() { return BleState.connected; },

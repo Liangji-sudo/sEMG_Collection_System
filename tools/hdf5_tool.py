@@ -357,6 +357,25 @@ def extract_segment_metadata(h5_f):
 
     result['segment_device_count'] = h5_f.attrs.get('segment_device_count', 0)
 
+    # 【新增】stream mode 信息（preview/collection 切流方案）
+    stream_mode = _str(h5_f.attrs.get('stream_mode'))
+    stream_fmt_ver = h5_f.attrs.get('stream_format_version')
+    bin_pair_source = _str(h5_f.attrs.get('bin_pair_source'))
+    result['stream_info'] = {
+        'stream_mode': stream_mode or 'unknown',  # "collection" | "preview" | "idle" | "unknown"
+        'stream_format_version': int(stream_fmt_ver) if stream_fmt_ver is not None else 1,
+        'bin_pair_source': bin_pair_source or 'unknown',  # "collection_stream" | "preview_stream" | "legacy" | "unknown"
+        'collection_stream_id': _str(h5_f.attrs.get('collection_stream_id')),
+        'stream_switch_delay_ms': h5_f.attrs.get('stream_switch_delay_ms'),
+        'timestamp_to_start_delay_ms': h5_f.attrs.get('timestamp_to_start_delay_ms'),
+        'collection_stream_stopped_at': _str(h5_f.attrs.get('collection_stream_stopped_at')),
+        'collection_bin_finalized': _str(h5_f.attrs.get('collection_bin_finalized')),
+        'preview_bin_dev1': _str(h5_f.attrs.get('preview_bin_dev1')),
+        'preview_bin_dev2': _str(h5_f.attrs.get('preview_bin_dev2')),
+        'sd_imu_bin_dev1': _str(h5_f.attrs.get('sd_imu_bin_dev1')),
+        'sd_imu_bin_dev2': _str(h5_f.attrs.get('sd_imu_bin_dev2')),
+    }
+
     # segment_bin_summary JSON
     bin_summary_raw = _str(h5_f.attrs.get('segment_bin_summary'))
     if bin_summary_raw:
@@ -772,6 +791,10 @@ class StatisticsPanel(QFrame):
             ('sd_bin_dev1', 'SD Bin(设备1)'), ('sd_bin_dev2', 'SD Bin(设备2)'),
             # BLE设备名称
             ('ble_device_dev1', 'BLE设备(设备1)'), ('ble_device_dev2', 'BLE设备(设备2)'),
+            # ===== Preview/Collection 流信息 =====
+            ('stream_mode', '流模式'), ('stream_format_version', '流格式版本'),
+            ('bin_pair_source', 'Bin来源'), ('collection_stream_id', '采集流ID'),
+            ('stream_switch_delay_ms', '切换延迟(ms)'),
             # ===== Phase 4: segment/bin 元数据 =====
             ('collection_status', '采集状态'),
             ('is_resumed', '续采段'),
@@ -950,6 +973,49 @@ class StatisticsPanel(QFrame):
                     self.labels['ble_device_dev2'].setText(ble_device_dev2)
                 else:
                     self.labels['ble_device_dev2'].setText('-')
+
+                # 【新增】读取 stream 信息
+                stream_mode = f.attrs.get('stream_mode', None)
+                if stream_mode:
+                    if isinstance(stream_mode, bytes):
+                        stream_mode = stream_mode.decode('utf-8')
+                    self.labels['stream_mode'].setText(str(stream_mode))
+                else:
+                    self.labels['stream_mode'].setText('unknown (旧格式)')
+
+                stream_fmt_ver = f.attrs.get('stream_format_version', None)
+                if stream_fmt_ver is not None:
+                    label_text = f"v{stream_fmt_ver}"
+                    if int(stream_fmt_ver) >= 2:
+                        label_text += ' (一对一)'
+                    else:
+                        label_text += ' (旧格式/多对一)'
+                    self.labels['stream_format_version'].setText(label_text)
+                else:
+                    self.labels['stream_format_version'].setText('v1 (旧格式)')
+
+                bin_pair_source = f.attrs.get('bin_pair_source', None)
+                if bin_pair_source:
+                    if isinstance(bin_pair_source, bytes):
+                        bin_pair_source = bin_pair_source.decode('utf-8')
+                    self.labels['bin_pair_source'].setText(str(bin_pair_source))
+                else:
+                    self.labels['bin_pair_source'].setText('unknown (旧格式)')
+
+                collection_stream_id = f.attrs.get('collection_stream_id', None)
+                if collection_stream_id:
+                    if isinstance(collection_stream_id, bytes):
+                        collection_stream_id = collection_stream_id.decode('utf-8')
+                    # 缩短显示
+                    self.labels['collection_stream_id'].setText(str(collection_stream_id)[:26])
+                else:
+                    self.labels['collection_stream_id'].setText('-')
+
+                stream_delay = f.attrs.get('stream_switch_delay_ms', None)
+                if stream_delay is not None:
+                    self.labels['stream_switch_delay_ms'].setText(str(stream_delay))
+                else:
+                    self.labels['stream_switch_delay_ms'].setText('-')
 
                 # 读取数据集形状
                 for key in ['emg1_250hz', 'emg1_2khz', 'emg2_250hz', 'emg2_2khz',

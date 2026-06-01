@@ -697,6 +697,29 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
         elif coll_status == 'manual_stopped':
             log("ℹ️ 手动停止 segment，同步已采集数据")
 
+        # ==== 新格式检测：stream_format_version & bin_pair_source ====
+        stream_fmt_ver = f.attrs.get('stream_format_version', None)
+        stream_mode = f.attrs.get('stream_mode', 'unknown')
+        bin_pair_source = f.attrs.get('bin_pair_source', 'unknown')
+
+        # 处理 bytes→str
+        if isinstance(stream_mode, bytes):
+            stream_mode = stream_mode.decode('utf-8')
+        if isinstance(bin_pair_source, bytes):
+            bin_pair_source = bin_pair_source.decode('utf-8')
+
+        if stream_fmt_ver is not None and int(stream_fmt_ver) >= 2:
+            log(f"📋 H5 格式: v{stream_fmt_ver} (新格式，一对一 bin 映射)")
+            log(f"   stream_mode: {stream_mode}")
+            log(f"   bin_pair_source: {bin_pair_source}")
+            if bin_pair_source == 'collection_stream':
+                log("   ✅ 使用 collection_stream bin（由 ble_server 切流产生）")
+            elif bin_pair_source == 'preview_stream':
+                log("   ⚠️ 警告: bin_pair_source 为 preview_stream！此 H5 可能错误引用了 preview bin")
+        else:
+            log("📋 H5 格式: v1 (旧格式，可能多 H5 共享同一个长 bin)")
+            log("   将使用兼容模式同步（允许 ADC offset search 等降级策略）")
+
         # 获取250Hz ADC数据集
         ds_250hz_name = f"emg{device_id}_250hz_adc"
         if ds_250hz_name not in f:

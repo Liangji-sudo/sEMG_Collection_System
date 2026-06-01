@@ -88,6 +88,14 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this._resumeState = null;           // 断点状态快照
             this._resumeSegmentIndex = 1;       // 当前 segment 序号
 
+            // ===== Stream 切换相关状态 =====
+            this._switchInProgress = false;     // preview ↔ collection 切换进行中（防止重复点击）
+            this._lastPreviewResumeCall = null; // 防重入：{ reason, time }
+
+            // ===== 全部轮次切流优化 =====
+            // 短休息（<此阈值）不切 preview，保持 idle 减少不必要的 bin 切流
+            this.MIN_REST_FOR_PREVIEW_STREAM_SECONDS = 10;
+
             console.log('[Collection] 构造函数结束');
         }
 
@@ -945,7 +953,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
          * 开始采集任务
          * @param {boolean} isTestMode - 是否为测试模式（不保存H5文件）
          */
-        startTask(isTestMode = false) {
+        async startTask(isTestMode = false) {
             if (this._isRunning) return;
 
             // 【新增】保存测试模式状态
@@ -962,7 +970,6 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 this.loadCollectionConfig();
             } else {
                 this._reloadExecutionParams();
-                // 按任务类型校验；缺失时用默认值兜底，绝不调 loadCollectionConfig()
                 if (!this._hasValidExecutionParamsForTask(this.currentTaskId)) {
                     console.warn('[Collection] 续采模式执行参数不完整，使用默认值兜底');
                     this._applyExecutionDefaultsForTask(this.currentTaskId);
@@ -974,6 +981,43 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             // 【关键修复】重置动画模块状态
             this.resetAnimationModules();
+
+            // ==================== 【修复】Stream 切换: preview → collection ====================
+            // 非测试模式下，在开始 H5 记录前先切换 BLE 流
+            let switchResponse = null;  // 保存切换响应，用于传递 collection_bins 到 realtimeEngine
+            if (!isTestMode && window.BleControl && window.BleControl.isConnected) {
+                this.updateStatus('切换采集流中，请稍候...');
+                this._setAllButtonsDisabled(true);
+                this._switchInProgress = true;
+
+                try {
+                    // Step 1: 确保 session_id 已设置（collection bin 文件名需要）
+                    const sessionId = this._getEffectiveSessionId();
+                    console.log('[Collection] ★ Step 1: 设置 session_id:', sessionId);
+                    await window.BleControl.setSessionIdAndWait(sessionId);
+                    console.log('[Collection] ★ set_session_id 完成');
+
+                    // Step 2: preview → collection 切流
+                    console.log('[Collection] ★ Step 2: preview → collection 切换...');
+                    switchResponse = await window.BleControl.sendAndWait('switch_preview_to_collection');
+                    console.log('[Collection] ★ switch_preview_to_collection 完成:', switchResponse);
+
+                    if (switchResponse.collection_bins) {
+                        console.log('[Collection] Collection bins:', switchResponse.collection_bins);
+                    }
+                } catch (err) {
+                    console.error('[Collection] ★ 切换采集流失败:', err);
+                    this.showToast('切换采集流失败: ' + err.message, 'error');
+                    this._setAllButtonsDisabled(false);
+                    this._switchInProgress = false;
+                    this.updateControlButtons(false);
+                    this.updateStatus('切换失败');
+                    return;
+                }
+                this._switchInProgress = false;
+                this.updateStatus('采集流已就绪，开始记录...');
+            }
+            // ==================== Stream 切换结束 ====================
 
             this._isRunning = true;
             this._isPaused = false;
@@ -1042,7 +1086,12 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 isMultiSession: this._isAllSessionsMode,
                 // 文件名建议格式: userId_session{N}_{stageName}_{timestamp}
                 suggestedFileName: `${userId}_session${this.currentSessionIndex + 1}_${currentStage?.name || currentStage?.id || 'stage'}`,
-                config: this.collectionConfig
+                config: this.collectionConfig,
+                // 【修复 Issue 3】直接传递 switch 响应中的 collection_bins，不依赖 600ms 竞态
+                collectionBins: switchResponse?.collection_bins || null,
+                collectionDeviceNames: switchResponse?.device_names || null,
+                streamMode: 'collection',
+                collectionStreamId: switchResponse?.collection_stream_id || null,
             };
 
             // 【Phase 2】续采模式下附加 resume 元数据
@@ -1128,6 +1177,19 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             console.log('[Collection] 开始休息倒计时:', remainingSeconds, '秒');
             console.log('[Collection] 下一轮Session:', nextSessionIndex + 1);
 
+            // 【优化】轮次间休息切流策略
+            if (window.BleControl && window.BleControl.isConnected) {
+                if (remainingSeconds >= this.MIN_REST_FOR_PREVIEW_STREAM_SECONDS) {
+                    // 长休息：collection → preview，保持波形预览
+                    console.log(`[Collection] 长休息 (${remainingSeconds}s >= ${this.MIN_REST_FOR_PREVIEW_STREAM_SECONDS}s)：collection → preview`);
+                    window.BleControl.switchCollectionToPreview();
+                } else {
+                    // 短休息：collection → idle，不产生中间 PREVIEW bin
+                    console.log(`[Collection] 短休息 (${remainingSeconds}s < ${this.MIN_REST_FOR_PREVIEW_STREAM_SECONDS}s)：collection → idle, skip preview`);
+                    window.BleControl.stopCollectionStream();
+                }
+            }
+
             // 【修改】使用全屏居中弹窗显示休息倒计时
             this.showSessionOverlay({
                 title: '休息时间',
@@ -1204,10 +1266,14 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this.hideSessionOverlay();
         }
 
-        stopTask() {
+        stopTask(opts = {}) {
+            // opts.restartPreview: 默认 true（正常停止后切回 preview），false 时抑制（返回首页等场景）
+            const { restartPreview = true } = opts;
+
             if (!this._isRunning && !this._isAllSessionsMode) return;
 
             console.log('[Collection] ===== 停止采集任务 =====');
+            console.log('[Collection] restartPreview:', restartPreview);
 
             this._isRunning = false;
             this._isPaused = false;
@@ -1285,6 +1351,11 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             }
 
             this.sendToRealtimeEngine('collection_stop', { completed: false });
+
+            // 【修复 Issue 5】停止采集后切换回 preview stream（除非被抑制）
+            if (restartPreview && !this._switchInProgress && window.BleControl && window.BleControl.isConnected) {
+                this._resumePreviewAfterCollection('manual_stop');
+            }
         }
 
         // 【已移除】togglePause 方法已被测试模式替代
@@ -1571,7 +1642,13 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 breakpointState: breakpointState  // Phase 6 fix: 完整可恢复状态
             });
 
-            // ---- 3. 前端清理已在 abortTask() 中完成，此处无需重复 ----
+            // ---- 3. 停止 collection stream（异常中断，不重启 preview） ----
+            if (window.BleControl && window.BleControl.isConnected) {
+                window.BleControl.stopCollectionStream();
+                console.log('[Collection] 已停止 collection stream（异常中断，不重启 preview）');
+            }
+
+            // ---- 4. 前端清理已在 abortTask() 中完成，此处无需重复 ----
 
             // 更新状态
             this.updateStatus('已中断');
@@ -2159,15 +2236,16 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this.updateGestureList();
             this.updateStatus('采集完成');
 
-            // 【新增】全部轮次模式：检查是否需要继续下一轮
+            // 【修复 Issue 1 二次审核】先判断全部轮次模式，避免与 showRestCountdownAndContinue 重复切流
             if (this._isAllSessionsMode) {
                 const hasMoreSessions = this.currentSessionIndex < this.sessionCount - 1;
                 if (hasMoreSessions) {
-                    // 还有更多轮次，显示休息倒计时后自动开始下一轮
+                    // 还有更多轮次：showRestCountdownAndContinue 内部已处理 stream 切换
                     this.showRestCountdownAndContinue();
                     return;
                 } else {
-                    // 所有轮次完成
+                    // 所有轮次完成 → 切回 preview
+                    this._resumePreviewAfterCollection('stage_complete');
                     this._isAllSessionsMode = false;
 
                     // 【修改】使用全屏弹窗显示完成信息
@@ -2192,7 +2270,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 }
             }
 
-            // 单轮模式：显示正常完成信息
+            // 单轮模式：切回 preview + 显示正常完成信息
+            this._resumePreviewAfterCollection('stage_complete');
             const hasMoreStages = this.currentStageIndex < this.stages.length - 1;
             const nextStageName = hasMoreStages ? this.stages[this.currentStageIndex + 1]?.name : '';
 
@@ -2420,15 +2499,16 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this.updateGestureList();
             this.updateStatus('采集完成');
 
-            // 【新增】全部轮次模式：检查是否需要继续下一轮（与离散手势逻辑一致）
+            // 【修复 Issue 1 二次审核】先判断全部轮次模式，避免与 showRestCountdownAndContinue 重复切流
             if (this._isAllSessionsMode) {
                 const hasMoreSessions = this.currentSessionIndex < this.sessionCount - 1;
                 if (hasMoreSessions) {
-                    // 还有更多轮次，显示休息倒计时后自动开始下一轮
+                    // 还有更多轮次：showRestCountdownAndContinue 内部已处理 stream 切换
                     this.showRestCountdownAndContinue();
                     return;
                 } else {
-                    // 所有轮次完成
+                    // 所有轮次完成 → 切回 preview
+                    this._resumePreviewAfterCollection('stage_complete');
                     this._isAllSessionsMode = false;
 
                     // 使用全屏弹窗显示完成信息
@@ -2453,7 +2533,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 }
             }
 
-            // 单轮模式：显示正常完成信息
+            // 单轮模式：切回 preview + 显示正常完成信息
+            this._resumePreviewAfterCollection('stage_complete');
             const hasMoreStages = this.currentStageIndex < this.stages.length - 1;
             const nextStageName = hasMoreStages ? this.stages[this.currentStageIndex + 1]?.name : '';
 
@@ -2516,11 +2597,83 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             }
         }
 
-        updateControlButtons(running) {
+        /**
+         * 【修复 Issue 2】获取有效的 session_id。
+         * 优先级：页面上 sessionIdInput > collectionConfig.subject.id > localStorage user id > 默认
+         */
+        _getEffectiveSessionId() {
+            // 1. 页面上的 session ID 输入框
+            const sessionIdInput = document.getElementById('sessionIdInput');
+            if (sessionIdInput && sessionIdInput.value.trim()) {
+                return sessionIdInput.value.trim();
+            }
+            // 2. 采集配置中的受试者 ID
+            if (this.collectionConfig?.subject?.id) {
+                return this.collectionConfig.subject.id;
+            }
+            // 3. localStorage 中的用户 ID
+            const userData = JSON.parse(localStorage.getItem('emg_current_user') || '{}');
+            if (userData.id) {
+                return userData.id;
+            }
+            // 4. 默认
+            return `S${Date.now().toString().slice(-6)}`;
+        }
+
+        /**
+         * 【修复 Issue 4】正常完成 collection 后切回 preview stream。
+         * 带防重入：同一 reason 在 5 秒内最多调用一次。
+         */
+        _resumePreviewAfterCollection(reason) {
+            const now = Date.now();
+            const lastCall = this._lastPreviewResumeCall || {};
+            if (lastCall.reason === reason && (now - (lastCall.time || 0)) < 5000) {
+                console.log(`[Collection] _resumePreviewAfterCollection("${reason}") 跳过（5s 内已调用）`);
+                return;
+            }
+            this._lastPreviewResumeCall = { reason, time: now };
+
+            if (!window.BleControl || !window.BleControl.isConnected) {
+                console.log('[Collection] 设备未连接，跳过 preview 恢复');
+                return;
+            }
+            if (this._switchInProgress) {
+                console.log('[Collection] 切流进行中，跳过 preview 恢复');
+                return;
+            }
+
+            console.log(`[Collection] 切回 preview stream (reason: ${reason})`);
+            // 延迟给 close H5 和 stop collection 一些时间
+            setTimeout(() => {
+                if (!this._switchInProgress && window.BleControl && window.BleControl.isConnected) {
+                    window.BleControl.switchCollectionToPreview();
+                }
+            }, 800);
+        }
+
+        _setAllButtonsDisabled(disabled) {
             const startBtn = document.getElementById('startTaskBtn');
             const testBtn = document.getElementById('testModeBtn');
             const stopBtn = document.getElementById('stopTaskBtn');
             const abortBtn = document.getElementById('abortTaskBtn');
+            const startAllBtn = document.getElementById('startAllSessionsBtn');
+            if (startBtn) startBtn.disabled = disabled;
+            if (testBtn) testBtn.disabled = disabled;
+            if (stopBtn) stopBtn.disabled = disabled;
+            if (abortBtn) abortBtn.disabled = disabled;
+            if (startAllBtn) startAllBtn.disabled = disabled;
+        }
+
+        updateControlButtons(running) {
+            // 【新增】切流进行中时所有按钮已禁用，不覆盖
+            if (this._switchInProgress) {
+                return;
+            }
+            const startBtn = document.getElementById('startTaskBtn');
+            const testBtn = document.getElementById('testModeBtn');
+            const stopBtn = document.getElementById('stopTaskBtn');
+            const abortBtn = document.getElementById('abortTaskBtn');
+            const startAllBtn = document.getElementById('startAllSessionsBtn');
 
             if (this._isResumeMode && !running) {
                 // 续采准备态：startTaskBtn 改为"开始续采"，全轮次/测试禁用
@@ -2530,6 +2683,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 }
                 if (testBtn) testBtn.disabled = true;
                 if (stopBtn) stopBtn.disabled = true;
+                if (startAllBtn) startAllBtn.disabled = true;
                 // abortBtn 作为"放弃断点"
                 if (abortBtn) {
                     abortBtn.innerHTML = '<i class="fas fa-times-circle"></i> 放弃断点';
@@ -2544,6 +2698,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 }
                 if (testBtn) testBtn.disabled = running;
                 if (stopBtn) stopBtn.disabled = !running;
+                if (startAllBtn) startAllBtn.disabled = running;
                 if (abortBtn) {
                     abortBtn.innerHTML = '<i class="fas fa-exclamation-triangle"></i> 异常中断';
                     abortBtn.style.background = '#f97316';

@@ -91,6 +91,16 @@ DEFAULT_CONFIG = {
     'frames_per_packet': 9,
 }
 
+# ================= Preview / Collection 流切换配置 =================
+# STOP → 下一次 START 之间的等待时间（ms），给 ESP32 sd_write_task 足够时间关闭 bin
+STREAM_SWITCH_DELAY_MS = 3000
+# TIMESTAMP 发送后 → START 之间的等待时间（ms），确保 ESP32 更新了文件名
+TIMESTAMP_TO_START_DELAY_MS = 200
+# preview bin 文件名前缀标识（用于区分 preview bin 和 collection bin）
+PREVIEW_FILENAME_PREFIX = "PREVIEW"
+# collection bin 文件名前缀标识（用于区分 collection bin）
+COLLECTION_FILENAME_PREFIX = "COLLECT"
+
 # ================= 转换系数 =================
 SCALE_ACCEL = 32.0 / 32768.0              # V2 默认: LSM6DSV32X ±32g
 SCALE_ACCEL_V1 = 16.0 / 32768.0           # V1: ICM-20948 ±16g
@@ -362,6 +372,7 @@ class DeviceState:
     last_packet_counter: int = -1  # 上一包 counters，用于检测 BLE 丢包
     last_data_time: float = 0.0  # 【新增】最后收到数据的时间戳
     sd_filename: Optional[str] = None  # 【新增】当前采集的SD卡bin文件名前缀
+    stream_mode: str = "idle"  # "idle" | "preview" | "collection" — 当前流模式
 
     config: Dict = field(default_factory=lambda: DEFAULT_CONFIG.copy())
     data_buffer: deque = field(default_factory=lambda: deque(maxlen=500))
@@ -384,6 +395,7 @@ class DeviceState:
         self.last_packet_counter = -1
         self.data_buffer.clear()
         self.sd_filename = None  # 【新增】重置SD卡文件名
+        self.stream_mode = "idle"  # 【新增】重置流模式
 
         # 重置对应设备的滤波器状态
         if FILTER_ENABLED and HAS_SCIPY:
@@ -416,6 +428,7 @@ class DeviceState:
             'num_imus': self.num_imus,
             'firmware_version': self.firmware_version,
             'hardware_version': self.hardware_version,
+            'stream_mode': self.stream_mode,
         }
 
 
@@ -1177,6 +1190,7 @@ async def disconnect_device(ws, device_id: int, silent=False):
     try:
         if dev.is_streaming:
             await stop_stream(ws, device_id, silent=True)
+            dev.stream_mode = "idle"
 
         if dev.client:
             try:
@@ -1405,10 +1419,12 @@ async def start_all(ws):
     })
 
     # 【新增】广播bin文件名和设备名称事件给数据端（realtimeEngine）
+    # 旧 API (start_all) 无法确定 stream_mode，标记为 "legacy"
     if sd_filenames or device_names:
         await broadcast_event('sd_filenames_updated', {
             'sd_filenames': sd_filenames,
             'device_names': device_names,  # 【新增】BLE设备名称
+            'stream_mode': 'legacy',  # 旧 API 无法区分 preview/collection
         })
 
 
@@ -1433,6 +1449,412 @@ async def stop_all(ws):
             'dev2': {'total': state.dev2.total_frames, 'lost': state.dev2.lost_frames},
         }
     })
+
+
+# ================= Preview / Collection 流管理 =================
+
+def _build_stream_filename(dev, prefix_hint=None):
+    """构建 stream 的 bin 文件名前缀，区分 preview / collection。
+
+    Args:
+        dev: DeviceState
+        prefix_hint: "PREVIEW" | "COLLECT" | None (自动从 stream_mode 推断)
+
+    Returns:
+        str: 文件名前缀，如 "S001_L_260601_143025" 或 "PREVIEW_L_260601_143025"
+    """
+    now_str = datetime.now().strftime("%y%m%d_%H%M%S")
+    hand_label = "L" if dev.device_id == 1 else "R"
+
+    if prefix_hint is None:
+        prefix_hint = "PREVIEW" if dev.stream_mode == "preview" else "COLLECT"
+
+    if prefix_hint == "PREVIEW":
+        # preview bin: PREVIEW_{hand}_{timestamp}
+        return f"{PREVIEW_FILENAME_PREFIX}_{hand_label}_{now_str}"
+    elif state.session_id:
+        # collection bin with session id: S001_L_260601_143025
+        return f"{state.session_id}_{hand_label}_{now_str}"
+    else:
+        # collection bin without session id: COLLECT_L_260601_143025
+        return f"{COLLECTION_FILENAME_PREFIX}_{hand_label}_{now_str}"
+
+
+async def _do_start_stream_for_device(dev, filename_str):
+    """对单个设备执行: TIMESTAMP → delay → subscribe → START 的底层逻辑。
+
+    Returns:
+        bool: 成功返回 True
+    """
+    try:
+        # 1. 发送 TIMESTAMP（SD 卡文件名）
+        filename_bytes = filename_str.encode('ascii')
+        if len(filename_bytes) > 31:
+            filename_bytes = filename_bytes[:31]
+        filename_cmd = bytes([CMD_MAP['SET_FILENAME']]) + filename_bytes
+        await send_control_command(dev, filename_cmd)
+        log(f"[Dev{dev.device_id}] TIMESTAMP 已发送: {filename_str}")
+
+        # 2. 等待 ESP32 处理 TIMESTAMP
+        await asyncio.sleep(TIMESTAMP_TO_START_DELAY_MS / 1000.0)
+
+        # 3. 订阅 EMG 数据通知
+        handler = create_notification_handler(dev)
+        await dev.client.start_notify(EMG_DATA_CHAR_UUID, handler)
+        log(f"[Dev{dev.device_id}] EMG 数据通知已订阅")
+
+        # 4. V2 额外 settle delay
+        if dev.hw_version == "V2":
+            await asyncio.sleep(0.25)
+
+        # 5. 发送 START 命令
+        await send_control_command(dev, bytes([CMD_MAP['START']]))
+        log(f"[Dev{dev.device_id}] START 命令已发送")
+
+        dev.sd_filename = filename_str
+        dev.is_streaming = True
+        return True
+
+    except Exception as e:
+        log(f"[Dev{dev.device_id}] 启动 stream 失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+async def _do_stop_stream_for_device(dev):
+    """对单个设备执行: STOP → unsubscribe 的底层逻辑。"""
+    try:
+        if dev.is_streaming and dev.client and dev.is_connected():
+            await send_control_command(dev, bytes([CMD_MAP['STOP']]))
+            log(f"[Dev{dev.device_id}] STOP 命令已发送")
+            try:
+                await dev.client.stop_notify(EMG_DATA_CHAR_UUID)
+            except Exception:
+                pass
+        dev.is_streaming = False
+    except Exception as e:
+        log(f"[Dev{dev.device_id}] 停止 stream 失败: {e}")
+        dev.is_streaming = False
+
+
+async def start_preview_stream(ws, device_id=None):
+    """启动 preview stream。
+
+    对指定设备（或所有已连接设备）发送 TIMESTAMP(preview) + START。
+    preview bin 文件名含 PREVIEW_ 前缀，不参与 H5 同步。
+    """
+    devices_to_start = []
+    if device_id is not None:
+        dev = state.get_device(device_id)
+        if dev.is_connected() and not dev.is_streaming:
+            devices_to_start.append(dev)
+    else:
+        for did in [1, 2]:
+            dev = state.get_device(did)
+            if dev.is_connected() and not dev.is_streaming:
+                devices_to_start.append(dev)
+
+    if not devices_to_start:
+        log("[preview] 没有需要启动 preview 的设备（已全部 streaming 或未连接）")
+        return
+
+    started_ids = []
+    for dev in devices_to_start:
+        dev.reset_stats()
+        dev.stream_mode = "preview"
+        filename_str = _build_stream_filename(dev, prefix_hint="PREVIEW")
+        ok = await _do_start_stream_for_device(dev, filename_str)
+        if ok:
+            started_ids.append(dev.device_id)
+            log(f"[preview] Dev{dev.device_id} preview stream 已启动: {filename_str}")
+
+    if ws:
+        await send_to_control(ws, 'start_preview_stream', {
+            'success': True,
+            'started': started_ids,
+            'stream_mode': 'preview',
+        })
+
+
+async def stop_preview_stream(ws, device_id=None, silent=False):
+    """停止 preview stream。"""
+    devices_to_stop = []
+    if device_id is not None:
+        dev = state.get_device(device_id)
+        if dev.stream_mode == "preview" and dev.is_streaming:
+            devices_to_stop.append(dev)
+    else:
+        for did in [1, 2]:
+            dev = state.get_device(did)
+            if dev.stream_mode == "preview" and dev.is_streaming:
+                devices_to_stop.append(dev)
+
+    stopped_ids = []
+    for dev in devices_to_stop:
+        await _do_stop_stream_for_device(dev)
+        dev.stream_mode = "idle"
+        stopped_ids.append(dev.device_id)
+        log(f"[preview] Dev{dev.device_id} preview stream 已停止")
+
+    if ws and not silent:
+        await send_to_control(ws, 'stop_preview_stream', {
+            'success': True,
+            'stopped': stopped_ids,
+            'stream_mode': 'preview',
+        })
+
+
+async def stop_collection_stream(ws, device_id=None, silent=False):
+    """停止 collection stream。"""
+    devices_to_stop = []
+    if device_id is not None:
+        dev = state.get_device(device_id)
+        if dev.stream_mode == "collection" and dev.is_streaming:
+            devices_to_stop.append(dev)
+    else:
+        for did in [1, 2]:
+            dev = state.get_device(did)
+            if dev.stream_mode == "collection" and dev.is_streaming:
+                devices_to_stop.append(dev)
+
+    stopped_ids = []
+    sd_filenames = {}
+    for dev in devices_to_stop:
+        sd_filenames[f'dev{dev.device_id}'] = dev.sd_filename
+        await _do_stop_stream_for_device(dev)
+        dev.stream_mode = "idle"
+        stopped_ids.append(dev.device_id)
+        log(f"[collection] Dev{dev.device_id} collection stream 已停止: {dev.sd_filename}")
+
+    # 等待 ESP32 sd_write_task drain + close bin
+    log(f"[collection] 等待 {STREAM_SWITCH_DELAY_MS}ms 让 ESP32 关闭 bin...")
+    await asyncio.sleep(STREAM_SWITCH_DELAY_MS / 1000.0)
+
+    if ws and not silent:
+        await send_to_control(ws, 'stop_collection_stream', {
+            'success': True,
+            'stopped': stopped_ids,
+            'sd_filenames': sd_filenames,
+            'stream_mode': 'collection',
+        })
+
+    # 广播 collection_stopped 事件
+    await broadcast_event('collection_stopped', {
+        'stopped': stopped_ids,
+        'sd_filenames': sd_filenames,
+    })
+
+
+async def switch_preview_to_collection(ws):
+    """核心：将 preview stream 切换为 collection stream。
+
+    时序:
+    1. 停止所有 preview stream
+    2. 等待 STREAM_SWITCH_DELAY_MS（让 ESP32 关闭 preview bin）
+    3. 发送 collection TIMESTAMP 给每个已连接设备
+    4. 等待 TIMESTAMP_TO_START_DELAY_MS
+    5. 发送 START（collection stream）
+    6. 返回 collection bin 文件名
+
+    Returns:
+        通过 send_to_control 返回 {success, collection_bins: {dev1, dev2}, started: [...]}
+    """
+    action = 'switch_preview_to_collection'
+    log("=" * 50)
+    log(f"[switch] === preview → collection 切换开始 ===")
+    log("=" * 50)
+
+    connected_ids = state.get_connected_devices()
+    if not connected_ids:
+        await send_to_control(ws, action, {
+            'success': False,
+            'error': '没有已连接的设备',
+        })
+        return
+
+    # ---- Phase 1: 停止所有活跃 stream ----
+    log("[switch] Phase 1: 停止活跃 stream...")
+    any_was_streaming = False
+    for did in connected_ids:
+        dev = state.get_device(did)
+        if dev.is_streaming:
+            await _do_stop_stream_for_device(dev)
+            dev.stream_mode = "idle"
+            any_was_streaming = True
+            log(f"[switch] Dev{did} 已发送 STOP")
+        else:
+            log(f"[switch] Dev{did} 已 idle，跳过 STOP")
+
+    # ---- Phase 2: 等待 ESP32 关闭 bin（仅当确实有活跃 stream 时） ----
+    skipped_delay_when_idle = not any_was_streaming
+    if any_was_streaming:
+        delay_s = STREAM_SWITCH_DELAY_MS / 1000.0
+        log(f"[switch] Phase 2: 等待 {STREAM_SWITCH_DELAY_MS}ms (ESP32 关闭 bin)...")
+        await asyncio.sleep(delay_s)
+    else:
+        log(f"[switch] Phase 2: SKIP — 所有设备已 idle，无需等待 {STREAM_SWITCH_DELAY_MS}ms")
+
+    # ---- Phase 3: 启动 collection stream ----
+    log("[switch] Phase 3: 启动 collection stream...")
+    collection_bins = {}
+    started_ids = []
+    device_names = {}
+
+    for did in connected_ids:
+        dev = state.get_device(did)
+        if not dev.is_connected():
+            log(f"[switch] Dev{did} 已断开，跳过")
+            continue
+
+        dev.reset_stats()
+        dev.stream_mode = "collection"
+
+        # 生成 collection bin 文件名（含 session_id，不含 PREVIEW_ 前缀）
+        filename_str = _build_stream_filename(dev, prefix_hint="COLLECT")
+        ok = await _do_start_stream_for_device(dev, filename_str)
+        if ok:
+            started_ids.append(did)
+            collection_bins[f'dev{did}'] = filename_str
+            if dev.name:
+                device_names[f'dev{did}'] = dev.name
+            log(f"[switch] Dev{did} collection stream 已启动: {filename_str}")
+
+    if not started_ids:
+        await send_to_control(ws, action, {
+            'success': False,
+            'error': '所有设备启动 collection stream 失败',
+        })
+        return
+
+    log("=" * 50)
+    log(f"[switch] === preview → collection 切换完成 ===")
+    log(f"[switch] collection bins: {collection_bins}")
+    log("=" * 50)
+
+    # 生成 collection_stream_id（ISO timestamp，前端和 realtimeEngine 共用）
+    collection_stream_id = datetime.now().isoformat()
+
+    # ---- Phase 4: 返回结果 + 广播事件 ----
+    await send_to_control(ws, action, {
+        'success': True,
+        'started': started_ids,
+        'collection_bins': collection_bins,
+        'device_names': device_names,
+        'stream_mode': 'collection',
+        'collection_stream_id': collection_stream_id,
+        'switch_delay_ms': STREAM_SWITCH_DELAY_MS,
+        'timestamp_to_start_delay_ms': TIMESTAMP_TO_START_DELAY_MS,
+        'skipped_delay_when_idle': skipped_delay_when_idle,
+    })
+
+    # 广播 collection stream 的 sd_filenames（realtimeEngine 监听此事件，作为兜底）
+    await broadcast_event('sd_filenames_updated', {
+        'sd_filenames': collection_bins,
+        'device_names': device_names,
+        'stream_mode': 'collection',
+        'collection_stream_id': collection_stream_id,
+        'switch_delay_ms': STREAM_SWITCH_DELAY_MS,
+    })
+
+
+async def switch_collection_to_preview(ws):
+    """核心：将 collection stream 切换回 preview stream。
+
+    时序:
+    1. 停止所有 collection stream
+    2. 等待 STREAM_SWITCH_DELAY_MS
+    3. 发送 preview TIMESTAMP
+    4. 等待 TIMESTAMP_TO_START_DELAY_MS
+    5. 发送 START（preview stream）
+    """
+    action = 'switch_collection_to_preview'
+    log("=" * 50)
+    log(f"[switch] === collection → preview 切换开始 ===")
+    log("=" * 50)
+
+    connected_ids = state.get_connected_devices()
+    if not connected_ids:
+        await send_to_control(ws, action, {
+            'success': False,
+            'error': '没有已连接的设备',
+        })
+        return
+
+    # ---- Phase 1: 停止所有 collection stream ----
+    log("[switch] Phase 1: 停止 collection stream...")
+    for did in connected_ids:
+        dev = state.get_device(did)
+        if dev.is_streaming:
+            await _do_stop_stream_for_device(dev)
+            dev.stream_mode = "idle"
+            log(f"[switch] Dev{did} 已发送 STOP")
+
+    # ---- Phase 2: 等待 ESP32 关闭 collection bin ----
+    delay_s = STREAM_SWITCH_DELAY_MS / 1000.0
+    log(f"[switch] Phase 2: 等待 {STREAM_SWITCH_DELAY_MS}ms (ESP32 关闭 collection bin)...")
+    await asyncio.sleep(delay_s)
+
+    # ---- Phase 3: 启动 preview stream ----
+    log("[switch] Phase 3: 启动 preview stream...")
+    started_ids = []
+
+    for did in connected_ids:
+        dev = state.get_device(did)
+        if not dev.is_connected():
+            log(f"[switch] Dev{did} 已断开，跳过")
+            continue
+
+        dev.reset_stats()
+        dev.stream_mode = "preview"
+
+        # preview bin 文件名含 PREVIEW_ 前缀
+        filename_str = _build_stream_filename(dev, prefix_hint="PREVIEW")
+        ok = await _do_start_stream_for_device(dev, filename_str)
+        if ok:
+            started_ids.append(did)
+            log(f"[switch] Dev{did} preview stream 已启动: {filename_str}")
+
+    log("=" * 50)
+    log(f"[switch] === collection → preview 切换完成 ===")
+    log("=" * 50)
+
+    await send_to_control(ws, action, {
+        'success': True,
+        'started': started_ids,
+        'stream_mode': 'preview',
+    })
+
+
+async def stop_any_stream(ws, device_id=None, silent=False):
+    """停止任意 stream（preview 或 collection），不区分模式。
+
+    用于：返回首页、断开连接等场景。
+    """
+    devices_to_stop = []
+    if device_id is not None:
+        dev = state.get_device(device_id)
+        if dev.is_streaming:
+            devices_to_stop.append(dev)
+    else:
+        for did in [1, 2]:
+            dev = state.get_device(did)
+            if dev.is_streaming:
+                devices_to_stop.append(dev)
+
+    stopped_ids = []
+    for dev in devices_to_stop:
+        old_mode = dev.stream_mode
+        await _do_stop_stream_for_device(dev)
+        dev.stream_mode = "idle"
+        stopped_ids.append(dev.device_id)
+        log(f"[stop_any] Dev{dev.device_id} stream 已停止 (was: {old_mode})")
+
+    if ws and not silent:
+        await send_to_control(ws, 'stop_any_stream', {
+            'success': True,
+            'stopped': stopped_ids,
+        })
 
 
 async def get_status(ws):
@@ -1543,7 +1965,77 @@ async def handle_control_client(websocket):
                 
                 elif action == 'stop_all':
                     await stop_all(websocket)
-                
+
+                # 【新增】Preview / Collection 流管理命令
+                elif action == 'start_preview_stream':
+                    await start_preview_stream(websocket)
+
+                elif action == 'start_preview_stream_single':
+                    device_id = data.get('device_id', 1)
+                    await start_preview_stream(websocket, device_id=device_id)
+
+                elif action == 'stop_preview_stream':
+                    await stop_preview_stream(websocket)
+
+                elif action == 'stop_preview_stream_single':
+                    device_id = data.get('device_id', 1)
+                    await stop_preview_stream(websocket, device_id=device_id)
+
+                elif action == 'start_collection_stream':
+                    # 直接启动 collection stream（不经过 preview→collection 切换）
+                    # 用于设备已 idle 且需要直接进入 collection 的场景
+                    connected_ids = state.get_connected_devices()
+                    if not connected_ids:
+                        await send_to_control(websocket, 'start_collection_stream', {
+                            'success': False, 'error': '没有已连接的设备',
+                        })
+                    else:
+                        collection_bins = {}
+                        started = []
+                        for did in connected_ids:
+                            dev = state.get_device(did)
+                            if dev.is_connected() and not dev.is_streaming:
+                                dev.reset_stats()
+                                dev.stream_mode = "collection"
+                                fn = _build_stream_filename(dev, prefix_hint="COLLECT")
+                                if await _do_start_stream_for_device(dev, fn):
+                                    started.append(did)
+                                    collection_bins[f'dev{did}'] = fn
+                        await send_to_control(websocket, 'start_collection_stream', {
+                            'success': len(started) > 0,
+                            'started': started,
+                            'collection_bins': collection_bins,
+                            'stream_mode': 'collection',
+                        })
+                        if collection_bins:
+                            await broadcast_event('sd_filenames_updated', {
+                                'sd_filenames': collection_bins,
+                                'stream_mode': 'collection',
+                            })
+
+                elif action == 'stop_collection_stream':
+                    await stop_collection_stream(websocket)
+
+                elif action == 'stop_collection_stream_single':
+                    device_id = data.get('device_id', 1)
+                    await stop_collection_stream(websocket, device_id=device_id)
+
+                elif action == 'switch_preview_to_collection':
+                    # 核心：preview → collection 切流
+                    await switch_preview_to_collection(websocket)
+
+                elif action == 'switch_collection_to_preview':
+                    # 核心：collection → preview 切流
+                    await switch_collection_to_preview(websocket)
+
+                elif action == 'stop_any_stream':
+                    # 停止任意活跃流（用于返回首页/断开连接）
+                    await stop_any_stream(websocket)
+
+                elif action == 'stop_any_stream_single':
+                    device_id = data.get('device_id', 1)
+                    await stop_any_stream(websocket, device_id=device_id)
+
                 elif action == 'status':
                     await get_status(websocket)
 

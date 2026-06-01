@@ -439,6 +439,50 @@ class HDF5StorageServer:
                 self.f.attrs["sd_bin_dev2"] = sd_bin_dev2
                 debug_log(f"   SD卡源文件(设备2/右手): {sd_bin_dev2}_emg.bin, {sd_bin_dev2}_imu.bin")
 
+            # 【新增】stream 模式元数据（preview/collection 切流方案）
+            stream_mode = params.get("stream_mode", "unknown")
+            self.f.attrs["stream_mode"] = str(stream_mode)
+            debug_log(f"   stream_mode: {stream_mode}")
+
+            collection_stream_id = params.get("collection_stream_id")
+            if collection_stream_id:
+                self.f.attrs["collection_stream_id"] = str(collection_stream_id)
+                debug_log(f"   collection_stream_id: {collection_stream_id}")
+
+            stream_switch_delay_ms = params.get("stream_switch_delay_ms")
+            if stream_switch_delay_ms is not None:
+                self.f.attrs["stream_switch_delay_ms"] = int(stream_switch_delay_ms)
+
+            timestamp_to_start_delay_ms = params.get("timestamp_to_start_delay_ms")
+            if timestamp_to_start_delay_ms is not None:
+                self.f.attrs["timestamp_to_start_delay_ms"] = int(timestamp_to_start_delay_ms)
+
+            # bin_pair_source 标识 bin 来源
+            bin_pair_source = params.get("bin_pair_source", "unknown")
+            self.f.attrs["bin_pair_source"] = str(bin_pair_source)
+            # 合法值: "collection_stream" | "preview_stream" | "legacy" | "unknown"
+
+            # preview bin 仅作 debug 记录，不参与同步
+            preview_bin_dev1 = params.get("preview_bin_dev1")
+            if preview_bin_dev1:
+                self.f.attrs["preview_bin_dev1"] = str(preview_bin_dev1)
+            preview_bin_dev2 = params.get("preview_bin_dev2")
+            if preview_bin_dev2:
+                self.f.attrs["preview_bin_dev2"] = str(preview_bin_dev2)
+
+            # sd_imu_bin attrs（兼容未来扩展）
+            sd_imu_bin_dev1 = params.get("sd_imu_bin_dev1")
+            if sd_imu_bin_dev1:
+                self.f.attrs["sd_imu_bin_dev1"] = str(sd_imu_bin_dev1)
+            sd_imu_bin_dev2 = params.get("sd_imu_bin_dev2")
+            if sd_imu_bin_dev2:
+                self.f.attrs["sd_imu_bin_dev2"] = str(sd_imu_bin_dev2)
+
+            # stream_format_version: 2 = 新格式（一对一），1 = 旧格式（可能一对多）
+            self.f.attrs["stream_format_version"] = 2
+            debug_log(f"   stream_format_version: 2 (one-H5-one-bin)")
+
+
             # 【新增】保存BLE设备名称到HDF5属性（用于追溯数据来源）
             # 格式: "WristBand_3A76" -> 扫描时连接的BLE设备名称
             if ble_dev1:
@@ -1143,6 +1187,18 @@ class HDF5StorageServer:
 
                 # 注意：sync_status 保持 pending，不受 collection_status 影响
                 # 只有 bin_sync_tool 才能将 sync_status 改为 synced 或 sync_failed
+
+                # ---- stream 关闭元数据 ----
+                stream_mode = self.f.attrs.get("stream_mode", "unknown")
+                if isinstance(stream_mode, bytes):
+                    stream_mode = stream_mode.decode("utf-8")
+                if stream_mode == "collection":
+                    self.f.attrs["collection_stream_stopped_at"] = datetime.now().isoformat()
+                    self.f.attrs["collection_bin_finalized"] = "true"
+                    debug_log(f"   collection_stream_stopped_at: {self.f.attrs['collection_stream_stopped_at']}")
+                elif stream_mode == "preview":
+                    self.f.attrs["preview_bin_finalized"] = "true"
+                    debug_log(f"   preview_bin_finalized: true")
 
                 # ==================== Phase 3: frame/time range 与 segment/bin 元数据 ====================
                 self._write_segment_metadata(params)

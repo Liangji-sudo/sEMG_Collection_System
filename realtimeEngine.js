@@ -98,6 +98,13 @@ class RealtimeEngine extends EventEmitter {
         // 【新增】BLE设备名称（用于HDF5追溯数据来源）
         this.device_names = { dev1: null, dev2: null };
 
+        // 【新增】Stream mode 状态（preview/collection 切流方案）
+        this.streamMode = 'idle';  // 'idle' | 'preview' | 'collection'
+        this.collectionStreamId = null;  // collection stream 的唯一标识（ISO timestamp）
+        this.collectionBinFilenames = { dev1: null, dev2: null };  // collection stream 产生的 bin
+        this.streamSwitchDelayMs = 3000;  // STOP→START 延迟（与 ble_server.py 保持一致）
+        this.timestampToStartDelayMs = 200;
+
         // 【新增】录像同步相关
         this.recordingSessionId = null;  // 录像会话ID
         this.isMultiSession = false;     // 是否为多轮次采集
@@ -295,8 +302,31 @@ class RealtimeEngine extends EventEmitter {
             console.log(`  resumeReason: ${this.resumeReason}`);
         }
 
-        // 注意：不在这里重置sd_filenames，因为sd_filenames_updated事件会在start_all之后到达
-        // sd_filenames的管理完全由onSdFilenamesUpdated负责
+        // 【修复 Issue 3】直接从 collection_start payload 获取 collection_bins
+        // 不依赖异步 broadcast sd_filenames_updated 事件
+        if (data.collectionBins) {
+            this.streamMode = data.streamMode || 'collection';
+            this.collectionBinFilenames = {
+                dev1: data.collectionBins?.dev1 || null,
+                dev2: data.collectionBins?.dev2 || null
+            };
+            if (data.collectionDeviceNames) {
+                this.device_names = {
+                    dev1: data.collectionDeviceNames?.dev1 || this.device_names.dev1,
+                    dev2: data.collectionDeviceNames?.dev2 || this.device_names.dev2
+                };
+            }
+            this.collectionStreamId = data.collectionStreamId || new Date().toISOString();
+            console.log(`[realtimeEngine] ★ collection bins 来自 payload（同步）:`);
+            console.log(`  dev1: ${this.collectionBinFilenames.dev1 || '无'}`);
+            console.log(`  dev2: ${this.collectionBinFilenames.dev2 || '无'}`);
+            console.log(`  streamMode: ${this.streamMode}`);
+            console.log(`  collectionStreamId: ${this.collectionStreamId}`);
+        } else {
+            console.log(`[realtimeEngine] ⚠️ collection_start payload 中无 collectionBins，将等待 sd_filenames_updated 事件`);
+        }
+
+        // sd_filenames_updated 事件作为兜底（见 onSdFilenamesUpdated）
     }
 
     onCollectionPause() { this.collectionPaused = true; }
@@ -315,10 +345,11 @@ class RealtimeEngine extends EventEmitter {
         this.collectionPaused = false;
         // 【新增】重置测试模式标志
         this.isTestMode = false;
-        // 【修复】不再清空 sd_filenames
-        // 原因：在同一个采集会话中（从进入采集界面到离开），ESP32 持续录制到同一个 bin 文件
-        // sd_filenames 由 sd_filenames_updated 事件更新，只有在 start_all 时才会变化
-        // 如果在这里清空，第二次点击采集按钮时 sd_filenames 为空，导致 H5 文件缺少 bin 字段
+        // 【新增】重置 collection stream 状态（新 collection 需要新 stream）
+        // 注意：collectionBinFilenames 在新 collection stream 就绪时会更新
+        this.collectionStreamId = null;
+        this.collectionBinFilenames = { dev1: null, dev2: null };
+        // 【修复】不在 stop 时清空 sd_filenames（由 sd_filenames_updated 事件管理）
     }
 
     // 【新增】异常中断冻结 — 立即停止 append，不关闭 H5
@@ -366,12 +397,16 @@ class RealtimeEngine extends EventEmitter {
         // 清理 freeze 状态
         this.abortFreezeActive = false;
         this.pendingAbortFreeze = null;
+        // 【新增】清理 collection stream 状态
+        this.collectionStreamId = null;
+        this.collectionBinFilenames = { dev1: null, dev2: null };
+        this.streamMode = 'idle';
         // 注意：不调用 onCollectionStop，避免覆盖 H5 标记
     }
 
     // 【新增】处理SD卡文件名和设备名称更新事件
     // 此事件由ble_server.py在start_all成功后发送，包含当前实际连接设备的文件名和设备名称
-    onSdFilenamesUpdated(sd_filenames, device_names) {
+    onSdFilenamesUpdated(sd_filenames, device_names, stream_mode, collection_stream_id) {
         // 完全替换，只保存当前实际连接设备的文件名
         this.sd_filenames = {
             dev1: sd_filenames?.dev1 || null,
@@ -382,7 +417,28 @@ class RealtimeEngine extends EventEmitter {
             dev1: device_names?.dev1 || null,
             dev2: device_names?.dev2 || null
         };
-        console.log(`[realtimeEngine] SD卡文件名已更新: dev1=${this.sd_filenames.dev1 || '无'}, dev2=${this.sd_filenames.dev2 || '无'}`);
+
+        // 【新增】根据 stream_mode 更新 collection bin 记录
+        if (stream_mode === 'collection') {
+            this.streamMode = 'collection';
+            this.collectionBinFilenames = { ...this.sd_filenames };
+            // 【修复 Issue 2】优先使用 ble_server 传入的 collection_stream_id；只有未设置时才生成
+            if (collection_stream_id) {
+                this.collectionStreamId = collection_stream_id;
+            } else if (!this.collectionStreamId) {
+                this.collectionStreamId = new Date().toISOString();
+            }
+            console.log(`[realtimeEngine] ★ collection stream 已就绪 (event 兜底路径) ★`);
+            console.log(`[realtimeEngine]   collection_bins: dev1=${this.collectionBinFilenames.dev1 || '无'}, dev2=${this.collectionBinFilenames.dev2 || '无'}`);
+            console.log(`[realtimeEngine]   collection_stream_id: ${this.collectionStreamId}`);
+        } else if (stream_mode === 'preview') {
+            this.streamMode = 'preview';
+            console.log(`[realtimeEngine] preview stream (bin 不参与 H5 同步)`);
+        } else {
+            this.streamMode = stream_mode || 'unknown';
+        }
+
+        console.log(`[realtimeEngine] SD卡文件名已更新: dev1=${this.sd_filenames.dev1 || '无'}, dev2=${this.sd_filenames.dev2 || '无'}, stream_mode=${this.streamMode}`);
         console.log(`[realtimeEngine] BLE设备名称已更新: dev1=${this.device_names.dev1 || '无'}, dev2=${this.device_names.dev2 || '无'}`);
     }
 
@@ -574,12 +630,22 @@ class RealtimeEngine extends EventEmitter {
                 template_name: config.templateName || 'default',
                 subject_info: this.currentUser,
                 start_time: this.stage_start_time,
-                // 【新增】传递SD卡bin文件名，用于HDF5溯源
-                sd_bin_dev1: this.sd_filenames.dev1,  // 例如 "S001_L_260312_143025"
-                sd_bin_dev2: this.sd_filenames.dev2,  // 例如 "S001_R_260312_143025"
+                // 【新增】传递 collection stream 的 SD 卡 bin 文件名（用于 HDF5 溯源）
+                // 使用 collectionBinFilenames（优先）或 sd_filenames
+                sd_bin_dev1: this.collectionBinFilenames.dev1 || this.sd_filenames.dev1,
+                sd_bin_dev2: this.collectionBinFilenames.dev2 || this.sd_filenames.dev2,
+                // 【新增】IMU bin 文件（兼容未来扩展）
+                sd_imu_bin_dev1: null,  // 当前 IMU bin 与 EMG bin 同名
+                sd_imu_bin_dev2: null,
                 // 【新增】传递BLE设备名称，用于追溯数据来源
                 ble_dev1: this.device_names.dev1,  // 例如 "WristBand_3A76"
                 ble_dev2: this.device_names.dev2,  // 例如 "WristBand_5B12"
+                // 【新增】stream mode 元数据（preview/collection 切流方案）
+                stream_mode: this.streamMode,  // "collection" | "preview" | "idle"
+                collection_stream_id: this.collectionStreamId,
+                stream_switch_delay_ms: this.streamSwitchDelayMs,
+                timestamp_to_start_delay_ms: this.timestampToStartDelayMs,
+                bin_pair_source: (this.streamMode === 'collection') ? 'collection_stream' : 'unknown',
                 // 【新增】录像同步信息
                 recording_session_id: this.recordingSessionId,  // 例如 "rec_20260314_153045_5"
                 is_multi_session: this.isMultiSession,          // 是否为多轮次采集
@@ -668,9 +734,15 @@ class RealtimeEngine extends EventEmitter {
                         return;
                     }
                     if (packet.type === 'emg_packet') { this.attributeEMGData(packet); return; }
-                    // 【新增】监听sd_filenames_updated事件（包含设备名称）
+                    // 【新增】监听sd_filenames_updated事件（包含设备名称、stream_mode、collection_stream_id）
                     if (packet.type === 'event' && packet.event === 'sd_filenames_updated') {
-                        this.onSdFilenamesUpdated(packet.sd_filenames, packet.device_names);
+                        this.onSdFilenamesUpdated(packet.sd_filenames, packet.device_names, packet.stream_mode, packet.collection_stream_id);
+                        return;
+                    }
+                    // 【新增】监听collection_stopped事件
+                    if (packet.type === 'event' && packet.event === 'collection_stopped') {
+                        console.log(`[realtimeEngine] collection stream 已停止: ${JSON.stringify(packet.sd_filenames)}`);
+                        this.streamMode = 'idle';
                         return;
                     }
 
@@ -1040,6 +1112,10 @@ class RealtimeEngine extends EventEmitter {
     }
 
     async saveDataToStorage(sensorData) {
+        // 【新增】preview stream 数据不写入 H5（仅 collection stream 写入）
+        if (this.streamMode !== 'collection') {
+            return;
+        }
         if (this.isClosingStageFile || !this.stageFileOpen) return;
 
         try {
