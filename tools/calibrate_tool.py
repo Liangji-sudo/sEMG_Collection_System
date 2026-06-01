@@ -169,6 +169,9 @@ class CalibrateTool(QMainWindow):
         self.lbl_file = QLabel('未选择文件')
         self.lbl_file.setStyleSheet('color: #666; font-style: italic;')
         control_layout.addWidget(self.lbl_file)
+        self.lbl_status = QLabel('')
+        self.lbl_status.setStyleSheet('color: #666; font-size: 9px;')
+        control_layout.addWidget(self.lbl_status)
 
         control_layout.addStretch()
 
@@ -369,9 +372,12 @@ class CalibrateTool(QMainWindow):
             self.lbl_file.setText(filename)
             self.lbl_file.setStyleSheet('color: #333; font-weight: bold;')
 
-            # 读取数据
+            # 读取数据（必须先加载 EMG 以获取 dataset 名，供 _load_status_attrs 使用）
             self.load_emg_data()
             self.load_imu_data()
+
+            # 读取 H5 attrs（依赖 emg*_loaded_name）
+            self._load_status_attrs()
             self.load_prompt_data()
 
             # 计算并保存全局的Y轴范围
@@ -393,6 +399,92 @@ class CalibrateTool(QMainWindow):
             QMessageBox.critical(self, '错误', f'加载文件失败:\n{str(e)}')
             print(f'[CalibrateTool] 加载失败: {e}')
 
+    def _load_status_attrs(self):
+        """Phase 6: 读取并显示 H5 同步/采集状态 attrs"""
+        f = self.h5_file
+        parts = []
+
+        def _s(k, d='-'):
+            v = f.attrs.get(k)
+            if isinstance(v, bytes): v = v.decode('utf-8')
+            return str(v) if v is not None else d
+
+        def _safe_int(v, d=1):
+            try: return int(v)
+            except (ValueError, TypeError): return d
+
+        def _safe_bool(v, d=False):
+            if isinstance(v, bool): return v
+            if isinstance(v, (int, float)): return bool(v)
+            if isinstance(v, str): return v.lower() in ('true', '1', 'yes')
+            if isinstance(v, bytes): return v.decode('utf-8').lower() in ('true', '1', 'yes')
+            return d
+
+        sync = _s('sync_status')
+        cs = _s('collection_status')
+        seg = _safe_int(f.attrs.get('segment_index'), 1)
+        resumed = 'R' if _safe_bool(f.attrs.get('is_resumed')) else ''
+        cm = _s('channel_map_name')
+
+        if sync not in ('-', 'unknown'):
+            parts.append(f'sync: {sync}')
+        if cs != '-':
+            parts.append(f'collection: {cs}')
+        if resumed or seg > 1:
+            parts.append(f'seg: {seg}{resumed}')
+        if cm != '-':
+            parts.append(f'chan: {cm}')
+        # show which data source is loaded
+        ds_info = []
+        if getattr(self, 'emg1_loaded_name', None):
+            ds_info.append(self.emg1_loaded_name.replace('_adc',''))
+        if getattr(self, 'emg2_loaded_name', None):
+            ds_info.append(self.emg2_loaded_name.replace('_adc',''))
+        if ds_info:
+            parts.append('src: ' + ','.join(ds_info))
+
+        for k in ('last_sync_success_time', 'last_sync_error_time'):
+            v = f.attrs.get(k)
+            if v:
+                if isinstance(v, bytes): v = v.decode('utf-8')
+                parts.append(v[:19])
+
+        self.lbl_status.setText(' | '.join(parts) if parts else '')
+        if sync == 'synced':
+            self.lbl_status.setStyleSheet('color: #16a34a; font-size: 9px;')
+        elif sync in ('sync_failed',):
+            self.lbl_status.setStyleSheet('color: #dc2626; font-size: 9px;')
+        elif sync == 'pending':
+            self.lbl_status.setStyleSheet('color: #f59e0b; font-size: 9px;')
+        else:
+            self.lbl_status.setStyleSheet('color: #666; font-size: 9px;')
+
+        # 2kHz warning
+        has_2khz_loaded = (getattr(self, 'emg1_loaded_name', '') and '2khz' in self.emg1_loaded_name) or \
+                          (getattr(self, 'emg2_loaded_name', '') and '2khz' in self.emg2_loaded_name)
+        if has_2khz_loaded and sync != 'synced':
+            QMessageBox.warning(self, '2kHz 数据警告',
+                '当前查看的是 2kHz 同步数据，但 sync_status 不是 synced，结果可能不可信。\n'
+                '建议优先查看 250Hz 原始数据，或使用 hdf5_tool 同步工具重新同步。')
+
+        # diagnose old bug risk
+        try:
+            from bin_sync_tool import diagnose_frame_ids
+            diag = diagnose_frame_ids(self.h5_path)
+            for dev in ('emg1', 'emg2'):
+                d = diag.get(dev, {})
+                if d.get('risk') == 'high':
+                    QMessageBox.warning(self, '旧同步风险',
+                        f'{dev}: {d.get("risk_reason", "")}\n\n'
+                        '此 H5 疑似使用旧版包号映射采集，2kHz 同步数据不可信。\n'
+                        '建议使用 hdf5_tool 同步工具重新同步。\n\n250Hz 原始数据仍可正常查看。')
+                    break
+                elif d.get('risk') == 'medium':
+                    self.lbl_status.setText(
+                        (self.lbl_status.text() or '') + f' | WARN: {dev} frame_id issue')
+        except Exception:
+            pass
+
     def load_emg_data(self):
         """加载EMG数据"""
         self.emg1_data = None
@@ -401,29 +493,29 @@ class CalibrateTool(QMainWindow):
         self.emg2_sample_rate = 2000
         self.emg_start_time = None
 
-        # 尝试不同的数据集名称（按优先级排序）
-        emg1_names = ['emg1_2khz_adc', 'emg1_2khz', 'emg1_250hz_adc', 'emg1_250hz', 'emg1']
-        emg2_names = ['emg2_2khz_adc', 'emg2_2khz', 'emg2_250hz_adc', 'emg2_250hz', 'emg2']
+        # 默认优先 250Hz 原始数据，2kHz 为 fallback
+        emg1_names = ['emg1_250hz_adc', 'emg1_250hz', 'emg1_2khz_adc', 'emg1_2khz', 'emg1']
+        emg2_names = ['emg2_250hz_adc', 'emg2_250hz', 'emg2_2khz_adc', 'emg2_2khz', 'emg2']
+        self.emg1_loaded_name = None
+        self.emg2_loaded_name = None
 
         for name in emg1_names:
             if name in self.h5_file:
                 raw_data = self.h5_file[name][:]
                 self.emg1_data = self._extract_emg_channels(raw_data)
-                # 提取起始时间戳
+                self.emg1_loaded_name = name
                 if raw_data.dtype.names is not None and 'time' in raw_data.dtype.names:
                     self.emg_start_time = raw_data['time'][0]
-                    print(f'[CalibrateTool] EMG起始时间戳: {self.emg_start_time}')
-                if '250hz' in name:
-                    self.emg1_sample_rate = 250
-                print(f'[CalibrateTool] 已加载 {name}: shape={self.emg1_data.shape if self.emg1_data is not None else "None"}')
+                self.emg1_sample_rate = 250 if '250hz' in name else 2000
+                print(f'[CalibrateTool] 已加载 {name}: shape={self.emg1_data.shape}, rate={self.emg1_sample_rate}')
                 break
 
         for name in emg2_names:
             if name in self.h5_file:
                 self.emg2_data = self._extract_emg_channels(self.h5_file[name][:])
-                if '250hz' in name:
-                    self.emg2_sample_rate = 250
-                print(f'[CalibrateTool] 已加载 {name}: shape={self.emg2_data.shape if self.emg2_data is not None else "None"}')
+                self.emg2_loaded_name = name
+                self.emg2_sample_rate = 250 if '250hz' in name else 2000
+                print(f'[CalibrateTool] 已加载 {name}: shape={self.emg2_data.shape}, rate={self.emg2_sample_rate}')
                 break
 
     def _extract_emg_channels(self, data):
@@ -465,6 +557,9 @@ class CalibrateTool(QMainWindow):
             'imu1b': ['imu1b_100hz', 'imu1b_ble', 'imu1b'],
             'imu2a': ['imu2a_100hz', 'imu2a_ble', 'imu2a'],
             'imu2b': ['imu2b_100hz', 'imu2b_ble', 'imu2b'],
+            # legacy single-IMU names
+            'imu1_legacy': ['imu1_100hz', 'imu1_ble', 'imu1'],
+            'imu2_legacy': ['imu2_100hz', 'imu2_ble', 'imu2'],
         }
 
         for attr_name, possible_names in imu_mapping.items():

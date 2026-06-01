@@ -31,6 +31,8 @@ bin文件格式（来自ESP32固件）：
 
 import os
 import sys
+import json
+import shutil
 import struct
 import argparse
 import numpy as np
@@ -812,6 +814,8 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
             f.attrs["sync_error"] = "; ".join(validation_report['failure_reasons'])
             f.attrs["sync_validation_report"] = _format_validation_report(validation_report)
             f.attrs["channel_map_name"] = resolved_map_name
+            append_sync_history(f, action='sync', status='sync_failed',
+                                details={'reasons': validation_report['failure_reasons']})
             log("sync_status 已设为 'sync_failed'，详细信息已写入 H5 attrs")
 
             result = {
@@ -1074,6 +1078,8 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
             f.attrs["channel_map_name"] = resolved_map_name
             # 写入校验报告供后续审计
             f.attrs["sync_validation_report"] = _format_validation_report(validation_report)
+            append_sync_history(f, action='sync', status='synced',
+                                details={'device_id': device_id, 'frames_2khz': num_frames_2khz})
             log(f"同步完成！EMG 2kHz: {ds_2khz_name}, IMU: {imu_result.get('imu_status', 'skipped')}, 状态已设为synced")
         else:
             log(f"同步完成！EMG 2kHz: {ds_2khz_name}, IMU: {imu_result.get('imu_status', 'skipped')}, 状态保持pending（等待其他设备同步）")
@@ -1435,6 +1441,240 @@ def main():
         log(f"同步失败: {result.get('reason', 'unknown')}")
         sys.exit(1)
 
+
+# ===================== Phase 1: 只读诊断 =====================
+
+def diagnose_frame_ids(h5_path):
+    """只读诊断 H5 中 frame_id 健康状态 + 同步产物
+
+    Returns:
+        dict: {
+            'emg1': { 'count', 'has_2khz', 'frame_ids': [], 'duplicates', 'gap_count',
+                      'is_monotonic', 'overlap_ratio', 'risk', 'risk_reason' },
+            'emg2': { ... },
+            'sync_status', 'has_2khz_any', 'sync_attrs_present', 'bin_dev1', 'bin_dev2'
+        }
+    """
+    result = {'emg1': {}, 'emg2': {}, 'sync_status': 'unknown',
+              'has_2khz_any': False, 'sync_attrs_present': [], 'bin_dev1': None, 'bin_dev2': None}
+
+    try:
+        with h5py.File(h5_path, 'r') as f:
+            result['sync_status'] = f.attrs.get('sync_status', 'unknown')
+            if isinstance(result['sync_status'], bytes):
+                result['sync_status'] = result['sync_status'].decode('utf-8')
+
+            result['bin_dev1'] = None
+            result['bin_dev2'] = None
+            for dev_label, attr_key in [('bin_dev1', 'sd_bin_dev1'), ('bin_dev2', 'sd_bin_dev2')]:
+                val = f.attrs.get(attr_key)
+                if isinstance(val, bytes):
+                    val = val.decode('utf-8')
+                result[dev_label] = val
+
+            present = []
+            for ak in ('sync_time', 'sync_error', 'sync_validation_report', 'channel_map_name'):
+                if ak in f.attrs:
+                    present.append(ak)
+            result['sync_attrs_present'] = present
+
+            for dev_id, ds_250hz in [('emg1', 'emg1_250hz_adc'), ('emg2', 'emg2_250hz_adc')]:
+                diag = {'count': 0, 'has_2khz': False, 'frame_ids': None, 'duplicates': 0,
+                        'gap_count': 0, 'is_monotonic': True, 'overlap_ratio': 0.0,
+                        'risk': 'ok', 'risk_reason': ''}
+
+                ds_2khz = f'{dev_id}_2khz_adc'
+                diag['has_2khz'] = ds_2khz in f
+                if diag['has_2khz']:
+                    result['has_2khz_any'] = True
+
+                if ds_250hz in f:
+                    data = f[ds_250hz][:]
+                    diag['count'] = len(data)
+                    if diag['count'] > 0:
+                        frame_ids = data['frame_id'].astype(np.int64)
+                        diag['frame_ids_sample'] = [int(frame_ids[0]), int(frame_ids[-1]),
+                                                    int(frame_ids[min(5, len(frame_ids)-1)])]
+                        # duplicates
+                        unique = len(set(frame_ids))
+                        diag['duplicates'] = int(diag['count']) - unique
+                        # gaps / monotonic — 与 validate_frame_ids 标准一致
+                        # frame_id 是帧级 ID，正常 diff=1；diff>1=gap，diff<=0=非单调/重复
+                        diffs = np.diff(frame_ids)
+                        diag['is_monotonic'] = bool(np.all(diffs >= 0))
+                        diag['is_strictly_increasing'] = bool(np.all(diffs > 0))
+                        diag['gap_count'] = int(np.sum(diffs > 1))
+                        non_increasing = int(np.sum(diffs <= 0))
+                        # overlap ratio (frame_id range / expected count * DOWNSAMPLE_RATIO)
+                        expected = int(diag['count']) * 8
+                        actual_range = int(frame_ids[-1] - frame_ids[0] + 1) if diag['count'] > 1 else 1
+                        diag['overlap_ratio'] = round(actual_range / expected, 4) if expected > 0 else 1.0
+
+                        # risk assessment (与 validate_frame_ids 标准一致)
+                        dup_ratio = diag['duplicates'] / max(diag['count'], 1)
+                        if diag['duplicates'] > 2 and diag['overlap_ratio'] < 0.3 and dup_ratio > 0.05:
+                            diag['risk'] = 'high'
+                            diag['risk_reason'] = (f"疑似旧bug: duplicate={diag['duplicates']}, "
+                                                   f"dup_ratio={dup_ratio:.1%}, overlap={diag['overlap_ratio']}")
+                        elif diag['duplicates'] > 0:
+                            diag['risk'] = 'medium'
+                            diag['risk_reason'] = f"frame_id 重复 {diag['duplicates']} 个，新版同步会拒绝"
+                        elif diag['gap_count'] > 0:
+                            diag['risk'] = 'medium'
+                            diag['risk_reason'] = f"frame_id gap {diag['gap_count']} 处，新版同步会拒绝"
+                        elif not diag['is_strictly_increasing']:
+                            diag['risk'] = 'medium'
+                            diag['risk_reason'] = 'frame_id 非严格递增，新版同步会拒绝'
+
+                result[dev_id] = diag
+    except Exception as e:
+        result['error'] = str(e)
+
+    return result
+
+
+def clear_sync_outputs(h5_path, backup=True):
+    """Phase 2: 清除 H5 中旧同步产物（2kHz datasets + sync attrs），保留 250Hz 原始数据
+
+    Args:
+        h5_path: H5 文件路径
+        backup: 是否在同目录创建 .bak 备份
+
+    Returns:
+        dict: { 'success', 'backup_path', 'removed_datasets', 'removed_attrs', 'errors' }
+    """
+    removed_datasets = []
+    removed_attrs = []
+    errors = []
+    backup_path = None
+
+    # backup
+    if backup:
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_path = h5_path + f'.bak_{ts}'
+        try:
+            shutil.copy2(h5_path, backup_path)
+            log(f"已备份: {backup_path}")
+        except Exception as e:
+            errors.append(f"备份失败: {e}")
+            return {'success': False, 'backup_path': None, 'removed_datasets': [],
+                    'removed_attrs': [], 'errors': errors}
+
+    try:
+        with h5py.File(h5_path, 'a') as f:
+            # 2kHz/100Hz sync datasets to remove (new + legacy names)
+            sync_datasets = [
+                'emg1_2khz_adc', 'emg2_2khz_adc',
+                'imu1a_100hz', 'imu1b_100hz', 'imu2a_100hz', 'imu2b_100hz',
+                'imu1_100hz', 'imu2_100hz',  # legacy single-IMU names
+            ]
+            for ds_name in sync_datasets:
+                if ds_name in f:
+                    del f[ds_name]
+                    removed_datasets.append(ds_name)
+                    log(f"  已删除 dataset: {ds_name}")
+
+            # sync attrs to clear
+            sync_attrs = ['sync_status', 'sync_time', 'sync_error', 'sync_validation_report']
+            for ak in sync_attrs:
+                if ak in f.attrs:
+                    del f.attrs[ak]
+                    removed_attrs.append(ak)
+
+            # reset sync_status to pending
+            f.attrs['sync_status'] = 'pending'
+            log(f"  sync_status 已重置为 pending")
+
+            # audit
+            append_sync_history(f, action='clear', status='success',
+                                details={'backup_path': backup_path,
+                                         'removed_datasets': removed_datasets,
+                                         'removed_attrs': removed_attrs})
+
+    except Exception as e:
+        errors.append(f"清除失败: {e}")
+
+    if len(errors) == 0:
+        # success already recorded inside the try block
+        pass
+    else:
+        # record failure (backup or clear failed)
+        try:
+            append_sync_history(h5_path, action='clear', status='error',
+                                details={'errors': errors})
+        except Exception:
+            pass
+
+    return {
+        'success': len(errors) == 0,
+        'backup_path': backup_path,
+        'removed_datasets': removed_datasets,
+        'removed_attrs': removed_attrs,
+        'errors': errors,
+    }
+
+
+# ===================== sync history audit =====================
+
+def append_sync_history(h5_file_or_path, action, status, details=None, max_entries=20):
+    """Phase 6: 在 H5 attrs 中追加同步审计记录
+
+    Args:
+        h5_file_or_path: h5py.File 对象或 H5 路径字符串
+        action: 'sync' | 'resync' | 'clear'
+        status: 'started' | 'synced' | 'success' | 'sync_failed' | 'error' | 'exception'
+        details: dict of extra info
+        max_entries: 最多保留条数
+    """
+    now = datetime.now().isoformat()
+    entry = {'time': now, 'action': action, 'status': status, 'details': details or {}}
+
+    def _apply(f):
+        # read existing
+        history = []
+        raw = f.attrs.get('sync_history')
+        if raw:
+            try:
+                if isinstance(raw, bytes):
+                    raw = raw.decode('utf-8')
+                history = json.loads(raw)
+                if not isinstance(history, list):
+                    history = []
+            except (json.JSONDecodeError, TypeError):
+                history = []
+
+        history.append(entry)
+        if len(history) > max_entries:
+            history = history[-max_entries:]
+
+        f.attrs['sync_history'] = json.dumps(history, ensure_ascii=False)
+
+        # convenience counters
+        attempt_count = f.attrs.get('sync_attempt_count', 0)
+        clear_count = f.attrs.get('sync_clear_count', 0)
+
+        if action == 'clear':
+            clear_count += 1
+            f.attrs['last_sync_clear_time'] = now
+        if action in ('sync', 'resync'):
+            attempt_count += 1
+            f.attrs['last_sync_attempt_time'] = now
+        if status in ('synced', 'success'):
+            f.attrs['last_sync_success_time'] = now
+        if status in ('sync_failed', 'error', 'exception'):
+            f.attrs['last_sync_error_time'] = now
+
+        f.attrs['sync_attempt_count'] = attempt_count
+        f.attrs['sync_clear_count'] = clear_count
+
+    if isinstance(h5_file_or_path, h5py.File):
+        _apply(h5_file_or_path)
+    else:
+        with h5py.File(h5_file_or_path, 'a') as f:
+            _apply(f)
+
+
+# ===================== CLI =====================
 
 if __name__ == "__main__":
     main()

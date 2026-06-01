@@ -30,7 +30,9 @@ try:
     _tools_dir = os.path.dirname(os.path.abspath(__file__))
     if _tools_dir not in sys.path:
         sys.path.insert(0, _tools_dir)
-    from bin_sync_tool import EMGBinParser, IMUBinParser, sync_h5_with_bin
+    from bin_sync_tool import (EMGBinParser, IMUBinParser, sync_h5_with_bin,
+                               diagnose_frame_ids, clear_sync_outputs,
+                               append_sync_history)
     HAS_SYNC_TOOL = True
 except ImportError:
     HAS_SYNC_TOOL = False
@@ -2226,6 +2228,337 @@ class BreakpointTab(QWidget):
         QMessageBox.information(self, "已复制", "JSON 已复制到剪贴板")
 
 
+class SyncToolsTab(QWidget):
+    """Phase 1-3: 同步工具标签页 — 诊断、清除、重新同步"""
+
+    def __init__(self):
+        super().__init__()
+        self.current_h5 = None
+        self.worker = None
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+
+        # file selection
+        file_row = QHBoxLayout()
+        file_row.addWidget(QLabel("H5 文件:"))
+        self.file_label = QLabel("未选择")
+        self.file_label.setStyleSheet("color: #666;")
+        file_row.addWidget(self.file_label, 1)
+        select_btn = QPushButton("选择...")
+        select_btn.clicked.connect(self.select_file)
+        file_row.addWidget(select_btn)
+        layout.addLayout(file_row)
+
+        # diagnose area
+        diag_group = QGroupBox("同步诊断")
+        diag_layout = QVBoxLayout(diag_group)
+        self.diag_text = QTextEdit()
+        self.diag_text.setReadOnly(True)
+        self.diag_text.setMaximumHeight(180)
+        self.diag_text.setFont(QFont("Consolas", 8))
+        diag_layout.addWidget(self.diag_text)
+        diag_btn = QPushButton("诊断同步风险")
+        diag_btn.clicked.connect(self.run_diagnose)
+        diag_layout.addWidget(diag_btn)
+        layout.addWidget(diag_group)
+
+        # actions
+        action_group = QGroupBox("操作")
+        action_layout = QVBoxLayout(action_group)
+        btn_row = QHBoxLayout()
+        self.clear_btn = QPushButton("清除同步结果")
+        self.clear_btn.clicked.connect(self.run_clear)
+        self.clear_btn.setEnabled(False)
+        btn_row.addWidget(self.clear_btn)
+        self.resync_btn = QPushButton("清除并重新同步")
+        self.resync_btn.clicked.connect(self.run_resync)
+        self.resync_btn.setEnabled(False)
+        self.resync_btn.setStyleSheet("font-weight: bold; background: #f97316; color: white;")
+        btn_row.addWidget(self.resync_btn)
+        action_layout.addLayout(btn_row)
+
+        self.bin_label = QLabel("Bin 目录: 将根据 H5 attrs 自动查找，或手动选择")
+        self.bin_label.setStyleSheet("color: #666; font-size: 10px;")
+        action_layout.addWidget(self.bin_label)
+        bin_sel_row = QHBoxLayout()
+        self.bin_dir_btn = QPushButton("手动选择 Bin 目录...")
+        self.bin_dir_btn.clicked.connect(self.select_bin_dir)
+        bin_sel_row.addWidget(self.bin_dir_btn)
+        bin_sel_row.addStretch()
+        action_layout.addLayout(bin_sel_row)
+        layout.addWidget(action_group)
+
+        # log
+        log_group = QGroupBox("操作日志")
+        log_layout = QVBoxLayout(log_group)
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setFont(QFont("Consolas", 8))
+        self.log_text.setStyleSheet("background: #1e1e1e; color: #d4d4d4;")
+        log_layout.addWidget(self.log_text)
+        layout.addWidget(log_group)
+
+    def log(self, msg):
+        self.log_text.append(msg)
+
+    def select_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "选择 H5 文件", "", "HDF5 Files (*.h5 *.hdf5)")
+        if path:
+            self.current_h5 = path
+            self.file_label.setText(os.path.basename(path))
+            self.file_label.setToolTip(path)
+            self.clear_btn.setEnabled(True)
+            self.resync_btn.setEnabled(True)
+            self.run_diagnose()
+
+    def select_bin_dir(self):
+        d = QFileDialog.getExistingDirectory(self, "选择 Bin 文件所在目录")
+        if d:
+            self.bin_dir = d
+            self.bin_label.setText(f"Bin 目录: {d}")
+            self.bin_label.setToolTip(d)
+
+    def run_diagnose(self):
+        if not self.current_h5:
+            return
+        self.diag_text.clear()
+        self.log_text.clear()
+        self.log("正在诊断...")
+        try:
+            res = diagnose_frame_ids(self.current_h5)
+            lines = [
+                f"sync_status: {res.get('sync_status','?')}",
+                f"has_2khz: {res.get('has_2khz_any')}",
+                f"sd_bin_dev1: {res.get('bin_dev1') or '-'}",
+                f"sd_bin_dev2: {res.get('bin_dev2') or '-'}",
+            ]
+            for dev in ('emg1', 'emg2'):
+                d = res.get(dev, {})
+                risk_icon = {'ok': 'OK', 'medium': 'WARN', 'high': 'HIGH RISK'}.get(d.get('risk', 'ok'), '?')
+                lines.append(f"")
+                lines.append(f"--- {dev} ---")
+                lines.append(f"  250Hz frames: {d.get('count', 0)}")
+                lines.append(f"  2kHz dataset: {'YES' if d.get('has_2khz') else 'NO'}")
+                lines.append(f"  duplicates: {d.get('duplicates', 0)}  gaps: {d.get('gap_count', 0)}")
+                lines.append(f"  monotonic: {d.get('is_monotonic', '?')}  overlap_ratio: {d.get('overlap_ratio', 1.0)}")
+                lines.append(f"  RISK: {risk_icon}  {d.get('risk_reason', '')}")
+
+            # sync history audit
+            with h5py.File(self.current_h5, 'r') as f:
+                lines.append("")
+                lines.append("--- sync history ---")
+                for key, label in [('last_sync_attempt_time', '上次同步尝试'), ('last_sync_success_time', '上次同步成功'),
+                                   ('last_sync_clear_time', '上次清除'), ('last_sync_error_time', '上次同步错误')]:
+                    v = f.attrs.get(key)
+                    lines.append(f"  {label}: {v if v else '-'}")
+                for key, label in [('sync_attempt_count', '同步次数'), ('sync_clear_count', '清除次数')]:
+                    v = f.attrs.get(key, 0)
+                    lines.append(f"  {label}: {v}")
+                raw = f.attrs.get('sync_history')
+                if raw:
+                    try:
+                        if isinstance(raw, bytes):
+                            raw = raw.decode('utf-8')
+                        hist = json.loads(raw)
+                        recent = hist[-3:] if len(hist) > 3 else hist
+                        lines.append(f"  最近 {len(recent)}/{len(hist)} 条记录:")
+                        for h in recent:
+                            lines.append(f"    {h.get('time','?')[:19]} {h.get('action','?')}/{h.get('status','?')}")
+                    except Exception:
+                        lines.append("  sync_history: invalid format")
+                else:
+                    lines.append("  sync_history: -")
+
+            self.diag_text.setPlainText('\n'.join(lines))
+            self.log("诊断完成")
+        except Exception as e:
+            self.log(f"诊断失败: {e}")
+            self.diag_text.setPlainText(f"ERROR: {e}")
+
+    def run_clear(self):
+        if not self.current_h5:
+            return
+        reply = QMessageBox.warning(self, "确认清除",
+            "将清除此 H5 中的同步产物:\n"
+            "- 删除 emg1_2khz_adc / emg2_2khz_adc\n"
+            "- 删除 imu*_100hz\n"
+            "- 清除 sync_status / sync_time / sync_error\n"
+            "- 保留 250Hz 原始数据不变\n\n"
+            "清除前会自动备份 (.bak_时间戳)。\n确定继续？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+
+        self.log("正在清除同步产物...")
+        QApplication.processEvents()
+        try:
+            res = clear_sync_outputs(self.current_h5, backup=True)
+            if res['success']:
+                self.log(f"清除成功。备份: {res.get('backup_path', 'N/A')}")
+                self.log(f"已删除 datasets: {res['removed_datasets']}")
+                self.log(f"已清除 attrs: {res['removed_attrs']}")
+            else:
+                self.log(f"清除失败: {res['errors']}")
+            self.run_diagnose()  # refresh
+        except Exception as e:
+            self.log(f"清除异常: {e}")
+
+    def run_resync(self):
+        if not self.current_h5:
+            return
+
+        # ---- Phase 1: read H5 attrs and resolve bin directory ----
+        with h5py.File(self.current_h5, 'r') as f:
+            cm = f.attrs.get('channel_map_name', 'V2')
+            if isinstance(cm, bytes):
+                cm = cm.decode('utf-8')
+            dev_prefixes = {}
+            for dev_id in (1, 2):
+                p = f.attrs.get(f'sd_bin_dev{dev_id}')
+                if isinstance(p, bytes):
+                    p = p.decode('utf-8')
+                dev_prefixes[dev_id] = p
+
+        bin_dir = getattr(self, 'bin_dir', None)
+        if not bin_dir:
+            h5_dir = os.path.dirname(self.current_h5)
+            found_any = False
+            for dev_id, prefix in dev_prefixes.items():
+                if prefix and os.path.exists(os.path.join(h5_dir, f'{prefix}_emg.bin')):
+                    found_any = True
+                    break
+            if found_any:
+                bin_dir = h5_dir
+                self.log(f"自动使用 H5 同目录作为 bin 目录: {bin_dir}")
+            elif any(dev_prefixes.values()):
+                QMessageBox.warning(self, "未找到 bin 文件",
+                    f"H5 记录了 sd_bin_dev1/2，但在 H5 同目录下未找到对应 emg bin。\n请先手动选择 bin 目录。")
+                return
+            else:
+                QMessageBox.warning(self, "缺少 bin 信息",
+                    "H5 中未找到 sd_bin_dev1/sd_bin_dev2 attrs，无法定位 bin 文件。\n请先手动选择 bin 目录。")
+                return
+
+        # ---- Phase 2: strict pre-check ----
+        # H5 声明的每个设备对应的 emg bin 都必须存在，否则不清除
+        sync_jobs = []
+        missing = []
+        for dev_id in (1, 2):
+            prefix = dev_prefixes.get(dev_id)
+            if not prefix:
+                continue
+            emg_bin = os.path.join(bin_dir, f'{prefix}_emg.bin')
+            if not os.path.exists(emg_bin):
+                missing.append(f"dev{dev_id}: {os.path.basename(emg_bin)}")
+                continue
+            imu_bin = os.path.join(bin_dir, f'{prefix}_imu.bin')
+            sync_jobs.append((dev_id, emg_bin, imu_bin if os.path.exists(imu_bin) else None))
+
+        if missing:
+            self.log("ERROR: H5 声明了以下设备但 emg bin 缺失，不执行清除:")
+            for m in missing:
+                self.log(f"  {m}")
+            QMessageBox.warning(self, "bin 文件不完整",
+                "H5 已声明以下设备但 emg bin 文件缺失:\n" + '\n'.join(missing) +
+                "\n\n请确认 bin 目录正确。所有必需 bin 文件存在后才能重新同步。")
+            return
+
+        if not sync_jobs:
+            self.log("ERROR: H5 没有记录任何 sd_bin_dev，无法同步")
+            return
+
+        self.log(f"预检查通过: 可同步 {len(sync_jobs)} 个设备")
+        for dev_id, emg, imu in sync_jobs:
+            self.log(f"  dev{dev_id}: {os.path.basename(emg)}" + (f" + {os.path.basename(imu)}" if imu else ""))
+            if not imu:
+                self.log(f"    (IMU bin 缺失，仅同步 EMG)")
+
+        reply = QMessageBox.warning(self, "确认重新同步",
+            f"将先清除旧同步产物（自动备份），再对 {len(sync_jobs)} 个设备重新同步。\n确定继续？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+
+        self.log("=== 开始重新同步 ===")
+        QApplication.processEvents()
+
+        # ---- Phase 3: clear ----
+        self.log("清除旧同步产物...")
+        cres = clear_sync_outputs(self.current_h5, backup=True)
+        if not cres['success']:
+            self.log(f"清除失败: {cres['errors']}")
+            return
+        self.log(f"已备份: {cres.get('backup_path')}")
+
+        # ---- Phase 4: re-sync (all set_synced=False, final status set manually) ----
+        self.log("调用新版同步...")
+        QApplication.processEvents()
+        try:
+            results = []
+            for dev_id, emg_bin, imu_bin in sync_jobs:
+                self.log(f"  dev{dev_id}: {os.path.basename(emg_bin)}")
+                QApplication.processEvents()
+
+                r = sync_h5_with_bin(
+                    self.current_h5, emg_bin, imu_bin,
+                    device_id=dev_id, verify=True,
+                    set_synced=False,  # 不自动写 synced
+                    channel_map_name=cm or 'V2',
+                )
+                results.append((dev_id, r))
+                status = r.get('status', '?')
+                if status == 'success':
+                    self.log(f"    EMG: {r.get('frames_2khz', 0)} frames")
+                    if r.get('imu_status') == 'success':
+                        self.log(f"    IMU: {r.get('imu_frames', 0)} frames")
+                elif status == 'skipped':
+                    self.log(f"    已同步，跳过")
+                else:
+                    self.log(f"    失败: {r.get('reason', '?')}")
+
+            # 最终状态：全部成功才写 synced
+            all_ok = all(r.get('status') == 'success' for _, r in results)
+            if all_ok:
+                with h5py.File(self.current_h5, 'a') as f:
+                    f.attrs['sync_status'] = 'synced'
+                    f.attrs['sync_time'] = datetime.now().isoformat()
+                    append_sync_history(f, action='resync', status='synced',
+                                        details={'devices': len(results)})
+                self.log("=== 重新同步完成，sync_status=synced ===")
+            elif results:
+                failures = [f"dev{did}: {r.get('reason','?')}" for did, r in results if r.get('status') != 'success']
+                with h5py.File(self.current_h5, 'a') as f:
+                    f.attrs['sync_status'] = 'sync_failed'
+                    f.attrs['sync_time'] = datetime.now().isoformat()
+                    f.attrs['sync_error'] = '; '.join(failures)
+                    append_sync_history(f, action='resync', status='sync_failed',
+                                        details={'failures': failures})
+                self.log("=== 重新同步失败，sync_status=sync_failed ===")
+                for fl in failures:
+                    self.log(f"  失败: {fl}")
+            else:
+                self.log("=== 未同步任何设备 ===")
+
+            self.run_diagnose()
+        except Exception as e:
+            self.log(f"重新同步异常: {e}")
+            # 尝试将 H5 标记为 sync_failed
+            try:
+                with h5py.File(self.current_h5, 'a') as f:
+                    f.attrs['sync_status'] = 'sync_failed'
+                    f.attrs['sync_time'] = datetime.now().isoformat()
+                    f.attrs['sync_error'] = f"resync exception: {e}"
+                    append_sync_history(f, action='resync', status='exception',
+                                        details={'error': str(e)})
+                self.log("已将 sync_status 标记为 sync_failed")
+            except Exception as we:
+                self.log(f"写入 sync_failed 状态失败: {we}")
+            self.run_diagnose()
+
+
 class HDF5Tool(QMainWindow):
     """HDF5整合工具主窗口"""
     def __init__(self):
@@ -2454,6 +2787,9 @@ class HDF5Tool(QMainWindow):
 
         self.breakpoint_tab = BreakpointTab()
         self.tabs.addTab(self.breakpoint_tab, "历史断点")
+
+        self.sync_tools_tab = SyncToolsTab()
+        self.tabs.addTab(self.sync_tools_tab, "同步工具")
 
         main_splitter.addWidget(self.tabs)
         main_splitter.setSizes([250, 1000])
