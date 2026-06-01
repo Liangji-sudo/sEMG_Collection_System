@@ -27,6 +27,7 @@
             this.sortMode = 'time-desc'; // 默认按时间降序
             this.currentPage = 1;
             this.pageSize = 15;
+            this._loadRequestId = 0;    // 异步请求 ID，防止旧请求 toast 覆盖
         }
 
         /**
@@ -86,7 +87,9 @@
                 fingerprint: `${this.stats.totalFiles}_${firstFileName}`
             };
             localStorage.setItem('emg_backend_last_stats', JSON.stringify(statsToSave));
-            console.log('[BackendManager] 已保存当前统计数据');
+            // 同步更新内存基准，避免停留期间重复显示增量
+            this.lastStats = statsToSave;
+            console.log('[BackendManager] 已保存当前统计数据 (内存+localStorage)');
         }
 
         /**
@@ -134,26 +137,64 @@
          * 从服务端加载 storage 目录文件列表
          */
         async loadStorageFiles() {
-            console.log('[BackendManager] 开始加载 storage 目录...');
+            // 递增请求 ID，防止旧请求返回后覆盖 toast
+            const requestId = ++this._loadRequestId;
+            const hadPriorSnapshot = this.lastStats !== null;
+
+            console.log(`[BackendManager] 开始加载 storage 目录... (requestId=${requestId})`);
             this.renderLoadingState();
 
             try {
                 const response = await fetch('/api/storage/files');
                 const data = await response.json();
 
+                // 检测竞态：如果这不是最新的请求，忽略结果
+                if (requestId !== this._loadRequestId) {
+                    console.log(`[BackendManager] 请求 #${requestId} 已过期，忽略`);
+                    return;
+                }
+
                 if (data.success) {
                     console.log('[BackendManager] 从服务端获取到', data.files.length, '个文件');
-                    
+
+                    // 保存变更前数据，用于计算本次加载的增量
+                    const oldStats = this.lastStats
+                        ? { files: this.lastStats.totalFiles, size: this.lastStats.totalSize }
+                        : null;
+
                     this.files = data.files;
                     this.parseAndAnalyze();
                     this.render();
-                    this.showToast(`已加载 ${data.count} 个文件`, 'success');
+
+                    // 渲染完成后保存当前快照（刷新基准）
+                    this.saveCurrentStats();
+
+                    // 区分文案
+                    if (!hadPriorSnapshot) {
+                        // 首次加载
+                        this.showToast(`已加载 ${data.count} 个文件`, 'success');
+                    } else if (oldStats) {
+                        const newFiles = this.stats.totalFiles - oldStats.files;
+                        const newSize = this.stats.totalSize - oldStats.size;
+                        if (newFiles > 0) {
+                            this.showToast(`已加载 ${data.count} 个文件，新增 ${newFiles} 个`, 'success');
+                        } else if (newSize > 0) {
+                            this.showToast(`已刷新，数据量增加 ${this.formatFileSize(newSize)}`, 'success');
+                        } else {
+                            this.showToast(`已刷新，暂无新增文件`, 'success');
+                        }
+                    }
                 } else {
                     console.error('[BackendManager] 加载失败:', data.error);
                     this.renderErrorState(data.error);
                     this.showToast('加载失败: ' + data.error, 'error');
                 }
             } catch (err) {
+                // 防止旧失败请求覆盖新成功请求的展示
+                if (requestId !== this._loadRequestId) {
+                    console.log(`[BackendManager] 失败请求 #${requestId} 已过期，忽略`);
+                    return;
+                }
                 console.error('[BackendManager] 请求失败:', err);
                 this.renderErrorState('无法连接到服务器');
                 this.showToast('无法连接到服务器', 'error');
@@ -442,21 +483,14 @@
             const taskDiff = taskCount - this.lastStats.taskCount;
             const sizeDiff = this.stats.totalSize - this.lastStats.totalSize;
 
-            // 检查是否所有增量都是负数（或大部分是负数）
-            // 这通常意味着 storage 目录发生了变化，旧数据不再有效
-            const negativeCount = [fileDiff, subjectDiff, taskDiff].filter(d => d < 0).length;
-            
-            // 如果文件数增量为负数，且负数项超过一半，认为数据不匹配
-            // 这种情况下清除旧数据，不显示增量
-            if (fileDiff < 0 && negativeCount >= 2) {
-                console.log('[BackendManager] 检测到数据目录可能已切换，清除旧统计数据');
-                console.log(`[BackendManager] 旧数据: files=${this.lastStats.totalFiles}, 新数据: files=${this.stats.totalFiles}`);
-                
-                // 清除不匹配的旧数据
+            // 文件数或数据总量减少 → 目录变化/文件删除 → 重置基准，不显示负增量
+            if (fileDiff < 0 || sizeDiff < 0) {
+                console.log('[BackendManager] 检测到统计数据回退，重置基准');
+                console.log(`[BackendManager] 旧: files=${this.lastStats.totalFiles} size=${this.lastStats.totalSize}`);
+                console.log(`[BackendManager] 新: files=${this.stats.totalFiles} size=${this.stats.totalSize}`);
                 localStorage.removeItem('emg_backend_last_stats');
                 this.lastStats = null;
-                
-                return changes; // 返回空增量
+                return changes;
             }
 
             // 数据匹配，返回正常增量
