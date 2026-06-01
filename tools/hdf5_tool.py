@@ -14,12 +14,12 @@ import numpy as np
 from datetime import datetime
 from pathlib import Path
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QTreeWidget, QTreeWidgetItem, QTableWidget, QTableWidgetItem,
-    QSplitter, QLabel, QPushButton, QFileDialog, QGroupBox,
-    QTextEdit, QTabWidget, QHeaderView, QMessageBox, QListWidget,
-    QListWidgetItem, QProgressBar, QCheckBox, QSpinBox, QComboBox,
-    QFrame, QScrollArea, QGridLayout
+    QAbstractItemView, QApplication, QMainWindow, QWidget,
+    QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
+    QTableWidget, QTableWidgetItem, QSplitter, QLabel, QPushButton,
+    QFileDialog, QGroupBox, QTextEdit, QTabWidget, QHeaderView,
+    QMessageBox, QListWidget, QListWidgetItem, QProgressBar,
+    QCheckBox, QSpinBox, QComboBox, QFrame, QScrollArea, QGridLayout
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QColor, QPalette
@@ -31,6 +31,8 @@ try:
     if _tools_dir not in sys.path:
         sys.path.insert(0, _tools_dir)
     from bin_sync_tool import (EMGBinParser, IMUBinParser, sync_h5_with_bin,
+                               sync_h5_one_to_one, sync_h5_one_to_many_adc_search,
+                               find_bin_offset_by_adc,
                                diagnose_frame_ids, clear_sync_outputs,
                                append_sync_history)
     HAS_SYNC_TOOL = True
@@ -55,12 +57,13 @@ class SyncWorker(QThread):
     log = pyqtSignal(str)
     finished_signal = pyqtSignal(bool, str)
 
-    def __init__(self, h5_files, bin_dir, devices, validate_data):
+    def __init__(self, h5_files, bin_dir, devices, validate_data, sync_mode='one_to_one'):
         super().__init__()
         self.h5_files = h5_files
-        self.bin_dir = bin_dir  # bin文件所在目录
+        self.bin_dir = bin_dir
         self.devices = devices
         self.validate_data = validate_data
+        self.sync_mode = sync_mode  # 'one_to_one' | 'one_to_many' | 'legacy'
 
     def _find_bin_files(self, h5_path, device_id):
         """
@@ -177,14 +180,38 @@ class SyncWorker(QThread):
                         # 判断是否是最后一个设备，只有最后一个设备同步完才设置synced
                         is_last_device = (idx == total_devices - 1)
 
-                        result = sync_h5_with_bin(
-                            h5_path=h5_file,
-                            emg_bin_path=emg_bin,
-                            imu_bin_path=imu_bin,
-                            device_id=device_id,
-                            verify=self.validate_data,
-                            set_synced=is_last_device  # 只有最后一个设备同步完才设置synced
-                        )
+                        if self.sync_mode == 'one_to_one':
+                            # 新格式：一个 H5 对一对 collection bin
+                            self.log.emit(f"    [one_to_one] bin_offset=0, row_index")
+                            result = sync_h5_one_to_one(
+                                h5_path=h5_file,
+                                emg_bin_path=emg_bin,
+                                imu_bin_path=imu_bin,
+                                device_id=device_id,
+                                verify=self.validate_data,
+                                set_synced=is_last_device,
+                            )
+                        elif self.sync_mode == 'one_to_many':
+                            # 旧格式：ADC 搜索 offset
+                            result = sync_h5_one_to_many_adc_search(
+                                h5_path=h5_file,
+                                emg_bin_path=emg_bin,
+                                imu_bin_path=imu_bin,
+                                device_id=device_id,
+                                verify=self.validate_data,
+                                set_synced=is_last_device,
+                            )
+                        else:
+                            # legacy 兼容
+                            self.log.emit(f"    [legacy] using sync_h5_with_bin")
+                            result = sync_h5_with_bin(
+                                h5_path=h5_file,
+                                emg_bin_path=emg_bin,
+                                imu_bin_path=imu_bin,
+                                device_id=device_id,
+                                verify=self.validate_data,
+                                set_synced=is_last_device,
+                            )
 
                         if result.get('status') == 'success':
                             file_success = True
@@ -742,60 +769,42 @@ def generate_breakpoint_json(h5_path):
 
 
 class StatisticsPanel(QFrame):
-    """统计信息面板"""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.init_ui()
+    """统计信息面板 — 可滚动、分组展示"""
 
-    def init_ui(self):
-        self.setFrameStyle(QFrame.StyledPanel)
-        layout = QGridLayout(self)
-        layout.setSpacing(8)
-        layout.setContentsMargins(10, 10, 10, 10)
-
-        self.labels = {}
-        # 定义字段及其颜色分组
-        # 颜色方案：
-        #   - 基本信息：蓝色 #0066cc
-        #   - 同步状态：动态（synced绿色，pending橙色）
-        #   - Session相关：紫色 #9933cc
-        #   - SD卡bin索引：绿色 #009900
-        #   - BLE设备：深蓝色 #0066cc 加粗
-        #   - 数据集形状：蓝色 #0066cc
-        stats = [
-            # 基本文件信息
+    # 字段分组定义
+    SECTIONS = [
+        ('基础信息', [
             ('文件名', '文件名'), ('文件大小', '文件大小'),
             ('创建时间', '创建时间'), ('sync_status', '同步状态'),
-            # Session相关（紫色）
             ('session_index', 'Session索引'), ('session_count', 'Session总数'),
+            ('session_number', '轮次编号'),
             ('recording_session_id', '录制会话ID'), ('is_multi_session', '多Session'),
-            # 任务信息
             ('task_id', '任务ID'), ('user_id', '用户ID'),
             ('stage_name', 'Stage名称'), ('template_name', '模板名称'),
-            # EMG数据集
+        ]),
+        ('数据集统计', [
             ('emg1_250hz', 'EMG1 250Hz'), ('emg1_2khz', 'EMG1 2kHz'),
             ('emg2_250hz', 'EMG2 250Hz'), ('emg2_2khz', 'EMG2 2kHz'),
-            # IMU数据集（每设备2个IMU传感器）
             ('imu1a_ble', 'IMU1A BLE'), ('imu1a_100hz', 'IMU1A 100Hz'),
             ('imu1b_ble', 'IMU1B BLE'), ('imu1b_100hz', 'IMU1B 100Hz'),
+            ('imu1c_100hz', 'IMU1C 100Hz'),
             ('imu2a_ble', 'IMU2A BLE'), ('imu2a_100hz', 'IMU2A 100Hz'),
             ('imu2b_ble', 'IMU2B BLE'), ('imu2b_100hz', 'IMU2B 100Hz'),
-            # V1/V2 通用IMU数据集（可变IMU数量）
+            ('imu2c_100hz', 'IMU2C 100Hz'),
             ('imu1_all_ble', 'IMU1 All BLE'), ('imu2_all_ble', 'IMU2 All BLE'),
-            # V2 设备版本元数据
-            ('imu1_hw_version', 'IMU1 硬件版本'), ('imu2_hw_version', 'IMU2 硬件版本'),
-            ('imu1_num_imus', 'IMU1 IMU数量'), ('imu2_num_imus', 'IMU2 IMU数量'),
             ('total_imu1_all_frames', 'IMU1 All帧数'), ('total_imu2_all_frames', 'IMU2 All帧数'),
             ('mocap', 'Mocap'),
-            # SD卡bin文件索引（绿色）
+        ]),
+        ('设备 / Bin / 流信息', [
             ('sd_bin_dev1', 'SD Bin(设备1)'), ('sd_bin_dev2', 'SD Bin(设备2)'),
-            # BLE设备名称
             ('ble_device_dev1', 'BLE设备(设备1)'), ('ble_device_dev2', 'BLE设备(设备2)'),
-            # ===== Preview/Collection 流信息 =====
+            ('imu1_hw_version', 'IMU1 硬件版本'), ('imu2_hw_version', 'IMU2 硬件版本'),
+            ('imu1_num_imus', 'IMU1 IMU数量'), ('imu2_num_imus', 'IMU2 IMU数量'),
             ('stream_mode', '流模式'), ('stream_format_version', '流格式版本'),
             ('bin_pair_source', 'Bin来源'), ('collection_stream_id', '采集流ID'),
             ('stream_switch_delay_ms', '切换延迟(ms)'),
-            # ===== Phase 4: segment/bin 元数据 =====
+        ]),
+        ('采集 / Segment 信息', [
             ('collection_status', '采集状态'),
             ('is_resumed', '续采段'),
             ('segment_index', 'Segment序号'),
@@ -804,7 +813,6 @@ class StatisticsPanel(QFrame):
             ('start_time', '开始时间'),
             ('end_time', '结束时间'),
             ('duration', '持续(秒)'),
-            ('session_number', '轮次编号'),
             ('stage_index', 'Stage序号'),
             ('emg1_frame_count', 'EMG1帧数'),
             ('emg1_frame_range', 'EMG1帧号范围'),
@@ -813,49 +821,99 @@ class StatisticsPanel(QFrame):
             ('segment_has_dev1_bin', 'Dev1有Bin'),
             ('segment_has_dev2_bin', 'Dev2有Bin'),
             ('segment_device_count', '设备数'),
-        ]
+        ]),
+        ('同步信息', [
+            ('sync_mode', '同步模式'),
+            ('sync_bin_offset_dev1', 'Bin偏移(Dev1)'),
+            ('sync_bin_offset_dev2', 'Bin偏移(Dev2)'),
+            ('sync_offset_match_rate_dev1', '匹配率(Dev1)'),
+            ('sync_offset_match_rate_dev2', '匹配率(Dev2)'),
+            ('sync_frame_id_mode', 'FrameID模式'),
+            ('sync_bin_offset_mode', 'Offset模式'),
+            ('sync_time_alignment', '时间对齐'),
+            ('sync_250hz_anchor_position', '250Hz锚点位置'),
+        ]),
+    ]
 
-        # Session相关字段（紫色）
-        session_keys = {'session_index', 'session_count', 'recording_session_id', 'is_multi_session',
-                        'session_number'}
-        # SD卡bin索引字段（绿色）
-        sd_bin_keys = {'sd_bin_dev1', 'sd_bin_dev2'}
-        # Phase 4: 状态颜色映射
-        self._status_keys = {'collection_status', 'is_resumed', 'segment_index'}
+    # 颜色分组 key 集合
+    _session_keys = {'session_index', 'session_count', 'recording_session_id', 'is_multi_session', 'session_number'}
+    _sd_bin_keys = {'sd_bin_dev1', 'sd_bin_dev2'}
+    _status_keys = {'collection_status', 'is_resumed', 'segment_index'}
 
-        for i, (key, name) in enumerate(stats):
-            row = i // 2
-            col = (i % 2) * 2
-            name_label = QLabel(f'{name}:')
-            name_label.setMinimumHeight(20)
-            name_label.setStyleSheet('font-weight: bold; color: #495057;')
-            value_label = QLabel('-')
-            value_label.setMinimumHeight(20)
-            # 根据字段类型设置不同颜色
-            if key == 'sync_status':
-                value_label.setStyleSheet('color: #666;')  # 同步状态初始灰色，动态更新
-            elif key in session_keys:
-                value_label.setStyleSheet('color: #9933cc; font-weight: bold;')  # Session相关紫色
-            elif key in sd_bin_keys:
-                value_label.setStyleSheet('color: #009900; font-weight: bold;')  # bin文件名绿色
-            elif key.startswith('ble_device'):
-                value_label.setStyleSheet('color: #0066cc; font-weight: bold;')  # BLE设备名蓝色加粗
-            else:
-                value_label.setStyleSheet('color: #0066cc;')
-            layout.addWidget(name_label, row, col)
-            layout.addWidget(value_label, row, col + 1)
-            self.labels[key] = value_label
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.labels = {}
+        self.init_ui()
 
-        # Phase 5: segment chain summary
-        chain_label = QLabel('Segment 链路:')
-        chain_label.setStyleSheet('font-weight: bold; color: #7c3aed; font-size: 12px; padding-top: 10px;')
-        layout.addWidget(chain_label, row + 1, 0, 1, 4)
+    def init_ui(self):
+        self.setFrameStyle(QFrame.StyledPanel)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        outer.addWidget(scroll)
+
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(8, 8, 8, 8)
+        content_layout.setSpacing(2)
+        scroll.setWidget(content)
+
+        LABEL_FONT = 'font-size: 9pt;'
+
+        for section_title, fields in self.SECTIONS:
+            # section header
+            header = QLabel(section_title)
+            header.setStyleSheet(f'font-weight: bold; color: #374151; {LABEL_FONT} padding-top: 4px; border-bottom: 1px solid #e5e7eb;')
+            header.setMinimumHeight(20)
+            content_layout.addWidget(header)
+
+            # grid for this section
+            grid = QGridLayout()
+            grid.setVerticalSpacing(2)
+            grid.setHorizontalSpacing(10)
+            grid.setContentsMargins(4, 2, 4, 2)
+
+            for i, (key, name) in enumerate(fields):
+                row = i // 2
+                col = (i % 2) * 2
+                name_label = QLabel(f'{name}:')
+                name_label.setMinimumHeight(22)
+                name_label.setStyleSheet(f'font-weight: bold; color: #6b7280; {LABEL_FONT}')
+                value_label = QLabel('-')
+                value_label.setMinimumHeight(22)
+                value_label.setWordWrap(False)
+                # colour
+                if key in self._sd_bin_keys:
+                    value_label.setStyleSheet(f'color: #009900; font-weight: bold; {LABEL_FONT}')
+                elif key.startswith('ble_device'):
+                    value_label.setStyleSheet(f'color: #0066cc; font-weight: bold; {LABEL_FONT}')
+                elif key in self._session_keys:
+                    value_label.setStyleSheet(f'color: #7c3aed; font-weight: bold; {LABEL_FONT}')
+                elif key == 'sync_status':
+                    value_label.setStyleSheet(f'color: #666; {LABEL_FONT}')
+                else:
+                    value_label.setStyleSheet(f'color: #0066cc; {LABEL_FONT}')
+                grid.addWidget(name_label, row, col)
+                grid.addWidget(value_label, row, col + 1)
+                self.labels[key] = value_label
+            content_layout.addLayout(grid)
+
+        # Segment 链路
+        chain_header = QLabel('Segment 链路')
+        chain_header.setStyleSheet(f'font-weight: bold; color: #7c3aed; {LABEL_FONT} padding-top: 6px; border-bottom: 1px solid #e5e7eb;')
+        chain_header.setMinimumHeight(20)
+        content_layout.addWidget(chain_header)
         self.chain_text = QTextEdit()
         self.chain_text.setReadOnly(True)
         self.chain_text.setMaximumHeight(120)
         self.chain_text.setFont(QFont('Consolas', 7))
         self.chain_text.setStyleSheet('background: #f8f9fa; border: 1px solid #e5e7eb;')
-        layout.addWidget(self.chain_text, row + 2, 0, 1, 4)
+        content_layout.addWidget(self.chain_text)
+
+        content_layout.addStretch()
 
     def update_stats(self, file_path):
         try:
@@ -1017,10 +1075,44 @@ class StatisticsPanel(QFrame):
                 else:
                     self.labels['stream_switch_delay_ms'].setText('-')
 
+                # 【新增】读取同步状态 attrs
+                sync_mode = f.attrs.get('sync_mode', None)
+                if sync_mode:
+                    if isinstance(sync_mode, bytes): sync_mode = sync_mode.decode('utf-8')
+                    self.labels['sync_mode'].setText(str(sync_mode))
+                else:
+                    self.labels['sync_mode'].setText('-')
+
+                for dev_id in [1, 2]:
+                    for key, label_key in [('sync_bin_offset_dev', 'sync_bin_offset_dev'),
+                                           ('sync_offset_match_rate_dev', 'sync_offset_match_rate_dev')]:
+                        val = f.attrs.get(f'{key}{dev_id}', None)
+                        if val is not None:
+                            if isinstance(val, float):
+                                self.labels[f'{label_key}{dev_id}'].setText(f'{val:.4f}')
+                            else:
+                                self.labels[f'{label_key}{dev_id}'].setText(str(val))
+                        else:
+                            self.labels[f'{label_key}{dev_id}'].setText('-')
+
+                for key in ['sync_frame_id_mode', 'sync_bin_offset_mode', 'sync_time_alignment']:
+                    val = f.attrs.get(key, None)
+                    if val:
+                        if isinstance(val, bytes): val = val.decode('utf-8')
+                        self.labels[key].setText(str(val))
+                    else:
+                        self.labels[key].setText('-')
+
+                anchor_pos = f.attrs.get('sync_250hz_anchor_position', None)
+                if anchor_pos is not None:
+                    self.labels['sync_250hz_anchor_position'].setText(str(anchor_pos))
+                else:
+                    self.labels['sync_250hz_anchor_position'].setText('-')
+
                 # 读取数据集形状
                 for key in ['emg1_250hz', 'emg1_2khz', 'emg2_250hz', 'emg2_2khz',
-                           'imu1a_ble', 'imu1a_100hz', 'imu1b_ble', 'imu1b_100hz',
-                           'imu2a_ble', 'imu2a_100hz', 'imu2b_ble', 'imu2b_100hz']:
+                           'imu1a_ble', 'imu1a_100hz', 'imu1b_ble', 'imu1b_100hz', 'imu1c_100hz',
+                           'imu2a_ble', 'imu2a_100hz', 'imu2b_ble', 'imu2b_100hz', 'imu2c_100hz']:
                     adc_key = key.replace('hz', 'hz_adc')
                     if adc_key in f:
                         self.labels[key].setText(str(f[adc_key].shape))
@@ -1165,7 +1257,6 @@ class ViewerTab(QWidget):
 
         # 统计信息面板
         self.stats_panel = StatisticsPanel()
-        self.stats_panel.setMaximumHeight(840)  # Phase 5 新增 segment 链路展示
         layout.addWidget(self.stats_panel)
 
         # 主分割器 - 可拖动
@@ -1433,17 +1524,53 @@ class ViewerTab(QWidget):
         except Exception as e:
             self.text_view.setText(f"预览错误: {e}")
 
+    def _get_h5_format_info(self):
+        """读取当前 H5 的格式信息用于表头决策。返回 {stream_fmt_ver, bin_pair_source, sync_time_alignment}"""
+        info = {'stream_fmt_ver': None, 'bin_pair_source': None, 'sync_time_alignment': None}
+        if not self.current_file:
+            return info
+        try:
+            with h5py.File(self.current_file, 'r') as f:
+                v = f.attrs.get('stream_format_version')
+                if v is not None: info['stream_fmt_ver'] = int(v)
+                bp = f.attrs.get('bin_pair_source')
+                if isinstance(bp, bytes): bp = bp.decode('utf-8')
+                info['bin_pair_source'] = bp
+                ta = f.attrs.get('sync_time_alignment')
+                if isinstance(ta, bytes): ta = ta.decode('utf-8')
+                info['sync_time_alignment'] = ta
+        except Exception:
+            pass
+        return info
+
     def show_emg_data(self, data, dtype, path):
-        """显示EMG结构化数据（带BLE帧号、SD卡帧号等）"""
+        """显示EMG结构化数据（智能表头：根据数据集类型和H5格式区分）"""
         precision = self.emg_precision
         max_rows = min(len(data), self.preview_rows)
         preview_data = data[:max_rows]
 
+        fmt = self._get_h5_format_info()
+        is_new = (fmt['stream_fmt_ver'] is not None and fmt['stream_fmt_ver'] >= 2)
+        is_2khz = '_2khz' in path.lower()
+        is_250hz = '_250hz' in path.lower()
+
+        # format hint
+        hint_text = ''
+        if is_2khz:
+            hint_text = '2kHz 数据: sd_frame_id 为同步后写入的 bin 帧号'
+        elif is_250hz:
+            if is_new:
+                hint_text = '新格式 H5: 同步(一对一)使用 bin offset=0, 不依赖 250Hz frame_id'
+            else:
+                hint_text = '旧格式 H5: 250Hz frame_id/sd_frame_id 可能为历史推算值, 仅供诊断'
+
         text_lines = [
             f'【{path} - EMG数据预览 (前{max_rows}帧，共{len(data)}帧)】',
             f'精度: {precision}位小数',
-            '═' * 100
         ]
+        if hint_text:
+            text_lines.append(f'  {hint_text}')
+        text_lines.append('═' * 100)
 
         # 表格设置
         self.data_table.clear()
@@ -1453,14 +1580,24 @@ class ViewerTab(QWidget):
             n_channels = data['channels'].shape[1] if len(data['channels'].shape) > 1 else 16
 
             # 构建表头
-            headers = ['帧序号']
+            headers = ['行号']
             has_frame_id = 'frame_id' in dtype.names
             has_sd_frame_id = 'sd_frame_id' in dtype.names
 
             if has_frame_id:
-                headers.append('BLE帧号')
+                if is_new:
+                    headers.append('BLE帧ID(诊断)')
+                elif is_250hz:
+                    headers.append('旧frame_id(不可信)')
+                else:
+                    headers.append('BLE帧ID')
             if has_sd_frame_id:
-                headers.append('SD卡帧号')
+                if is_2khz:
+                    headers.append('bin帧号')
+                elif is_250hz:
+                    headers.append('旧推算SD(不可信)' if not is_new else '推算SD(诊断)')
+                else:
+                    headers.append('推算SD')
 
             headers += [f'Ch{i}' for i in range(n_channels)]
             if 'time' in dtype.names:
@@ -1471,26 +1608,22 @@ class ViewerTab(QWidget):
 
             for i, row in enumerate(preview_data):
                 col = 0
-
-                # 帧序号
                 item = QTableWidgetItem(str(i))
                 item.setTextAlignment(Qt.AlignCenter)
                 self.data_table.setItem(i, col, item)
                 col += 1
 
-                # BLE帧号
                 if has_frame_id:
                     item = QTableWidgetItem(str(row['frame_id']))
                     item.setTextAlignment(Qt.AlignCenter)
-                    item.setBackground(QColor(230, 245, 255))  # 浅蓝色背景
+                    item.setBackground(QColor(230, 245, 255))
                     self.data_table.setItem(i, col, item)
                     col += 1
 
-                # SD卡帧号
                 if has_sd_frame_id:
                     item = QTableWidgetItem(str(row['sd_frame_id']))
                     item.setTextAlignment(Qt.AlignCenter)
-                    item.setBackground(QColor(255, 245, 230))  # 浅橙色背景
+                    item.setBackground(QColor(255, 245, 230))
                     self.data_table.setItem(i, col, item)
                     col += 1
 
@@ -1553,13 +1686,19 @@ class ViewerTab(QWidget):
         has_has_mag_flag = 'has_mag' in dtype.names     # V2 IMU_ALL_BLE_DTYPE
 
         # 构建表头
-        headers = ['帧序号']
+        is_100hz = '_100hz' in path.lower()
+        is_ble = '_ble' in path.lower()
+
+        headers = ['行号']
         if has_imu_index:
             headers.append('IMU索引')
         if has_frame_id:
-            headers.append('BLE帧号')
+            headers.append('BLE帧ID(诊断)')
         if has_sd_frame_id:
-            headers.append('SD卡帧号')
+            if is_100hz:
+                headers.append('IMU bin帧号')
+            else:
+                headers.append('推算SD(诊断)')
         if has_acc:
             headers += ['Acc_X', 'Acc_Y', 'Acc_Z']
         if has_gyr:
@@ -1819,6 +1958,17 @@ class SyncTab(QWidget):
         # 左侧：设置面板
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
+
+        # 提示
+        hint = QLabel(
+            "📋 适用于新采集数据：一个 H5 对应一对 collection bin。\n"
+            "默认 bin_offset=0，通过 H5 attrs (sd_bin_dev1/dev2) 自动定位 bin。\n"
+            "stream_format_version>=2 且 bin_pair_source=collection_stream 时推荐使用。\n"
+            "旧格式数据（长 bin 多 H5）请使用\"同步（一对多）\"标签页。"
+        )
+        hint.setStyleSheet("color: #1e40af; background: #e0e7ff; padding: 8px; border-radius: 6px; font-size: 11px;")
+        hint.setWordWrap(True)
+        left_layout.addWidget(hint)
 
         # H5文件列表
         h5_group = QGroupBox("待同步的H5文件")
@@ -2294,12 +2444,421 @@ class BreakpointTab(QWidget):
         QMessageBox.information(self, "已复制", "JSON 已复制到剪贴板")
 
 
-class SyncToolsTab(QWidget):
-    """Phase 1-3: 同步工具标签页 — 诊断、清除、重新同步"""
+class OneToManySyncTab(QWidget):
+    """一对多同步标签页 - 旧格式 H5 批量 ADC 搜索同步"""
+
+    COL_FILE = 0; COL_STATUS = 1; COL_MODE = 2; COL_CMAP = 3; COL_RANGE = 4
+    COLUMNS = 5
 
     def __init__(self):
         super().__init__()
-        self.current_h5 = None
+        self.h5_paths = []       # ordered list matching table rows
+        self.bin_dir = None
+        self.worker = None
+        self._syncing = False
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+
+        hint = QLabel(
+            "适用于旧格式：一个长 bin 对应多个 H5\n"
+            "通过 250Hz 原始 ADC 值自动定位 bin 片段，不依赖旧 frame_id"
+        )
+        hint.setStyleSheet("color: #92400e; background: #fef3c7; padding: 8px; border-radius: 6px; font-size: 11px;")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        # H5 文件列表 (table with status columns)
+        h5_group = QGroupBox("待同步的 H5 文件")
+        h5_layout = QVBoxLayout(h5_group)
+        h5_btn_row = QHBoxLayout()
+        self.count_label = QLabel("共 0 个文件")
+        h5_btn_row.addWidget(self.count_label)
+        h5_btn_row.addStretch()
+        clear_btn = QPushButton("清空列表")
+        clear_btn.clicked.connect(self.clear_h5_list)
+        h5_btn_row.addWidget(clear_btn)
+        h5_layout.addLayout(h5_btn_row)
+
+        self.table = QTableWidget(0, self.COLUMNS)
+        self.table.setHorizontalHeaderLabels(["文件", "同步状态", "同步模式", "通道映射", "范围模式"])
+        self.table.setMaximumHeight(120)
+        self.table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for c in range(1, self.COLUMNS):
+            self.table.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        h5_layout.addWidget(self.table)
+        layout.addWidget(h5_group)
+
+        # Bin 目录
+        bin_row = QHBoxLayout()
+        bin_row.addWidget(QLabel("长 Bin 目录:"))
+        self.bin_label = QLabel("未选择")
+        self.bin_label.setStyleSheet("color: #666;")
+        bin_row.addWidget(self.bin_label, 1)
+        bin_sel_btn = QPushButton("选择...")
+        bin_sel_btn.clicked.connect(self.select_bin_dir)
+        bin_row.addWidget(bin_sel_btn)
+        layout.addLayout(bin_row)
+
+        # 设备选择
+        dev_row = QHBoxLayout()
+        dev_row.addWidget(QLabel("同步设备:"))
+        self.cb_emg1 = QCheckBox("EMG1"); self.cb_emg1.setChecked(True)
+        self.cb_emg2 = QCheckBox("EMG2"); self.cb_emg2.setChecked(True)
+        self.cb_imu = QCheckBox("IMU"); self.cb_imu.setChecked(True)
+        dev_row.addWidget(self.cb_emg1); dev_row.addWidget(self.cb_emg2); dev_row.addWidget(self.cb_imu)
+        dev_row.addStretch()
+        layout.addLayout(dev_row)
+
+        # 高级参数
+        adv_group = QGroupBox("高级参数")
+        adv_group.setCheckable(True); adv_group.setChecked(False)
+        adv_layout = QHBoxLayout(adv_group)
+        adv_layout.addWidget(QLabel("锚点数:"))
+        self.anchors_spin = QSpinBox(); self.anchors_spin.setRange(10, 200); self.anchors_spin.setValue(40)
+        adv_layout.addWidget(self.anchors_spin)
+        adv_layout.addWidget(QLabel("匹配阈值:"))
+        self.threshold_spin = QSpinBox(); self.threshold_spin.setRange(50, 100); self.threshold_spin.setValue(95); self.threshold_spin.setSuffix("%")
+        adv_layout.addWidget(self.threshold_spin)
+        adv_layout.addStretch()
+        layout.addWidget(adv_group)
+
+        # 按钮 + 进度条
+        btn_row = QHBoxLayout()
+        self.sync_btn = QPushButton("开始同步")
+        self.sync_btn.clicked.connect(self.run_sync)
+        self.sync_btn.setEnabled(False)
+        self.sync_btn.setStyleSheet("font-weight: bold; background: #f97316; color: white; padding: 8px 24px; font-size: 13px;")
+        btn_row.addWidget(self.sync_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setTextVisible(True)
+        layout.addWidget(self.progress_bar)
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color: #666; font-size: 10px;")
+        layout.addWidget(self.status_label)
+
+        # 日志
+        log_group = QGroupBox("同步日志")
+        log_layout = QVBoxLayout(log_group)
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setFont(QFont("Consolas", 8))
+        self.log_text.setStyleSheet("background: #1e1e1e; color: #d4d4d4;")
+        self.log_text.setMaximumHeight(180)
+        log_layout.addWidget(self.log_text)
+        layout.addWidget(log_group)
+
+    # ---- file list management ----
+
+    def _read_file_attrs(self, h5_path):
+        """Read sync-relevant attrs from H5. Returns dict with keys for table columns."""
+        info = {'status': 'unknown', 'mode': '-', 'cmap': '-', 'range_mode': '-'}
+        try:
+            with h5py.File(h5_path, 'r') as f:
+                st = f.attrs.get('sync_status')
+                if isinstance(st, bytes): st = st.decode('utf-8')
+                info['status'] = st or 'unknown'
+                sm = f.attrs.get('sync_mode')
+                if isinstance(sm, bytes): sm = sm.decode('utf-8')
+                info['mode'] = sm or '-'
+                cm = f.attrs.get('sync_adc_search_channel_map') or f.attrs.get('channel_map_name')
+                if isinstance(cm, bytes): cm = cm.decode('utf-8')
+                info['cmap'] = cm or '-'
+                rm = f.attrs.get('sync_range_mode') or f.attrs.get('sync_bin_offset_mode')
+                if isinstance(rm, bytes): rm = rm.decode('utf-8')
+                info['range_mode'] = rm or '-'
+        except Exception:
+            pass
+        return info
+
+    def add_h5_file(self, h5_path):
+        if h5_path in self.h5_paths:
+            return
+        self.h5_paths.append(h5_path)
+        info = self._read_file_attrs(h5_path)
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        self._set_row(row, os.path.basename(h5_path), info)
+        self._update_ui()
+
+    def _set_row(self, row, fname, info):
+        items = [
+            QTableWidgetItem(fname),
+            QTableWidgetItem(info['status']),
+            QTableWidgetItem(info['mode']),
+            QTableWidgetItem(info['cmap']),
+            QTableWidgetItem(info['range_mode']),
+        ]
+        for c, it in enumerate(items):
+            it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(row, c, it)
+        # colour synced rows green
+        if info['status'] == 'synced':
+            for c in range(self.COLUMNS):
+                self.table.item(row, c).setBackground(QColor(200, 255, 200))
+        elif info['status'] == 'sync_failed':
+            for c in range(self.COLUMNS):
+                self.table.item(row, c).setBackground(QColor(255, 220, 220))
+
+    def refresh_file_status(self, h5_path):
+        """Refresh a row after sync completes."""
+        if h5_path not in self.h5_paths:
+            return
+        row = self.h5_paths.index(h5_path)
+        info = self._read_file_attrs(h5_path)
+        self._set_row(row, os.path.basename(h5_path), info)
+        self.table.resizeColumnsToContents()
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+
+    def _get_synced_files(self):
+        """Return list of (idx, path) for files already synced."""
+        return [(i, p) for i, p in enumerate(self.h5_paths)
+                if self._read_file_attrs(p)['status'] == 'synced']
+
+    def clear_h5_list(self):
+        self.h5_paths.clear()
+        self.table.setRowCount(0)
+        self._update_ui()
+
+    def _update_ui(self):
+        n = len(self.h5_paths)
+        self.count_label.setText(f"共 {n} 个文件")
+        has_files = n > 0 and self.bin_dir is not None and not self._syncing
+        self.sync_btn.setEnabled(has_files)
+
+    def select_bin_dir(self):
+        d = QFileDialog.getExistingDirectory(self, "选择长 Bin 文件所在目录")
+        if d:
+            self.bin_dir = d
+            self.bin_label.setText(d)
+            self.bin_label.setToolTip(d)
+            self._update_ui()
+
+    def _find_bin_files(self, h5_path, device_id):
+        try:
+            with h5py.File(h5_path, 'r') as f:
+                prefix = f.attrs.get(f'sd_bin_dev{device_id}')
+                if prefix and self.bin_dir:
+                    if isinstance(prefix, bytes): prefix = prefix.decode('utf-8')
+                    ep = os.path.join(self.bin_dir, f'{prefix}_emg.bin')
+                    ip = os.path.join(self.bin_dir, f'{prefix}_imu.bin')
+                    if os.path.exists(ep):
+                        return ep, ip if os.path.exists(ip) else None
+            if self.bin_dir:
+                for fn in sorted(os.listdir(self.bin_dir)):
+                    if fn.endswith('_emg.bin') and 'PREVIEW_' not in fn:
+                        return os.path.join(self.bin_dir, fn), None
+        except Exception as e:
+            self.log(f"  查找 bin 失败: {e}")
+        return None, None
+
+    def log(self, msg):
+        self.log_text.append(msg)
+
+    # ---- sync flow ----
+
+    def run_sync(self):
+        if not self.h5_paths or not self.bin_dir or self._syncing:
+            return
+        synced = self._get_synced_files()
+        files_to_sync = list(self.h5_paths)
+        clear_first = set()
+
+        if synced:
+            names = '\n'.join(f"  {os.path.basename(p)}" for _, p in synced[:5])
+            extra = f"\n  ... 等共 {len(synced)} 个" if len(synced) > 5 else ""
+            reply = QMessageBox.question(self, "已同步文件",
+                f"列表中有 {len(synced)} 个已同步文件:\n{names}{extra}\n\n"
+                "是否清除旧同步结果并重新同步？\n"
+                "  [Yes] 清除旧结果 → 重新同步所有文件\n"
+                "  [No]  跳过已同步文件，只同步未完成的",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                from bin_sync_tool import clear_sync_outputs
+                for _, p in synced:
+                    self.log(f"清除旧同步: {os.path.basename(p)}")
+                    try:
+                        clear_sync_outputs(p, backup=True)
+                        clear_first.add(p)
+                        self.refresh_file_status(p)
+                    except Exception as e:
+                        self.log(f"  清除失败: {e}")
+            else:
+                files_to_sync = [p for p in files_to_sync if p not in {sp for _, sp in synced}]
+                for _, p in synced:
+                    self.log(f"跳过已同步: {os.path.basename(p)}")
+
+        if not files_to_sync:
+            self.log("没有需要同步的文件")
+            return
+
+        self._syncing = True
+        self._update_ui()
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setRange(0, 0)  # indeterminate while searching
+        self.progress_bar.setFormat("正在搜索 ADC offset，请稍候...")
+        self.log_text.clear()
+        self.log(f"=== 开始一对多 ADC 搜索同步 ===")
+        self.log(f"Bin 目录: {self.bin_dir}")
+        self.log(f"待同步: {len(files_to_sync)} 个文件")
+
+        self.worker = OneToManySyncWorker(
+            files_to_sync, self.bin_dir,
+            emg1=self.cb_emg1.isChecked(), emg2=self.cb_emg2.isChecked(),
+            imu=self.cb_imu.isChecked(),
+            num_anchors=self.anchors_spin.value(),
+            match_threshold=self.threshold_spin.value() / 100.0,
+        )
+        self.worker.file_started.connect(self._on_file_started)
+        self.worker.file_finished.connect(self._on_file_finished)
+        self.worker.progress_text.connect(self.status_label.setText)
+        self.worker.log.connect(self.log)
+        self.worker.finished.connect(self._on_all_finished)
+        self.worker.start()
+
+    def _on_file_started(self, idx, total, fname):
+        self.progress_bar.setRange(0, 0)  # indeterminate
+        self.progress_bar.setFormat(f"正在同步 {idx+1}/{total}: {fname}")
+        self.status_label.setText(f"正在搜索 ADC offset / 同步当前文件，请稍候...")
+
+    def _on_file_finished(self, idx, total, fname, status, summary):
+        self.progress_bar.setRange(0, total)
+        self.progress_bar.setValue(idx + 1)
+        self.progress_bar.setFormat(f"已完成 {idx+1}/{total}")
+        self.status_label.setText(f"完成: {fname} ({status})")
+        # refresh table row
+        for p in self.h5_paths:
+            if os.path.basename(p) == fname:
+                self.refresh_file_status(p)
+                break
+        if summary:
+            self.log(f"  {status} {fname}: {summary}")
+
+    def _on_all_finished(self, success_count, total, results):
+        self.progress_bar.setRange(0, total)
+        self.progress_bar.setValue(total)
+        self.progress_bar.setFormat(f"完成 {success_count}/{total}")
+        self.progress_bar.setVisible(False)
+        self._syncing = False
+        self._update_ui()
+        self.status_label.setText(f"完成: {success_count}/{total} 成功")
+        self.log(f"\n=== 同步结束: {success_count}/{total} 成功 ===")
+        for r in results:
+            if r.get('status') != 'success' and r.get('status') != 'skipped':
+                self.log(f"  FAIL {r['file']}: {r.get('reason','?')}")
+
+
+class OneToManySyncWorker(QThread):
+    """一对多同步工作线程"""
+    file_started = pyqtSignal(int, int, str)
+    file_finished = pyqtSignal(int, int, str, str, str)  # idx, total, fname, status, summary
+    progress_text = pyqtSignal(str)
+    log = pyqtSignal(str)
+    finished = pyqtSignal(int, int, list)
+
+    def __init__(self, h5_paths, bin_dir, emg1=True, emg2=True, imu=True,
+                 num_anchors=40, match_threshold=0.95):
+        super().__init__()
+        self.h5_paths = h5_paths
+        self.bin_dir = bin_dir
+        self.emg1 = emg1; self.emg2 = emg2; self.imu = imu
+        self.num_anchors = num_anchors
+        self.match_threshold = match_threshold
+
+    def _find_bin(self, h5_path, device_id):
+        try:
+            with h5py.File(h5_path, 'r') as f:
+                prefix = f.attrs.get(f'sd_bin_dev{device_id}')
+                if prefix and self.bin_dir:
+                    if isinstance(prefix, bytes): prefix = prefix.decode('utf-8')
+                    ep = os.path.join(self.bin_dir, f'{prefix}_emg.bin')
+                    ip = os.path.join(self.bin_dir, f'{prefix}_imu.bin')
+                    if os.path.exists(ep):
+                        return ep, ip if os.path.exists(ip) else None
+            for fn in sorted(os.listdir(self.bin_dir)):
+                if fn.endswith('_emg.bin') and 'PREVIEW_' not in fn:
+                    return os.path.join(self.bin_dir, fn), None
+        except Exception:
+            pass
+        return None, None
+
+    def run(self):
+        from bin_sync_tool import sync_h5_one_to_many_adc_search
+        total = len(self.h5_paths)
+        results = []
+        success_count = 0
+
+        for idx, h5_path in enumerate(self.h5_paths):
+            fname = os.path.basename(h5_path)
+            self.file_started.emit(idx, total, fname)
+            self.log.emit(f"\n--- {fname} ---")
+
+            devices = []
+            if self.emg1: devices.append(1)
+            if self.emg2: devices.append(2)
+            ndev = len(devices)
+            file_ok = True
+            parts = []
+
+            for di, did in enumerate(devices):
+                emg_bin, imu_bin = self._find_bin(h5_path, did)
+                if not emg_bin:
+                    self.log.emit(f"  Dev{did}: 未找到 bin, 跳过")
+                    file_ok = False
+                    continue
+                is_last = (di == ndev - 1)
+                ini = imu_bin if self.imu else None
+                self.progress_text.emit(f"正在同步 {idx+1}/{total}: {fname} Dev{did}...")
+                self.log.emit(f"  Dev{did}: {os.path.basename(emg_bin)}")
+                try:
+                    r = sync_h5_one_to_many_adc_search(
+                        h5_path, emg_bin, ini, device_id=did,
+                        verify=True, set_synced=is_last,
+                        num_anchors=self.num_anchors,
+                        match_threshold=self.match_threshold,
+                    )
+                    if r.get('status') == 'success':
+                        cm = r.get('search_result', {}).get('channel_map_name', '?') if 'search_result' in r else r.get('channel_map_name', '?')
+                        mr = r.get('match_rate', '?')
+                        rm = r.get('search_result', {}).get('range_mode', '?') if 'search_result' in r else r.get('range_mode', '?')
+                        imu_s = r.get('imu_status', '?')
+                        imu_f = r.get('imu_frames', 0)
+                        parts.append(f"D{did}=OK(map={cm},rate={mr},range={rm},IMU={imu_s}/{imu_f}f)")
+                        self.log.emit(f"    OK offset={r.get('offset')} channel_map={cm} rate={mr} range={rm} IMU={imu_s}({imu_f}f)")
+                    else:
+                        parts.append(f"D{did}=FAIL")
+                        self.log.emit(f"    FAIL: {r.get('reason','?')}")
+                        file_ok = False
+                except Exception as e:
+                    parts.append(f"D{did}=ERR")
+                    self.log.emit(f"    ERROR: {e}")
+                    file_ok = False
+
+            status = 'success' if file_ok else 'failed'
+            summary = '; '.join(parts) if parts else 'no devices'
+            self.file_finished.emit(idx, total, fname, status, summary)
+            if file_ok:
+                success_count += 1
+                results.append({'file': fname, 'status': 'success'})
+            else:
+                results.append({'file': fname, 'status': 'failed', 'reason': summary})
+
+        self.finished.emit(success_count, total, results)
+
+class SyncToolsTab(QWidget):
+    """擦除同步标签页 - 清除同步结果，保留 250Hz 原始数据"""
+
+    def __init__(self):
+        super().__init__()
+        self.h5_paths = []
         self.worker = None
         self.init_ui()
 
@@ -2307,323 +2866,149 @@ class SyncToolsTab(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        # file selection
-        file_row = QHBoxLayout()
-        file_row.addWidget(QLabel("H5 文件:"))
-        self.file_label = QLabel("未选择")
-        self.file_label.setStyleSheet("color: #666;")
-        file_row.addWidget(self.file_label, 1)
-        select_btn = QPushButton("选择...")
-        select_btn.clicked.connect(self.select_file)
-        file_row.addWidget(select_btn)
-        layout.addLayout(file_row)
+        hint = QLabel(
+            "擦除同步工具：清除 emg*_2khz_adc / imu*_100hz 等同步产物\n"
+            "不会删除 250Hz 原始数据，不会影响采集元数据。\n"
+            "重新同步请使用 [同步(一对一)] 或 [同步(一对多)] 标签页。"
+        )
+        hint.setStyleSheet("color: #666; background: #f0f0f0; padding: 8px; border-radius: 6px; font-size: 11px;")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
 
-        # diagnose area
-        diag_group = QGroupBox("同步诊断")
-        diag_layout = QVBoxLayout(diag_group)
-        self.diag_text = QTextEdit()
-        self.diag_text.setReadOnly(True)
-        self.diag_text.setMaximumHeight(180)
-        self.diag_text.setFont(QFont("Consolas", 8))
-        diag_layout.addWidget(self.diag_text)
-        diag_btn = QPushButton("诊断同步风险")
-        diag_btn.clicked.connect(self.run_diagnose)
-        diag_layout.addWidget(diag_btn)
-        layout.addWidget(diag_group)
+        # H5 文件列表
+        h5_group = QGroupBox("待擦除的 H5 文件")
+        h5_layout = QVBoxLayout(h5_group)
+        h5_btn_row = QHBoxLayout()
+        self.count_label = QLabel("共 0 个文件")
+        h5_btn_row.addWidget(self.count_label)
+        h5_btn_row.addStretch()
+        self.clear_list_btn = QPushButton("清空列表")
+        self.clear_list_btn.clicked.connect(self.clear_h5_list)
+        h5_btn_row.addWidget(self.clear_list_btn)
+        h5_layout.addLayout(h5_btn_row)
+        self.list_widget = QListWidget()
+        self.list_widget.setMaximumHeight(90)
+        h5_layout.addWidget(self.list_widget)
+        layout.addWidget(h5_group)
 
-        # actions
-        action_group = QGroupBox("操作")
-        action_layout = QVBoxLayout(action_group)
+        # 按钮 + 进度条
         btn_row = QHBoxLayout()
         self.clear_btn = QPushButton("清除同步结果")
         self.clear_btn.clicked.connect(self.run_clear)
         self.clear_btn.setEnabled(False)
+        self.clear_btn.setStyleSheet("font-weight: bold; background: #dc3545; color: white; padding: 8px 24px;")
         btn_row.addWidget(self.clear_btn)
-        self.resync_btn = QPushButton("清除并重新同步")
-        self.resync_btn.clicked.connect(self.run_resync)
-        self.resync_btn.setEnabled(False)
-        self.resync_btn.setStyleSheet("font-weight: bold; background: #f97316; color: white;")
-        btn_row.addWidget(self.resync_btn)
-        action_layout.addLayout(btn_row)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
 
-        self.bin_label = QLabel("Bin 目录: 将根据 H5 attrs 自动查找，或手动选择")
-        self.bin_label.setStyleSheet("color: #666; font-size: 10px;")
-        action_layout.addWidget(self.bin_label)
-        bin_sel_row = QHBoxLayout()
-        self.bin_dir_btn = QPushButton("手动选择 Bin 目录...")
-        self.bin_dir_btn.clicked.connect(self.select_bin_dir)
-        bin_sel_row.addWidget(self.bin_dir_btn)
-        bin_sel_row.addStretch()
-        action_layout.addLayout(bin_sel_row)
-        layout.addWidget(action_group)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        layout.addWidget(self.progress_bar)
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color: #666; font-size: 10px;")
+        layout.addWidget(self.status_label)
 
-        # log
+        # 简洁日志
         log_group = QGroupBox("操作日志")
         log_layout = QVBoxLayout(log_group)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setFont(QFont("Consolas", 8))
         self.log_text.setStyleSheet("background: #1e1e1e; color: #d4d4d4;")
+        self.log_text.setMaximumHeight(150)
         log_layout.addWidget(self.log_text)
         layout.addWidget(log_group)
 
     def log(self, msg):
         self.log_text.append(msg)
 
-    def select_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择 H5 文件", "", "HDF5 Files (*.h5 *.hdf5)")
-        if path:
-            self.current_h5 = path
-            self.file_label.setText(os.path.basename(path))
-            self.file_label.setToolTip(path)
-            self.clear_btn.setEnabled(True)
-            self.resync_btn.setEnabled(True)
-            self.run_diagnose()
+    def add_h5_file(self, h5_path):
+        if h5_path not in self.h5_paths:
+            self.h5_paths.append(h5_path)
+            self.list_widget.addItem(os.path.basename(h5_path))
+            self._update_ui()
 
-    def select_bin_dir(self):
-        d = QFileDialog.getExistingDirectory(self, "选择 Bin 文件所在目录")
-        if d:
-            self.bin_dir = d
-            self.bin_label.setText(f"Bin 目录: {d}")
-            self.bin_label.setToolTip(d)
+    def clear_h5_list(self):
+        self.h5_paths.clear()
+        self.list_widget.clear()
+        self._update_ui()
 
-    def run_diagnose(self):
-        if not self.current_h5:
-            return
-        self.diag_text.clear()
-        self.log_text.clear()
-        self.log("正在诊断...")
-        try:
-            res = diagnose_frame_ids(self.current_h5)
-            lines = [
-                f"sync_status: {res.get('sync_status','?')}",
-                f"has_2khz: {res.get('has_2khz_any')}",
-                f"sd_bin_dev1: {res.get('bin_dev1') or '-'}",
-                f"sd_bin_dev2: {res.get('bin_dev2') or '-'}",
-            ]
-            for dev in ('emg1', 'emg2'):
-                d = res.get(dev, {})
-                risk_icon = {'ok': 'OK', 'medium': 'WARN', 'high': 'HIGH RISK'}.get(d.get('risk', 'ok'), '?')
-                lines.append(f"")
-                lines.append(f"--- {dev} ---")
-                lines.append(f"  250Hz frames: {d.get('count', 0)}")
-                lines.append(f"  2kHz dataset: {'YES' if d.get('has_2khz') else 'NO'}")
-                lines.append(f"  duplicates: {d.get('duplicates', 0)}  gaps: {d.get('gap_count', 0)}")
-                lines.append(f"  monotonic: {d.get('is_monotonic', '?')}  overlap_ratio: {d.get('overlap_ratio', 1.0)}")
-                lines.append(f"  RISK: {risk_icon}  {d.get('risk_reason', '')}")
-
-            # sync history audit
-            with h5py.File(self.current_h5, 'r') as f:
-                lines.append("")
-                lines.append("--- sync history ---")
-                for key, label in [('last_sync_attempt_time', '上次同步尝试'), ('last_sync_success_time', '上次同步成功'),
-                                   ('last_sync_clear_time', '上次清除'), ('last_sync_error_time', '上次同步错误')]:
-                    v = f.attrs.get(key)
-                    lines.append(f"  {label}: {v if v else '-'}")
-                for key, label in [('sync_attempt_count', '同步次数'), ('sync_clear_count', '清除次数')]:
-                    v = f.attrs.get(key, 0)
-                    lines.append(f"  {label}: {v}")
-                raw = f.attrs.get('sync_history')
-                if raw:
-                    try:
-                        if isinstance(raw, bytes):
-                            raw = raw.decode('utf-8')
-                        hist = json.loads(raw)
-                        recent = hist[-3:] if len(hist) > 3 else hist
-                        lines.append(f"  最近 {len(recent)}/{len(hist)} 条记录:")
-                        for h in recent:
-                            lines.append(f"    {h.get('time','?')[:19]} {h.get('action','?')}/{h.get('status','?')}")
-                    except Exception:
-                        lines.append("  sync_history: invalid format")
-                else:
-                    lines.append("  sync_history: -")
-
-            self.diag_text.setPlainText('\n'.join(lines))
-            self.log("诊断完成")
-        except Exception as e:
-            self.log(f"诊断失败: {e}")
-            self.diag_text.setPlainText(f"ERROR: {e}")
+    def _update_ui(self):
+        n = len(self.h5_paths)
+        self.count_label.setText(f"共 {n} 个文件")
+        self.clear_btn.setEnabled(n > 0)
 
     def run_clear(self):
-        if not self.current_h5:
+        if not self.h5_paths:
             return
-        reply = QMessageBox.warning(self, "确认清除",
-            "将清除此 H5 中的同步产物:\n"
-            "- 删除 emg1_2khz_adc / emg2_2khz_adc\n"
-            "- 删除 imu*_100hz\n"
-            "- 清除 sync_status / sync_time / sync_error\n"
-            "- 保留 250Hz 原始数据不变\n\n"
-            "清除前会自动备份 (.bak_时间戳)。\n确定继续？",
+        reply = QMessageBox.warning(self, "确认擦除",
+            f"将清除 {len(self.h5_paths)} 个 H5 文件的同步结果:\n"
+            "  - 删除 emg*_2khz_adc / imu*_100hz 等同步产物\n"
+            "  - 清除 sync_* attrs\n"
+            "  - 自动备份 .bak 文件\n"
+            "  - 保留 250Hz 原始数据\n\n确定继续？",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply != QMessageBox.Yes:
             return
 
-        self.log("正在清除同步产物...")
-        QApplication.processEvents()
-        try:
-            res = clear_sync_outputs(self.current_h5, backup=True)
-            if res['success']:
-                self.log(f"清除成功。备份: {res.get('backup_path', 'N/A')}")
-                self.log(f"已删除 datasets: {res['removed_datasets']}")
-                self.log(f"已清除 attrs: {res['removed_attrs']}")
-            else:
-                self.log(f"清除失败: {res['errors']}")
-            self.run_diagnose()  # refresh
-        except Exception as e:
-            self.log(f"清除异常: {e}")
+        self.clear_btn.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setMaximum(len(self.h5_paths))
+        self.log_text.clear()
+        self.log("=== 开始擦除同步 ===")
 
-    def run_resync(self):
-        if not self.current_h5:
-            return
+        self.worker = ClearSyncWorker(self.h5_paths)
+        self.worker.progress.connect(self.on_progress)
+        self.worker.log.connect(self.log)
+        self.worker.finished.connect(self.on_finished)
+        self.worker.start()
 
-        # ---- Phase 1: read H5 attrs and resolve bin directory ----
-        with h5py.File(self.current_h5, 'r') as f:
-            cm = f.attrs.get('channel_map_name', 'V2')
-            if isinstance(cm, bytes):
-                cm = cm.decode('utf-8')
-            dev_prefixes = {}
-            for dev_id in (1, 2):
-                p = f.attrs.get(f'sd_bin_dev{dev_id}')
-                if isinstance(p, bytes):
-                    p = p.decode('utf-8')
-                dev_prefixes[dev_id] = p
+    def on_progress(self, current, total, message):
+        self.progress_bar.setMaximum(total)
+        self.progress_bar.setValue(current)
+        self.status_label.setText(message)
 
-        bin_dir = getattr(self, 'bin_dir', None)
-        if not bin_dir:
-            h5_dir = os.path.dirname(self.current_h5)
-            found_any = False
-            for dev_id, prefix in dev_prefixes.items():
-                if prefix and os.path.exists(os.path.join(h5_dir, f'{prefix}_emg.bin')):
-                    found_any = True
-                    break
-            if found_any:
-                bin_dir = h5_dir
-                self.log(f"自动使用 H5 同目录作为 bin 目录: {bin_dir}")
-            elif any(dev_prefixes.values()):
-                QMessageBox.warning(self, "未找到 bin 文件",
-                    f"H5 记录了 sd_bin_dev1/2，但在 H5 同目录下未找到对应 emg bin。\n请先手动选择 bin 目录。")
-                return
-            else:
-                QMessageBox.warning(self, "缺少 bin 信息",
-                    "H5 中未找到 sd_bin_dev1/sd_bin_dev2 attrs，无法定位 bin 文件。\n请先手动选择 bin 目录。")
-                return
+    def on_finished(self, success_count, total, errors):
+        self.progress_bar.setVisible(False)
+        self.clear_btn.setEnabled(True)
+        self.status_label.setText(f"完成: {success_count}/{total} 成功")
+        self.log(f"\n=== 擦除结束: {success_count}/{total} 成功 ===")
+        for e in errors:
+            self.log(f"  ERROR: {e}")
 
-        # ---- Phase 2: strict pre-check ----
-        # H5 声明的每个设备对应的 emg bin 都必须存在，否则不清除
-        sync_jobs = []
-        missing = []
-        for dev_id in (1, 2):
-            prefix = dev_prefixes.get(dev_id)
-            if not prefix:
-                continue
-            emg_bin = os.path.join(bin_dir, f'{prefix}_emg.bin')
-            if not os.path.exists(emg_bin):
-                missing.append(f"dev{dev_id}: {os.path.basename(emg_bin)}")
-                continue
-            imu_bin = os.path.join(bin_dir, f'{prefix}_imu.bin')
-            sync_jobs.append((dev_id, emg_bin, imu_bin if os.path.exists(imu_bin) else None))
 
-        if missing:
-            self.log("ERROR: H5 声明了以下设备但 emg bin 缺失，不执行清除:")
-            for m in missing:
-                self.log(f"  {m}")
-            QMessageBox.warning(self, "bin 文件不完整",
-                "H5 已声明以下设备但 emg bin 文件缺失:\n" + '\n'.join(missing) +
-                "\n\n请确认 bin 目录正确。所有必需 bin 文件存在后才能重新同步。")
-            return
+class ClearSyncWorker(QThread):
+    """擦除同步工作线程"""
+    progress = pyqtSignal(int, int, str)
+    log = pyqtSignal(str)
+    finished = pyqtSignal(int, int, list)
 
-        if not sync_jobs:
-            self.log("ERROR: H5 没有记录任何 sd_bin_dev，无法同步")
-            return
+    def __init__(self, h5_paths):
+        super().__init__()
+        self.h5_paths = h5_paths
 
-        self.log(f"预检查通过: 可同步 {len(sync_jobs)} 个设备")
-        for dev_id, emg, imu in sync_jobs:
-            self.log(f"  dev{dev_id}: {os.path.basename(emg)}" + (f" + {os.path.basename(imu)}" if imu else ""))
-            if not imu:
-                self.log(f"    (IMU bin 缺失，仅同步 EMG)")
-
-        reply = QMessageBox.warning(self, "确认重新同步",
-            f"将先清除旧同步产物（自动备份），再对 {len(sync_jobs)} 个设备重新同步。\n确定继续？",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if reply != QMessageBox.Yes:
-            return
-
-        self.log("=== 开始重新同步 ===")
-        QApplication.processEvents()
-
-        # ---- Phase 3: clear ----
-        self.log("清除旧同步产物...")
-        cres = clear_sync_outputs(self.current_h5, backup=True)
-        if not cres['success']:
-            self.log(f"清除失败: {cres['errors']}")
-            return
-        self.log(f"已备份: {cres.get('backup_path')}")
-
-        # ---- Phase 4: re-sync (all set_synced=False, final status set manually) ----
-        self.log("调用新版同步...")
-        QApplication.processEvents()
-        try:
-            results = []
-            for dev_id, emg_bin, imu_bin in sync_jobs:
-                self.log(f"  dev{dev_id}: {os.path.basename(emg_bin)}")
-                QApplication.processEvents()
-
-                r = sync_h5_with_bin(
-                    self.current_h5, emg_bin, imu_bin,
-                    device_id=dev_id, verify=True,
-                    set_synced=False,  # 不自动写 synced
-                    channel_map_name=cm or 'V2',
-                )
-                results.append((dev_id, r))
-                status = r.get('status', '?')
-                if status == 'success':
-                    self.log(f"    EMG: {r.get('frames_2khz', 0)} frames")
-                    if r.get('imu_status') == 'success':
-                        self.log(f"    IMU: {r.get('imu_frames', 0)} frames")
-                elif status == 'skipped':
-                    self.log(f"    已同步，跳过")
-                else:
-                    self.log(f"    失败: {r.get('reason', '?')}")
-
-            # 最终状态：全部成功才写 synced
-            all_ok = all(r.get('status') == 'success' for _, r in results)
-            if all_ok:
-                with h5py.File(self.current_h5, 'a') as f:
-                    f.attrs['sync_status'] = 'synced'
-                    f.attrs['sync_time'] = datetime.now().isoformat()
-                    append_sync_history(f, action='resync', status='synced',
-                                        details={'devices': len(results)})
-                self.log("=== 重新同步完成，sync_status=synced ===")
-            elif results:
-                failures = [f"dev{did}: {r.get('reason','?')}" for did, r in results if r.get('status') != 'success']
-                with h5py.File(self.current_h5, 'a') as f:
-                    f.attrs['sync_status'] = 'sync_failed'
-                    f.attrs['sync_time'] = datetime.now().isoformat()
-                    f.attrs['sync_error'] = '; '.join(failures)
-                    append_sync_history(f, action='resync', status='sync_failed',
-                                        details={'failures': failures})
-                self.log("=== 重新同步失败，sync_status=sync_failed ===")
-                for fl in failures:
-                    self.log(f"  失败: {fl}")
-            else:
-                self.log("=== 未同步任何设备 ===")
-
-            self.run_diagnose()
-        except Exception as e:
-            self.log(f"重新同步异常: {e}")
-            # 尝试将 H5 标记为 sync_failed
+    def run(self):
+        from bin_sync_tool import clear_sync_outputs
+        total = len(self.h5_paths)
+        success = 0
+        errs = []
+        for idx, h5_path in enumerate(self.h5_paths):
+            fn = os.path.basename(h5_path)
+            self.progress.emit(idx, total, f"擦除中: {fn}")
+            self.log.emit(f"  {fn}...")
             try:
-                with h5py.File(self.current_h5, 'a') as f:
-                    f.attrs['sync_status'] = 'sync_failed'
-                    f.attrs['sync_time'] = datetime.now().isoformat()
-                    f.attrs['sync_error'] = f"resync exception: {e}"
-                    append_sync_history(f, action='resync', status='exception',
-                                        details={'error': str(e)})
-                self.log("已将 sync_status 标记为 sync_failed")
-            except Exception as we:
-                self.log(f"写入 sync_failed 状态失败: {we}")
-            self.run_diagnose()
-
+                r = clear_sync_outputs(h5_path, backup=True)
+                if r['success']:
+                    success += 1
+                    self.log.emit(f"    OK: 已备份, 已删除 {r['removed_datasets']}")
+                else:
+                    errs.append(f"{fn}: {'; '.join(r.get('errors', ['unknown']))}")
+                    self.log.emit(f"    FAIL: {r.get('errors')}")
+            except Exception as e:
+                errs.append(f"{fn}: {e}")
+                self.log.emit(f"    ERROR: {e}")
+            self.progress.emit(idx + 1, total, f"完成: {fn}")
+        self.finished.emit(success, total, errs)
 
 class HDF5Tool(QMainWindow):
     """HDF5整合工具主窗口"""
@@ -2849,13 +3234,16 @@ class HDF5Tool(QMainWindow):
         self.tabs.addTab(self.viewer_tab, "查看")
 
         self.sync_tab = SyncTab()
-        self.tabs.addTab(self.sync_tab, "同步")
+        self.tabs.addTab(self.sync_tab, "同步（一对一）")
+
+        self.one_to_many_tab = OneToManySyncTab()
+        self.tabs.addTab(self.one_to_many_tab, "同步（一对多）")
+
+        self.sync_tools_tab = SyncToolsTab()
+        self.tabs.addTab(self.sync_tools_tab, "擦除同步")
 
         self.breakpoint_tab = BreakpointTab()
         self.tabs.addTab(self.breakpoint_tab, "历史断点")
-
-        self.sync_tools_tab = SyncToolsTab()
-        self.tabs.addTab(self.sync_tools_tab, "同步工具")
 
         main_splitter.addWidget(self.tabs)
         main_splitter.setSizes([250, 1000])
@@ -2953,10 +3341,24 @@ class HDF5Tool(QMainWindow):
             self.tabs.setCurrentIndex(0)
 
     def add_to_sync_list(self):
-        """批量添加选中的文件到同步列表"""
+        """批量添加选中的文件到同步列表（根据当前标签页分发）"""
         items = self.file_list.selectedItems()
-        if items:
-            file_paths = [item.data(Qt.UserRole) for item in items]
+        if not items:
+            return
+        file_paths = [item.data(Qt.UserRole) for item in items]
+        current_tab = self.tabs.currentWidget()
+        if current_tab is self.sync_tab:
+            self.sync_tab.add_files_from_list(file_paths)
+            self.tabs.setCurrentIndex(1)
+        elif current_tab is self.one_to_many_tab:
+            for fp in file_paths:
+                self.one_to_many_tab.add_h5_file(fp)
+            self.tabs.setCurrentIndex(2)
+        elif current_tab is self.sync_tools_tab:
+            for fp in file_paths:
+                self.sync_tools_tab.add_h5_file(fp)
+            self.tabs.setCurrentIndex(3)
+        else:
             self.sync_tab.add_files_from_list(file_paths)
             self.tabs.setCurrentIndex(1)
 

@@ -51,8 +51,10 @@ HEADER_SIZE = 126
 # EMG帧大小：4字节帧号 + 16通道 * 3字节 = 52字节
 EMG_FRAME_SIZE = 4 + 16 * 3
 
-# IMU帧大小：4字节帧号 + 36字节数据 = 40字节
-IMU_FRAME_SIZE = 4 + 36
+# IMU单芯片数据大小：18 字节 (acc 6 + gyro 6 + reserved 6)
+BYTES_PER_IMU_CHIP = 18
+# IMU帧大小：4字节帧号 + num_imus * 18字节（动态，默认 2 IMU = 40 字节）
+IMU_FRAME_SIZE = 4 + 36  # 保留旧常量兼容 2 IMU，新代码用 IMUBinParser.num_imus 动态计算
 
 # 降采样比例（2kHz -> 250Hz）
 DOWNSAMPLE_RATIO = 8
@@ -540,13 +542,14 @@ class EMGBinParser:
 
 
 class IMUBinParser:
-    """IMU bin文件解析器"""
+    """IMU bin文件解析器 — 支持 2/3 IMU 动态数量"""
 
-    def __init__(self, bin_path):
+    def __init__(self, bin_path, num_imus=2):
         self.bin_path = bin_path
+        self.num_imus = max(1, min(4, int(num_imus or 2)))
         self.sample_rate = 0
         self.timestamp_str = ""
-        self.frames = {}  # {frame_id: (imu1_data, imu2_data)}
+        self.frames = {}  # {frame_id: tuple of imu dicts}
         self.frame_count = 0
 
     def parse(self):
@@ -554,6 +557,8 @@ class IMUBinParser:
         file_size = os.path.getsize(self.bin_path)
         if file_size < HEADER_SIZE:
             raise ValueError(f"文件太小: {file_size} bytes")
+
+        frame_size = 4 + self.num_imus * BYTES_PER_IMU_CHIP
 
         with open(self.bin_path, 'rb') as f:
             # 读取文件头
@@ -568,19 +573,19 @@ class IMUBinParser:
             self.sample_rate = sample_rate if 0 < sample_rate <= 1000 else 100
             self.timestamp_str = ts_bytes.decode('utf-8').strip('\x00')
 
-            log(f"IMU文件信息: 采样率={self.sample_rate}Hz")
+            log(f"IMU文件信息: 采样率={self.sample_rate}Hz, num_imus={self.num_imus}, frame_size={frame_size}B")
             log(f"时间戳: {self.timestamp_str}")
 
             # 读取所有帧
             while True:
-                chunk = f.read(IMU_FRAME_SIZE)
-                if len(chunk) < IMU_FRAME_SIZE:
+                chunk = f.read(frame_size)
+                if len(chunk) < frame_size:
                     break
 
                 frame_id = struct.unpack('<I', chunk[0:4])[0]
                 raw_data = chunk[4:]
 
-                # 解析IMU数据
+                # 解析每个 IMU 芯片
                 def parse_chip(b):
                     ag = struct.unpack('>6h', b[0:12])
                     m = struct.unpack('<3h', b[12:18])
@@ -590,10 +595,12 @@ class IMUBinParser:
                         'mag': [x * SCALE_MAG for x in m[0:3]]
                     }
 
-                imu1 = parse_chip(raw_data[0:18])
-                imu2 = parse_chip(raw_data[18:36])
+                imus = []
+                for k in range(self.num_imus):
+                    off = k * BYTES_PER_IMU_CHIP
+                    imus.append(parse_chip(raw_data[off:off + BYTES_PER_IMU_CHIP]))
 
-                self.frames[frame_id] = (imu1, imu2)
+                self.frames[frame_id] = tuple(imus)
                 self.frame_count += 1
 
         log(f"解析完成: 共 {self.frame_count} 帧")
@@ -679,7 +686,13 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
 
     # 解析bin文件
     emg_parser = EMGBinParser(emg_bin_path).parse()
-    imu_parser = IMUBinParser(imu_bin_path).parse() if imu_bin_path else None
+    _num_imus = 2
+    try:
+        with h5py.File(h5_path, 'r') as _f:
+            _num_imus = _resolve_num_imus(_f, device_id)
+    except Exception:
+        pass
+    imu_parser = IMUBinParser(imu_bin_path, num_imus=_num_imus).parse() if imu_bin_path else None
 
     # 打开h5文件
     with h5py.File(h5_path, 'r+') as f:
@@ -1123,6 +1136,713 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
         }
         result.update(imu_result)
         return result
+
+
+# ===================== ADC Offset Search (一对多模式) =====================
+
+def _build_h5_signature_set(channels_250hz, anchor_indices, channel_map, channel_indices=None):
+    """从 H5 锚点构建签名集合: {signature_tuple: set of anchor_indices}
+
+    channel_indices=None 时使用全部 16 通道。
+    """
+    sig_set = {}
+    for aidx in anchor_indices:
+        row = channels_250hz[aidx]
+        if channel_indices is not None:
+            sig = tuple(int(row[ch]) for ch in channel_indices)
+        else:
+            sig = tuple(int(v) for v in row)
+        sig_set.setdefault(sig, set()).add(aidx)
+    return sig_set
+
+
+def _scan_bin_for_h5_signatures(parser, channel_map, h5_sig_set, channel_indices, anchor_indices, max_offset):
+    """单次扫描 bin frames，只记录命中 H5 签名集合的帧并反推 offset。
+
+    返回: all_offset_votes dict (与之前格式兼容)
+    """
+    all_offset_votes = {}
+    sig_hits = 0
+    for sd_fid, row in parser.frames.items():
+        mapped = map_physical_to_h5_order(row, channel_map)
+        if channel_indices is not None:
+            sig = tuple(int(mapped[ch]) for ch in channel_indices)
+        else:
+            sig = tuple(int(v) for v in mapped)
+        matching_anchors = h5_sig_set.get(sig)
+        if matching_anchors is None:
+            continue
+        sig_hits += len(matching_anchors)
+        for aidx in matching_anchors:
+            offset = sd_fid - aidx * DOWNSAMPLE_RATIO - (DOWNSAMPLE_RATIO - 1)
+            if 0 <= offset <= max_offset:
+                entry = all_offset_votes.setdefault(offset, {'votes': 0, 'matched_anchors': [], 'phase': offset % DOWNSAMPLE_RATIO})
+                entry['votes'] += 1
+                if len(entry['matched_anchors']) < 20:
+                    entry['matched_anchors'].append(int(aidx))
+    return all_offset_votes, sig_hits
+
+
+def _select_high_variance_channels(channels_data, top_k=8):
+    """选择方差最高的 k 个通道索引，用于 fallback 签名。"""
+    variances = np.var(np.asarray(channels_data, dtype=np.float64), axis=0)
+    top_indices = np.argsort(variances)[-top_k:][::-1]
+    return list(int(i) for i in top_indices)
+
+
+def _scan_bin_for_h5_rows(parser, channels_250hz, channel_map):
+    """Scan bin frames and match complete H5 250Hz rows."""
+    sig_to_rows = {}
+    for row_idx, row in enumerate(channels_250hz):
+        sig = tuple(int(v) for v in row)
+        sig_to_rows.setdefault(sig, []).append(int(row_idx))
+
+    matched_rows = {}
+    duplicate_hits = 0
+    for sd_fid, row in parser.frames.items():
+        mapped = map_physical_to_h5_order(row, channel_map)
+        sig = tuple(int(v) for v in mapped)
+        row_indices = sig_to_rows.get(sig)
+        if not row_indices:
+            continue
+        for row_idx in row_indices:
+            if row_idx not in matched_rows:
+                matched_rows[row_idx] = int(sd_fid)
+            else:
+                duplicate_hits += 1
+
+    if not matched_rows:
+        return {
+            'found': False,
+            'matched_rows': 0,
+            'match_rate': 0.0,
+            'start_sd_frame_id': None,
+            'end_sd_frame_id': None,
+            'duplicate_hits': duplicate_hits,
+        }
+
+    ordered = sorted(matched_rows.items())
+    sd_values = [sd for _, sd in ordered]
+    return {
+        'found': True,
+        'matched_rows': len(matched_rows),
+        'match_rate': len(matched_rows) / max(1, len(channels_250hz)),
+        'start_sd_frame_id': int(min(sd_values)),
+        'end_sd_frame_id': int(max(sd_values)),
+        'first_h5_row': int(ordered[0][0]),
+        'last_h5_row': int(ordered[-1][0]),
+        'duplicate_hits': duplicate_hits,
+        'matched_row_map': matched_rows,
+    }
+
+
+def find_bin_offset_by_adc(h5_path, emg_bin_path, device_id=1, channel_map_name='V2',
+                           num_anchors=40, match_threshold=0.95, max_offset_search=None):
+    """通过 ADC 采样值在长 bin 中搜索 H5 250Hz 数据的对应 offset。
+
+    用于一对多模式：一个长 bin 对应多个 H5。不依赖 H5 的旧 frame_id，
+    只使用 H5 250Hz ADC 的原始通道值在 bin 中做锚点匹配。
+
+    Args:
+        h5_path: H5 文件路径
+        emg_bin_path: EMG bin 文件路径
+        device_id: 设备 ID
+        channel_map_name: 通道映射名称
+        num_anchors: 使用的锚点数量（均匀抽样）
+        match_threshold: 匹配率阈值（>=此值才认为找到）
+        max_offset_search: 最大搜索 offset（None = 搜整个 bin）
+
+    Returns:
+        dict: {
+            'found': bool,
+            'offset': int or None,  # H5 row 0 对应的 bin 2kHz frame offset
+            'match_rate': float,
+            'checked': int, 'matched': int, 'mismatched': int,
+            'candidates': list of (offset, match_rate),  # 候选偏移
+            'channel_map_name': str,
+            'error': str or None,
+        }
+    """
+    log("=" * 50)
+    log(f"ADC offset search: {os.path.basename(h5_path)}")
+    log(f"  bin: {os.path.basename(emg_bin_path)}, device_id={device_id}")
+    log(f"  anchors={num_anchors}, threshold={match_threshold}")
+    log("=" * 50)
+
+    # 1. 读取 H5 250Hz ADC 数据
+    with h5py.File(h5_path, 'r') as f:
+        ds_name = f"emg{device_id}_250hz_adc"
+        if ds_name not in f:
+            return {'found': False, 'offset': None, 'error': f'数据集 {ds_name} 不存在'}
+        ds = f[ds_name]
+        n = ds.shape[0]
+        if n < 10:
+            return {'found': False, 'offset': None, 'error': f'250Hz 数据太少 ({n} 帧)'}
+        data_250hz = ds[:]
+        channel_map, resolved_name = _resolve_channel_map(f, ds_name, channel_map_name)
+
+    channels_250hz = data_250hz['channels']
+
+    # 2. 解析 bin
+    parser = EMGBinParser(emg_bin_path).parse()
+    bin_total = len(parser.frames)
+    if bin_total == 0:
+        return {'found': False, 'offset': None, 'error': 'bin 文件为空'}
+
+    log(f"  H5 250Hz: {n} frames, bin 2kHz: {bin_total} frames")
+
+    # 3. 构建候选 channel_map 列表（自动 fallback 到 physical，用于旧 L015 数据）
+    map_candidates = []
+    if channel_map is not None:
+        map_candidates.append((channel_map, resolved_name))
+    if channel_map is None or resolved_name.lower() not in ('physical', 'none', 'identity'):
+        map_candidates.append((None, 'physical'))
+
+    max_offset = max_offset_search or (bin_total - n * DOWNSAMPLE_RATIO)
+    if max_offset <= 0:
+        return {'found': False, 'offset': None, 'error': f'bin too small (bin={bin_total}, need>{n * DOWNSAMPLE_RATIO})'}
+
+    # 4. 选择锚点（用于 anchor fallback）
+    skip_start = min(500, n // 5)
+    skip_end = min(500, n // 5)
+    usable = n - skip_start - skip_end
+    if usable < num_anchors:
+        num_anchors = max(5, usable)
+        skip_start = (n - num_anchors) // 2
+        skip_end = n - skip_start - num_anchors
+    anchor_indices = np.linspace(skip_start, n - skip_end - 1, num_anchors, dtype=int)
+
+    # 5. 尝试每种 channel_map：先完整行扫描，失败再锚点签名搜索
+    best_overall = None
+
+    for cm, cm_name in map_candidates:
+        log(f"  --- trying channel_map={cm_name} ---")
+
+        # 5a. 完整行扫描（最可靠；不受 frame_id 或 BLE 丢包影响）
+        row_result = _scan_bin_for_h5_rows(parser, channels_250hz, cm)
+        row_rate = row_result['match_rate']
+        log(f"    row scan: matched={row_result['matched_rows']}/{n}, rate={row_rate:.3f}")
+        if row_result.get('duplicate_hits', 0) > 0:
+            log(f"      duplicate hits: {row_result['duplicate_hits']}")
+
+        if row_rate >= match_threshold:
+            sd_start = row_result['start_sd_frame_id']
+            sd_end = row_result['end_sd_frame_id']
+            first_row = row_result['first_h5_row']
+            derived_offset = sd_start - first_row * DOWNSAMPLE_RATIO
+            log(f"    row scan PASSED (channel_map={cm_name}): start={sd_start}, end={sd_end}, rate={row_rate:.3f}")
+            log(f"    derived offset={derived_offset} (from first matched row {first_row})")
+            log(f"    range_mode=row_signature_span")
+            return {
+                'found': True,
+                'offset': int(derived_offset),
+                'match_rate': row_rate,
+                'checked': n,
+                'matched': row_result['matched_rows'],
+                'mismatched': n - row_result['matched_rows'],
+                'candidates': [],
+                'channel_map_name': cm_name,
+                'phase': None,
+                'range_mode': 'row_signature_span',
+                'start_sd_frame_id': int(sd_start),
+                'end_sd_frame_id': int(sd_end),
+                'error': None,
+            }
+
+        # 5b. 锚点签名搜索（fallback）
+        def _make_score_offset(_cm):
+            def _score(offset):
+                matched = 0; checked = 0
+                for idx in anchor_indices:
+                    sd_fid = offset + idx * DOWNSAMPLE_RATIO + (DOWNSAMPLE_RATIO - 1)
+                    row = parser.get_frame(sd_fid)
+                    if row is None: continue
+                    checked += 1
+                    if np.all(np.abs(np.array(map_physical_to_h5_order(row, _cm), dtype=np.int32) - channels_250hz[idx]) <= 1):
+                        matched += 1
+                return matched, checked
+            return _score
+
+        score_offset = _make_score_offset(cm)
+        sig_configs = [
+            (16, None, 'full 16ch'),
+            (8, _select_high_variance_channels(channels_250hz, top_k=8), 'high-var 8ch'),
+            (4, _select_high_variance_channels(channels_250hz, top_k=4), 'high-var 4ch'),
+        ]
+
+        all_offset_votes = {}
+        for n_ch, ch_indices, label in sig_configs:
+            h5_sig_set = _build_h5_signature_set(channels_250hz, anchor_indices, cm, ch_indices)
+            votes, sig_hits = _scan_bin_for_h5_signatures(parser, cm, h5_sig_set, ch_indices, anchor_indices, max_offset)
+            all_offset_votes.update(votes)
+            log(f"    anchor {label}: H5 set={len(h5_sig_set)}, hits={sig_hits}, candidates={len(all_offset_votes)}")
+            if len(all_offset_votes) > 500:
+                break
+
+        if not all_offset_votes:
+            log(f"    anchor search: 0 hits for {cm_name}")
+            continue
+
+        sorted_candidates = sorted(all_offset_votes.items(), key=lambda x: -x[1]['votes'])
+        top_k = min(50, len(sorted_candidates))
+        final_results = []
+        for off, info in sorted_candidates[:top_k]:
+            matched, checked = score_offset(off)
+            if checked >= num_anchors * 0.3:
+                rate = matched / checked if checked > 0 else 0
+                final_results.append((off, rate, matched, checked, info['votes'], info['phase']))
+        final_results.sort(key=lambda x: -x[1])
+
+        if final_results:
+            best = final_results[0]
+            log(f"    anchor best: offset={best[0]}, rate={best[1]:.3f} ({best[2]}/{best[3]})")
+            if best_overall is None or best[1] > best_overall[1]:
+                best_overall = (best[0], best[1], best[2], best[3], best[4], best[5], cm_name)
+
+    # 6. 没有 channel map 找到任何结果
+    if best_overall is None:
+        names = ', '.join(n for _, n in map_candidates)
+        return {
+            'found': False, 'offset': None, 'match_rate': 0.0,
+            'checked': 0, 'matched': 0, 'mismatched': 0,
+            'candidates': [], 'channel_map_name': resolved_name, 'phase': None,
+            'error': f'no match in any channel map (tried: {names})',
+        }
+
+    best_off, best_rate, best_matched, best_checked, best_votes, best_phase, best_cm = best_overall
+    found = best_rate >= match_threshold
+
+    log(f"  best overall: channel_map={best_cm}, offset={best_off}, rate={best_rate:.3f} ({best_matched}/{best_checked})")
+    if not found:
+        log(f"  [FAIL] best_rate {best_rate:.3f} < threshold {match_threshold}")
+
+    return {
+        'found': found,
+        'offset': best_off if found else None,
+        'match_rate': best_rate,
+        'checked': best_checked,
+        'matched': best_matched,
+        'mismatched': best_checked - best_matched,
+        'candidates': [],
+        'channel_map_name': best_cm,
+        'phase': best_phase,
+        'range_mode': 'anchor_votes',
+        'start_sd_frame_id': None,
+        'end_sd_frame_id': None,
+        'error': None if found else f'match_rate {best_rate:.3f} < threshold {match_threshold}',
+    }
+
+def _resolve_num_imus(h5_file, device_id):
+    """从 H5 attrs 推断 IMU 数量。优先级: imu{device}_num_imus > num_imus > dataset 推断 > 默认 2"""
+    val = h5_file.attrs.get(f'imu{device_id}_num_imus')
+    if val is not None:
+        return max(1, min(4, int(val)))
+    val = h5_file.attrs.get('num_imus')
+    if val is not None:
+        return max(1, min(4, int(val)))
+    # infer from imu*_all_ble dataset imu_index
+    all_ds = f'imu{device_id}_all_ble'
+    if all_ds in h5_file and 'imu_index' in h5_file[all_ds].dtype.names:
+        max_idx = int(h5_file[all_ds][:]['imu_index'].max())
+        return max(1, min(4, max_idx + 1))
+    # infer from existence of a/b/c BLE datasets
+    for candidate in [3, 2]:
+        ds = f'imu{device_id}{chr(ord("a") + candidate - 1)}_ble'
+        if ds in h5_file:
+            return candidate
+    return 2
+
+
+# ===================== 一对一同步 =====================
+
+def sync_h5_one_to_one(h5_path, emg_bin_path, imu_bin_path=None, device_id=1,
+                       verify=True, set_synced=True, channel_map_name='V2'):
+    """一对一同步：H5 与 bin 一一对应，bin_offset=0，使用 row_index 定位。
+
+    适用于 stream_format_version >= 2 且 bin_pair_source=collection_stream 的新格式 H5。
+
+    Args:
+        h5_path: H5 文件路径
+        emg_bin_path: EMG bin 文件路径
+        imu_bin_path: IMU bin 文件路径
+        device_id: 设备 ID
+        verify: 是否 ADC 校验
+        set_synced: 是否设 sync_status=synced
+        channel_map_name: 通道映射
+
+    Returns:
+        dict: 同步结果
+    """
+    log("=" * 60)
+    log(f"[one_to_one] 开始同步 (bin_offset=0)")
+    log(f"  H5: {os.path.basename(h5_path)}")
+    log(f"  EMG bin: {os.path.basename(emg_bin_path)}")
+    log("=" * 60)
+
+    with h5py.File(h5_path, 'r+') as f:
+        current_status = f.attrs.get('sync_status', 'unknown')
+        if current_status == 'synced':
+            log("警告: 文件已同步，跳过")
+            return {'status': 'skipped', 'reason': 'already_synced'}
+
+        ds_250hz_name = f"emg{device_id}_250hz_adc"
+        if ds_250hz_name not in f:
+            return {'status': 'error', 'reason': f'dataset {ds_250hz_name} not found'}
+
+        ds_250hz = f[ds_250hz_name]
+        num_frames_250hz = ds_250hz.shape[0]
+        if num_frames_250hz == 0:
+            return {'status': 'error', 'reason': 'empty_250hz_dataset'}
+
+        data_250hz = ds_250hz[:]
+        channels_250hz = data_250hz['channels']
+        timestamps_250hz = data_250hz['time']
+
+        channel_map, resolved_name = _resolve_channel_map(f, ds_250hz_name, channel_map_name)
+        log(f"通道映射: {resolved_name}")
+
+    parser = EMGBinParser(emg_bin_path).parse()
+    _ni = 2
+    try:
+        with h5py.File(h5_path, 'r') as _f:
+            _ni = _resolve_num_imus(_f, device_id)
+    except Exception:
+        pass
+    imu_parser = IMUBinParser(imu_bin_path, num_imus=_ni).parse() if imu_bin_path else None
+
+    bin_offset = 0  # 一对一模式固定 offset=0
+    match_rate = None  # 当 verify=False 时保持 None
+
+    # ---- ADC 校验：H5 row i 的 250Hz ADC == bin frame i*8+7 ----
+    if verify:
+        num_check = min(200, num_frames_250hz)
+        check_indices = np.linspace(0, num_frames_250hz - 1, num_check, dtype=int)
+        matched = 0
+        checked = 0
+        mismatch_details = []
+
+        for idx in check_indices:
+            sd_fid = bin_offset + idx * DOWNSAMPLE_RATIO + (DOWNSAMPLE_RATIO - 1)
+            bin_data = parser.get_frame(sd_fid)
+            if bin_data is None:
+                continue
+            checked += 1
+            bin_mapped = map_physical_to_h5_order(bin_data, channel_map)
+            if np.all(np.abs(np.array(bin_mapped, dtype=np.int32) - channels_250hz[idx]) <= 1):
+                matched += 1
+            elif len(mismatch_details) < 5:
+                mismatch_details.append({
+                    'h5_row': int(idx), 'sd_fid': sd_fid,
+                    'h5_ch0': int(channels_250hz[idx][0]),
+                    'bin_ch0': int(bin_mapped[0]),
+                })
+
+        match_rate = matched / checked if checked > 0 else 0.0
+        log(f"ADC 校验: {matched}/{checked} matched, rate={match_rate:.3f}")
+
+        if match_rate < VALIDATION_CONFIG['adc_match_threshold']:
+            with h5py.File(h5_path, 'r+') as f:
+                f.attrs['sync_status'] = 'sync_failed'
+                f.attrs['sync_time'] = datetime.now().isoformat()
+                f.attrs['sync_error'] = f'one_to_one ADC match_rate {match_rate:.3f} < threshold'
+                f.attrs['sync_mode'] = 'one_to_one'
+                f.attrs[f'sync_bin_offset_dev{device_id}'] = int(bin_offset)
+                f.attrs[f'sync_offset_match_rate_dev{device_id}'] = float(match_rate)
+                append_sync_history(f, action='sync', status='sync_failed',
+                                    details={'mode': 'one_to_one', 'match_rate': match_rate})
+            log(f"[FAIL] ADC 校验失败，sync_status=sync_failed")
+            return {
+                'status': 'validation_failed',
+                'reason': f'ADC match_rate {match_rate:.3f} < threshold',
+                'match_rate': match_rate, 'checked': checked, 'matched': matched,
+                'mismatch_details': mismatch_details,
+            }
+
+    # ---- 构建 2kHz ----
+    return _build_and_write_2khz(
+        h5_path, parser, imu_parser, device_id, channel_map, resolved_name,
+        data_250hz, num_frames_250hz, bin_offset, set_synced,
+        sync_mode='one_to_one', sync_match_rate=match_rate, verify_passed=verify,
+    )
+
+
+def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
+                          channel_map, resolved_map_name,
+                          data_250hz, num_frames_250hz, bin_offset,
+                          set_synced, sync_mode, sync_match_rate=None, verify_passed=True):
+    """构建并写入 2kHz 数据 + IMU 100Hz 数据到 H5（共享逻辑）。
+
+    sync_match_rate: 成功路径写入 sync_offset_match_rate_dev{device_id} 供 UI 展示
+    """
+    channels_250hz = data_250hz['channels']
+    timestamps_250hz = data_250hz['time']
+
+    num_frames_2khz = num_frames_250hz * DOWNSAMPLE_RATIO
+    emg_2khz_dtype = np.dtype([
+        ("channels", "<i4", (16,)),
+        ("sd_frame_id", "<u4"),
+        ("time", "<f8")
+    ])
+
+    data_2khz = np.empty(num_frames_2khz, dtype=emg_2khz_dtype)
+    filled_frames = 0
+    missing_frames = 0
+
+    for i in range(num_frames_250hz):
+        sd_base = bin_offset + int(i) * DOWNSAMPLE_RATIO
+        for j in range(DOWNSAMPLE_RATIO):
+            sd_frame_id = sd_base + j
+            idx_2khz = i * DOWNSAMPLE_RATIO + j
+            bin_data = emg_parser.get_frame(sd_frame_id)
+            if bin_data is not None:
+                bin_mapped = map_physical_to_h5_order(bin_data, channel_map)
+                data_2khz[idx_2khz]['channels'] = np.array(bin_mapped, dtype=np.int32)
+                data_2khz[idx_2khz]['sd_frame_id'] = sd_frame_id
+                filled_frames += 1
+            else:
+                if j == DOWNSAMPLE_RATIO - 1:
+                    data_2khz[idx_2khz]['channels'] = channels_250hz[i].astype(np.int32)
+                elif idx_2khz > 0:
+                    data_2khz[idx_2khz]['channels'] = data_2khz[idx_2khz - 1]['channels']
+                else:
+                    data_2khz[idx_2khz]['channels'] = np.zeros(16, dtype=np.int32)
+                data_2khz[idx_2khz]['sd_frame_id'] = sd_frame_id
+                missing_frames += 1
+
+            # anchor_last_sample: H5 row i = bin frame i*8+7 (j=7), back-fill j=0..6
+            anchor_time = timestamps_250hz[i]
+            data_2khz[idx_2khz]['time'] = anchor_time - (DOWNSAMPLE_RATIO - 1 - j) / 2000.0
+
+    log(f"2kHz: {filled_frames} from bin, {missing_frames} interpolated")
+
+    with h5py.File(h5_path, 'r+') as f:
+        ds_2khz_name = f"emg{device_id}_2khz_adc"
+        if ds_2khz_name in f:
+            ds_2khz = f[ds_2khz_name]
+            ds_2khz.resize(num_frames_2khz, axis=0)
+            ds_2khz[:] = data_2khz
+        else:
+            ds_2khz = f.create_dataset(ds_2khz_name, data=data_2khz, chunks=(1000,), compression="gzip")
+        ds_2khz.attrs["lsb_uv"] = emg_parser.lsb_uv
+        ds_2khz.attrs["source_bin"] = os.path.basename(emg_parser.bin_path)
+        ds_2khz.attrs["sync_time"] = datetime.now().isoformat()
+        ds_2khz.attrs["filled_frames"] = filled_frames
+        ds_2khz.attrs["missing_frames"] = missing_frames
+        ds_2khz.attrs["sample_rate"] = 2000
+
+        # IMU 同步（复用原逻辑）
+        imu_result = _sync_imu_100hz(f, emg_parser, imu_parser, data_2khz, device_id)
+
+        # sync attrs (Issue 4: include match_rate)
+        if set_synced:
+            f.attrs["sync_status"] = "synced"
+            f.attrs["sync_time"] = datetime.now().isoformat()
+            f.attrs["sync_mode"] = sync_mode
+            f.attrs[f"sync_bin_offset_dev{device_id}"] = int(bin_offset)
+            if sync_match_rate is not None:
+                f.attrs[f"sync_offset_match_rate_dev{device_id}"] = float(sync_match_rate)
+            f.attrs["sync_frame_id_mode"] = "row_index"
+            f.attrs["sync_bin_offset_mode"] = "none" if bin_offset == 0 else "adc_search"
+            f.attrs["sync_time_alignment"] = "anchor_last_sample"
+            f.attrs["sync_250hz_anchor_position"] = 7
+            f.attrs["sync_2khz_sample_interval"] = 0.0005
+            detail = {'mode': sync_mode, 'offset': bin_offset, 'filled': filled_frames, 'missing': missing_frames}
+            if sync_match_rate is not None:
+                detail['match_rate'] = float(sync_match_rate)
+            append_sync_history(f, action='sync', status='synced', details=detail)
+
+    imu_info = f", IMU: {imu_result.get('imu_frames',0)}f filled={imu_result.get('imu_filled',0)}" if imu_result.get('imu_status') == 'success' else f", IMU: {imu_result.get('imu_status','skipped')}"
+    log(f"[{sync_mode}] 同步完成！2kHz: {filled_frames}f{imu_info}")
+    return {
+        'status': 'success', 'frames_250hz': num_frames_250hz,
+        'frames_2khz': num_frames_2khz, 'filled_frames': filled_frames,
+        'missing_frames': missing_frames, 'bin_offset': bin_offset,
+        'imu_status': imu_result.get('imu_status', 'skipped'),
+        'imu_frames': imu_result.get('imu_frames', 0),
+        'imu_filled': imu_result.get('imu_filled', 0),
+        'imu_missing': imu_result.get('imu_missing', 0),
+    }
+
+
+def _sync_imu_100hz(h5_file, emg_parser, imu_parser, data_2khz, device_id):
+    """IMU 100Hz 同步 — 支持 2/3 动态数量 IMU"""
+    if imu_parser is None:
+        return {'imu_status': 'skipped'}
+    num_imus = imu_parser.num_imus
+    labels = ['a', 'b', 'c', 'd'][:num_imus]
+
+    emg_sd_frame_ids = data_2khz['sd_frame_id']
+    imu_frame_ids_all = emg_sd_frame_ids // EMG_IMU_RATIO
+    imu_frame_ids_unique = np.unique(imu_frame_ids_all)
+    num_imu_frames = len(imu_frame_ids_unique)
+
+    imu_100hz_dtype = np.dtype([
+        ("acc", "<f4", (3,)), ("gyr", "<f4", (3,)), ("mag", "<f4", (3,)),
+        ("sd_frame_id", "<u4"), ("time", "<f8")
+    ])
+
+    # 为每个 IMU 分配独立的 data array
+    all_data = [np.empty(num_imu_frames, dtype=imu_100hz_dtype) for _ in range(num_imus)]
+    imu_filled = 0
+    imu_missing = 0
+
+    for idx, imu_fid in enumerate(imu_frame_ids_unique):
+        imu_fid = int(imu_fid)
+        imu_data = imu_parser.frames.get(imu_fid)
+        if imu_data is not None:
+            for k in range(num_imus):
+                if k < len(imu_data):
+                    all_data[k][idx]['acc'] = np.array(imu_data[k]['acc'], dtype=np.float32)
+                    all_data[k][idx]['gyr'] = np.array(imu_data[k]['gyr'], dtype=np.float32)
+                    all_data[k][idx]['mag'] = np.array(imu_data[k]['mag'], dtype=np.float32)
+            imu_filled += 1
+        else:
+            for k in range(num_imus):
+                all_data[k][idx]['acc'] = np.zeros(3, dtype=np.float32)
+                all_data[k][idx]['gyr'] = np.zeros(3, dtype=np.float32)
+                all_data[k][idx]['mag'] = np.zeros(3, dtype=np.float32)
+            imu_missing += 1
+        for k in range(num_imus):
+            all_data[k][idx]['sd_frame_id'] = imu_fid
+        emg_idx = idx * EMG_IMU_RATIO
+        t = data_2khz[emg_idx]['time'] if emg_idx < len(data_2khz) else float(idx) * 0.01
+        for k in range(num_imus):
+            all_data[k][idx]['time'] = t
+
+    def write_or_create_dataset(name, data, filled, missing, imu_index=None):
+        created = name not in h5_file
+        if created:
+            dataset = h5_file.create_dataset(name, data=data, chunks=(1000,), compression="gzip")
+            log(f"  IMU dataset CREATED: {name}")
+        else:
+            dataset = h5_file[name]
+            dataset.resize(num_imu_frames, axis=0)
+            dataset[:] = data
+            log(f"  IMU dataset RESIZED: {name}")
+        dataset.attrs["sample_rate"] = 100
+        dataset.attrs["source_bin"] = os.path.basename(imu_parser.bin_path)
+        dataset.attrs["sync_time"] = datetime.now().isoformat()
+        dataset.attrs["filled_frames"] = filled
+        dataset.attrs["missing_frames"] = missing
+        if imu_index is not None:
+            dataset.attrs["imu_index"] = imu_index
+        dataset.attrs["imu_count"] = num_imus
+        return dataset
+
+    for k, label in enumerate(labels):
+        ds_name = f"imu{device_id}{label}_100hz"
+        write_or_create_dataset(ds_name, all_data[k], imu_filled, imu_missing, imu_index=k)
+
+    # legacy single-IMU dataset (keep for old tools)
+    legacy_name = f"imu{device_id}_100hz"
+    if legacy_name in h5_file:
+        write_or_create_dataset(legacy_name, all_data[0], imu_filled, imu_missing)
+
+    return {
+        'imu_status': 'success',
+        'imu_frames': num_imu_frames,
+        'imu_filled': imu_filled,
+        'imu_missing': imu_missing,
+        'imu_count': num_imus,
+        'imu_labels': labels,
+    }
+
+
+def sync_h5_one_to_many_adc_search(h5_path, emg_bin_path, imu_bin_path=None, device_id=1,
+                                   verify=True, set_synced=True, channel_map_name='V2',
+                                   num_anchors=40, match_threshold=0.95):
+    """一对多 ADC 搜索同步：通过 ADC 值搜索 H5 在长 bin 中的 offset，然后同步。
+
+    适用于旧格式 H5（多 H5 共享一个长 bin），不依赖 frame_id。
+
+    Args:
+        h5_path: H5 文件路径
+        emg_bin_path: 长 EMG bin 路径
+        imu_bin_path: IMU bin 路径
+        device_id: 设备 ID
+        verify: 是否 ADC 校验
+        set_synced: 是否标记 synced
+        channel_map_name: 通道映射
+        num_anchors: 搜索锚点数量
+        match_threshold: 匹配阈值
+
+    Returns:
+        dict: 同步结果
+    """
+    log("=" * 60)
+    log("[one_to_many_adc_search] 开始 ADC offset 搜索 + 同步")
+    log(f"  H5: {os.path.basename(h5_path)}, bin: {os.path.basename(emg_bin_path)}")
+    log("=" * 60)
+
+    # Step 1: ADC offset search
+    search_result = find_bin_offset_by_adc(
+        h5_path, emg_bin_path, device_id, channel_map_name,
+        num_anchors=num_anchors, match_threshold=match_threshold,
+    )
+
+    if not search_result['found']:
+        with h5py.File(h5_path, 'r+') as f:
+            f.attrs['sync_status'] = 'sync_failed'
+            f.attrs['sync_time'] = datetime.now().isoformat()
+            f.attrs['sync_error'] = f'one_to_many ADC offset search failed: {search_result.get("error", "unknown")}'
+            f.attrs['sync_mode'] = 'one_to_many_adc_search'
+            f.attrs['sync_bin_offset_mode'] = 'adc_search'
+            append_sync_history(f, action='sync', status='sync_failed',
+                                details={'mode': 'one_to_many_adc_search',
+                                         'error': search_result.get('error')})
+        log(f"[FAIL] ADC offset search failed: {search_result.get('error')}")
+        return {'status': 'sync_failed', 'reason': search_result.get('error'),
+                'search_result': search_result}
+
+    bin_offset = search_result['offset']
+    log(f"[FOUND] bin_offset={bin_offset}, match_rate={search_result['match_rate']:.3f}")
+
+    # Step 2: Build 2kHz with offset (use channel_map from search result)
+    parser = EMGBinParser(emg_bin_path).parse()
+    _ni = 2
+    try:
+        with h5py.File(h5_path, 'r') as _f:
+            _ni = _resolve_num_imus(_f, device_id)
+    except Exception:
+        pass
+    imu_parser = IMUBinParser(imu_bin_path, num_imus=_ni).parse() if imu_bin_path else None
+
+    # 使用搜索命中的 channel_map（如 L015 physical），而非 H5 attr 默认 V2
+    resolved_cm_name = search_result.get('channel_map_name', channel_map_name)
+    actual_cm = CHANNEL_MAPS_BY_NAME.get(resolved_cm_name, CHANNEL_MAPS_BY_NAME.get('V2'))
+    # If name is 'physical', actual_cm is None
+
+    with h5py.File(h5_path, 'r') as f:
+        ds_name = f"emg{device_id}_250hz_adc"
+        ds = f[ds_name]
+        num_frames_250hz = ds.shape[0]
+        data_250hz = ds[:]
+
+    range_mode = search_result.get('range_mode', 'unknown')
+    bin_offset_mode = 'row_signature_span' if range_mode == 'row_signature_span' else 'adc_search'
+    log(f"  using channel_map={resolved_cm_name}, range_mode={range_mode}")
+
+    result = _build_and_write_2khz(
+        h5_path, parser, imu_parser, device_id, actual_cm, resolved_cm_name,
+        data_250hz, num_frames_250hz, bin_offset, set_synced,
+        sync_mode='one_to_many_adc_search', sync_match_rate=search_result['match_rate'], verify_passed=True,
+    )
+
+    # Write additional search metadata
+    with h5py.File(h5_path, 'r+') as f:
+        f.attrs['sync_bin_offset_mode'] = bin_offset_mode
+        f.attrs['sync_range_mode'] = range_mode
+        f.attrs[f'sync_offset_match_rate_dev{device_id}'] = float(search_result['match_rate'])
+        f.attrs['sync_frame_id_mode'] = 'row_index'
+        f.attrs['sync_adc_search_num_anchors'] = int(num_anchors)
+        f.attrs['sync_adc_search_channel_map'] = resolved_cm_name
+        if search_result.get('start_sd_frame_id') is not None:
+            f.attrs[f'sync_start_sd_frame_id_dev{device_id}'] = int(search_result['start_sd_frame_id'])
+            f.attrs[f'sync_end_sd_frame_id_dev{device_id}'] = int(search_result['end_sd_frame_id'])
+
+    result['offset'] = bin_offset
+    result['match_rate'] = search_result['match_rate']
+    return result
 
 
 # ===================== GUI界面 =====================
@@ -1588,7 +2308,8 @@ def clear_sync_outputs(h5_path, backup=True):
             # 2kHz/100Hz sync datasets to remove (new + legacy names)
             sync_datasets = [
                 'emg1_2khz_adc', 'emg2_2khz_adc',
-                'imu1a_100hz', 'imu1b_100hz', 'imu2a_100hz', 'imu2b_100hz',
+                'imu1a_100hz', 'imu1b_100hz', 'imu1c_100hz',
+                'imu2a_100hz', 'imu2b_100hz', 'imu2c_100hz',
                 'imu1_100hz', 'imu2_100hz',  # legacy single-IMU names
             ]
             for ds_name in sync_datasets:
@@ -1597,8 +2318,14 @@ def clear_sync_outputs(h5_path, backup=True):
                     removed_datasets.append(ds_name)
                     log(f"  已删除 dataset: {ds_name}")
 
-            # sync attrs to clear
-            sync_attrs = ['sync_status', 'sync_time', 'sync_error', 'sync_validation_report']
+            # sync attrs to clear (including new mode/offset attrs)
+            sync_attrs = ['sync_status', 'sync_time', 'sync_error', 'sync_validation_report',
+                          'sync_mode', 'sync_frame_id_mode', 'sync_bin_offset_mode',
+                          'sync_adc_search_num_anchors', 'sync_adc_search_channel_map']
+            # also clear per-device offset/match attrs
+            for dev_id in [1, 2]:
+                sync_attrs.append(f'sync_bin_offset_dev{dev_id}')
+                sync_attrs.append(f'sync_offset_match_rate_dev{dev_id}')
             for ak in sync_attrs:
                 if ak in f.attrs:
                     del f.attrs[ak]
@@ -1670,7 +2397,22 @@ def append_sync_history(h5_file_or_path, action, status, details=None, max_entri
         if len(history) > max_entries:
             history = history[-max_entries:]
 
-        f.attrs['sync_history'] = json.dumps(history, ensure_ascii=False)
+        # convert numpy types to Python native for JSON serialization
+        def _to_native(obj):
+            if isinstance(obj, dict):
+                return {k: _to_native(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [_to_native(v) for v in obj]
+            if isinstance(obj, (np.integer,)):
+                return int(obj)
+            if isinstance(obj, (np.floating,)):
+                return float(obj)
+            if isinstance(obj, (np.ndarray,)):
+                return _to_native(obj.tolist())
+            return obj
+        history_native = _to_native(history)
+
+        f.attrs['sync_history'] = json.dumps(history_native, ensure_ascii=False)
 
         # convenience counters
         attempt_count = f.attrs.get('sync_attempt_count', 0)
