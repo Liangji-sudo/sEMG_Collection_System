@@ -593,9 +593,9 @@
             this.close();
             this.showToast('配置完成，即将开始采集', 'success');
 
-            // 启动BLE
+            // 启动预览流，真正采集在 startTask() 中切换到 collection stream。
             if (window.BleControl?.isConnected) {
-                window.BleControl.startAll();
+                window.BleControl.startPreviewStream();
             }
 
             // 切换到采集页面

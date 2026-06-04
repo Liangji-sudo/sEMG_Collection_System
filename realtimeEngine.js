@@ -102,6 +102,8 @@ class RealtimeEngine extends EventEmitter {
         this.streamMode = 'idle';  // 'idle' | 'preview' | 'collection'
         this.collectionStreamId = null;  // collection stream 的唯一标识（ISO timestamp）
         this.collectionBinFilenames = { dev1: null, dev2: null };  // collection stream 产生的 bin
+        this.collectionDataStartTs = 0;
+        this.collectionDroppedStaleBlePackets = 0;
         this.streamSwitchDelayMs = 3000;  // STOP→START 延迟（与 ble_server.py 保持一致）
         this.timestampToStartDelayMs = 200;
 
@@ -273,6 +275,13 @@ class RealtimeEngine extends EventEmitter {
         this.currentSessionIndex = sessionIndex ?? 0;
         this.currentSessionNumber = sessionNumber ?? 1;
         this.sessionCount = sessionCount ?? 3;
+        this.collectionDataStartTs = Date.now() / 1000;
+        this.collectionDroppedStaleBlePackets = 0;
+        this.realtimeDataBuffer = [];
+        if (this.realtimeDataTimer) {
+            clearTimeout(this.realtimeDataTimer);
+            this.realtimeDataTimer = null;
+        }
 
         // 【新增】保存测试模式状态
         this.isTestMode = isTestMode || false;
@@ -349,6 +358,7 @@ class RealtimeEngine extends EventEmitter {
         // 注意：collectionBinFilenames 在新 collection stream 就绪时会更新
         this.collectionStreamId = null;
         this.collectionBinFilenames = { dev1: null, dev2: null };
+        this.collectionDataStartTs = 0;
         // 【修复】不在 stop 时清空 sd_filenames（由 sd_filenames_updated 事件管理）
     }
 
@@ -400,6 +410,7 @@ class RealtimeEngine extends EventEmitter {
         // 【新增】清理 collection stream 状态
         this.collectionStreamId = null;
         this.collectionBinFilenames = { dev1: null, dev2: null };
+        this.collectionDataStartTs = 0;
         this.streamMode = 'idle';
         // 注意：不调用 onCollectionStop，避免覆盖 H5 标记
     }
@@ -1007,8 +1018,18 @@ class RealtimeEngine extends EventEmitter {
                     this.flushRealtimeDataBuffer();
                 }
 
+                const storagePacketTs = Math.max(
+                    Number(dev1?.t) || 0,
+                    Number(dev2?.t) || 0,
+                    Number(timestamp) || 0
+                );
+                const isFreshCollectionPacket =
+                    !this.collectionDataStartTs ||
+                    !storagePacketTs ||
+                    storagePacketTs >= (this.collectionDataStartTs - 0.05);
+
                 // Send raw data to storage_server for this sub-packet pair
-                if (this.isCollecting && !this.collectionPaused && this.stageFileOpen && !this.isClosingStageFile) {
+                if (this.isCollecting && !this.collectionPaused && this.stageFileOpen && !this.isClosingStageFile && isFreshCollectionPacket) {
                     this.saveDataToStorage({
                         emg1: emg1RawData, emg2: emg2RawData, emg1_t: emg1Timestamps, emg2_t: emg2Timestamps,
                         emg1_frame_ids: emg1FrameIds, emg2_frame_ids: emg2FrameIds,
@@ -1018,6 +1039,11 @@ class RealtimeEngine extends EventEmitter {
                         imu1_hw_version: imu1HwVersion, imu2_hw_version: imu2HwVersion,
                         imu1_num_imus: imu1NumImus, imu2_num_imus: imu2NumImus,
                     });
+                } else if (this.isCollecting && this.stageFileOpen && !isFreshCollectionPacket) {
+                    this.collectionDroppedStaleBlePackets++;
+                    if (this.collectionDroppedStaleBlePackets <= 3) {
+                        console.log(`[realtimeEngine] drop stale BLE packet before collection_start: packet_ts=${storagePacketTs}, start_ts=${this.collectionDataStartTs}`);
+                    }
                 }
             }
 

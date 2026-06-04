@@ -343,6 +343,7 @@ RETRY_DELAY = 2.0
 
 # ================= 批量发送配置 =================
 BATCH_INTERVAL = 0.005  # 5ms
+RAW_DRAIN_LIMIT_PER_TICK = 100
 
 # ================= 数据超时检测 =================
 DATA_TIMEOUT = 3.0  # 3秒无数据则认为设备停止发送
@@ -370,12 +371,15 @@ class DeviceState:
     lost_frames: int = 0
     last_frame_index: int = -1
     last_packet_counter: int = -1  # 上一包 counters，用于检测 BLE 丢包
+    packet_counter_base: Optional[int] = None
     last_data_time: float = 0.0  # 【新增】最后收到数据的时间戳
     sd_filename: Optional[str] = None  # 【新增】当前采集的SD卡bin文件名前缀
     stream_mode: str = "idle"  # "idle" | "preview" | "collection" — 当前流模式
 
     config: Dict = field(default_factory=lambda: DEFAULT_CONFIG.copy())
+    raw_buffer: deque = field(default_factory=lambda: deque(maxlen=1000))
     data_buffer: deque = field(default_factory=lambda: deque(maxlen=500))
+    raw_dropped_packets: int = 0
     connect_task: Any = None
 
     # ===== V2 新增: 设备状态字段 =====
@@ -393,7 +397,10 @@ class DeviceState:
         self.lost_frames = 0
         self.last_frame_index = -1
         self.last_packet_counter = -1
+        self.packet_counter_base = None
+        self.raw_buffer.clear()
         self.data_buffer.clear()
+        self.raw_dropped_packets = 0
         self.sd_filename = None  # 【新增】重置SD卡文件名
         self.stream_mode = "idle"  # 【新增】重置流模式
 
@@ -589,7 +596,11 @@ def parse_packet(data: bytearray, dev: DeviceState) -> Optional[dict]:
         # 包头 4 字节是 ESP32 固件的 ble_frame_counter（包计数器），不是帧号
         # 每个 BLE 包包含 fpkt 个 250Hz EMG 帧，真实帧号 = 包号 × fpkt + 帧内偏移
         packet_counter = struct.unpack('<I', data[0:4])[0]
-        start_frame = packet_counter * fpkt
+        if dev.packet_counter_base is None or packet_counter < dev.packet_counter_base:
+            dev.packet_counter_base = packet_counter
+            log(f"[Dev{dev.device_id}] stream packet counter base: {dev.packet_counter_base}")
+        relative_packet_counter = packet_counter - dev.packet_counter_base
+        start_frame = relative_packet_counter * fpkt
 
         # ===== EMG 解析 (物理顺序) =====
         emg_raw = []
@@ -683,6 +694,7 @@ def parse_packet(data: bytearray, dev: DeviceState) -> Optional[dict]:
 # 【诊断】用于跟踪notification回调的调用情况
 _last_callback_time = {}
 _callback_interval_warning_printed = {}
+_callback_interval_last_log = {}
 
 
 def create_status_handler(dev: DeviceState):
@@ -717,7 +729,51 @@ def create_status_handler(dev: DeviceState):
     return handler
 
 
-def create_notification_handler(dev: DeviceState):
+def enqueue_raw_packet(dev: DeviceState, ts: float, data: bytearray):
+    if len(dev.raw_buffer) >= dev.raw_buffer.maxlen:
+        dev.raw_dropped_packets += 1
+    dev.raw_buffer.append((ts, bytes(data)))
+
+
+def finalize_parsed_packet(dev: DeviceState, parsed: dict, ts: float):
+    parsed['t'] = ts
+
+    if dev.total_frames % 100 == 0:
+        log(f"[Dev{dev.device_id}] 已收到 {dev.total_frames} 帧, 丢帧: {dev.lost_frames}, "
+            f"原始缓冲区: {len(dev.raw_buffer)}, 解析缓冲区: {len(dev.data_buffer)}, "
+            f"原始丢弃: {dev.raw_dropped_packets}")
+
+    fpkt = parsed.get('n', 9)
+    frame_interval = 1.0 / BLE_SAMPLE_RATE
+    parsed['emg_t'] = [
+        ts - (fpkt - 1 - i) * frame_interval
+        for i in range(fpkt)
+    ]
+
+    if parsed.get('imu'):
+        parsed['imu_t'] = [ts] * len(parsed['imu'])
+
+    dev.data_buffer.append(parsed)
+
+
+def drain_raw_packets(dev: DeviceState, limit: int = RAW_DRAIN_LIMIT_PER_TICK):
+    processed = 0
+    while dev.raw_buffer and processed < limit:
+        ts, raw = dev.raw_buffer.popleft()
+        parsed = parse_packet(raw, dev)
+        if parsed:
+            finalize_parsed_packet(dev, parsed, ts)
+        processed += 1
+    return processed
+
+
+def clear_stream_buffers(dev: DeviceState):
+    dev.raw_buffer.clear()
+    dev.data_buffer.clear()
+    dev.last_data_time = 0.0
+
+
+def _legacy_create_notification_handler(dev: DeviceState):
     def handler(sender: int, data: bytearray):
         try:
             ts = time.time()
@@ -736,6 +792,9 @@ def create_notification_handler(dev: DeviceState):
             _last_callback_time[device_key] = ts
 
             dev.last_data_time = ts  # 【新增】记录最后收到数据的时间
+            if dev.is_streaming:
+                enqueue_raw_packet(dev, ts, data)
+            return
             parsed = parse_packet(data, dev)
             if parsed:
                 parsed['t'] = ts
@@ -772,6 +831,29 @@ def create_notification_handler(dev: DeviceState):
 
 # ================= 消息队列 =================
 
+def create_notification_handler(dev: DeviceState):
+    def handler(sender: int, data: bytearray):
+        try:
+            ts = time.time()
+            device_key = dev.device_id
+
+            if device_key in _last_callback_time:
+                interval = ts - _last_callback_time[device_key]
+                if interval > 0.1:
+                    last_log = _callback_interval_last_log.get(device_key, 0)
+                    if ts - last_log >= 1.0:
+                        log(f"[Dev{dev.device_id}] 回调间隔异常: {interval*1000:.1f}ms (正常应<40ms)")
+                        _callback_interval_last_log[device_key] = ts
+            _last_callback_time[device_key] = ts
+
+            dev.last_data_time = ts
+            if dev.is_streaming:
+                enqueue_raw_packet(dev, ts, data)
+        except Exception as e:
+            log(f"[Dev{dev.device_id}] 回调错误: {e}")
+    return handler
+
+
 def data_sender_thread():
     """数据发送线程 - 发送到数据端"""
     log("数据发送线程启动")
@@ -788,6 +870,16 @@ def data_sender_thread():
     while not state.stop_thread:
         try:
             now = time.time()
+
+            if state.dev1.is_streaming:
+                drain_raw_packets(state.dev1)
+            else:
+                clear_stream_buffers(state.dev1)
+
+            if state.dev2.is_streaming:
+                drain_raw_packets(state.dev2)
+            else:
+                clear_stream_buffers(state.dev2)
 
             # 【新增】检测数据超时
             if state.dev1.is_streaming and state.dev1.last_data_time > 0:
@@ -1021,19 +1113,50 @@ async def scan_devices(ws):
         })
 
 
-async def send_control_command(dev: DeviceState, payload: bytes, timeout: float = 3.0):
+async def send_control_command(dev: DeviceState, payload: bytes, timeout: float = 5.0, retries: int = 1):
     """V1/V2 统一的控制命令写入封装
 
     V2 设备使用 Write with Response + 超时保护
     V1 设备使用 Write without Response
     """
-    if dev.hw_version == "V2":
-        await asyncio.wait_for(
-            dev.client.write_gatt_char(CONTROL_CHAR_UUID, payload, response=True),
-            timeout=timeout,
-        )
-    else:
+    if dev.client is None or not dev.is_connected():
+        raise RuntimeError(f"Dev{dev.device_id} not connected")
+
+    if dev.hw_version != "V2":
         await dev.client.write_gatt_char(CONTROL_CHAR_UUID, payload, response=False)
+        return
+
+    last_error = None
+    for attempt in range(retries + 1):
+        try:
+            await asyncio.wait_for(
+                dev.client.write_gatt_char(CONTROL_CHAR_UUID, payload, response=True),
+                timeout=timeout,
+            )
+            return
+        except (asyncio.TimeoutError, TimeoutError) as e:
+            last_error = e
+            log(f"[Dev{dev.device_id}] 控制命令 write-with-response 超时，尝试 without-response fallback "
+                f"(attempt {attempt + 1}/{retries + 1}, cmd=0x{payload[0]:02X})")
+            try:
+                await asyncio.wait_for(
+                    dev.client.write_gatt_char(CONTROL_CHAR_UUID, payload, response=False),
+                    timeout=1.5,
+                )
+                await asyncio.sleep(0.05)
+                return
+            except Exception as fallback_error:
+                last_error = fallback_error
+                if attempt < retries:
+                    await asyncio.sleep(0.2)
+        except Exception as e:
+            last_error = e
+            if attempt < retries:
+                await asyncio.sleep(0.2)
+            else:
+                break
+
+    raise last_error
 
 
 async def connect_device(ws, device_id: int, mac_or_name: str):
@@ -1355,7 +1478,8 @@ async def stop_stream(ws, device_id: int, silent=False):
             log(f"[Dev{device_id}] 已取消订阅")
         
         dev.is_streaming = False
-        
+        clear_stream_buffers(dev)
+
         if not silent:
             await send_to_control(ws, action, {
                 'success': True,
@@ -1533,9 +1657,11 @@ async def _do_stop_stream_for_device(dev):
             except Exception:
                 pass
         dev.is_streaming = False
+        clear_stream_buffers(dev)
     except Exception as e:
         log(f"[Dev{dev.device_id}] 停止 stream 失败: {e}")
         dev.is_streaming = False
+        clear_stream_buffers(dev)
 
 
 async def start_preview_stream(ws, device_id=None):

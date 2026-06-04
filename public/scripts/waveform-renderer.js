@@ -43,7 +43,8 @@
                 '#8e44ad', '#16a085', '#c0392b', '#7f8c8d'
             ],
             imu: ['#e74c3c', '#2ecc71', '#3498db'] // X:红, Y:绿, Z:蓝
-        }
+        },
+        LABEL_WIDTH: 34
     };
 
     // ==================== 波形渲染器类 ====================
@@ -225,7 +226,7 @@
             ctx.textBaseline = 'middle';
 
             for (var ch = 0; ch < this.channels; ch++) {
-                var yBase = (15 - ch) * offset * scaleY;
+                var yBase = (this.channels - ch - 0.5) * offset * scaleY;
                 if (yBase >= 0 && yBase <= this.displayHeight) {
                     ctx.fillText('CH' + (ch + 1), 28, yBase);
                 }
@@ -238,9 +239,23 @@
          */
         updatePointer() {
             if (this.pointer) {
-                const x = (this.writeIndex / this.totalPoints) * this.displayWidth;
+                const metrics = this.getPlotMetrics();
+                const x = metrics.left + (this.writeIndex / this.totalPoints) * metrics.width;
                 this.pointer.style.left = x + 'px';
             }
+        }
+
+        getPlotMetrics() {
+            const left = (this.stackedMode || this.imuStackedMode) ? RENDERER_CONFIG.LABEL_WIDTH : 0;
+            return {
+                left: left,
+                width: Math.max(1, this.displayWidth - left)
+            };
+        }
+
+        getPlotX(index) {
+            const metrics = this.getPlotMetrics();
+            return metrics.left + (index / this.totalPoints) * metrics.width;
         }
 
         /**
@@ -308,7 +323,7 @@
             ctx.textBaseline = 'middle';
 
             for (let axis = 0; axis < 3; axis++) {
-                const yBase = (2 - axis) * offset * scaleY;
+                const yBase = (3 - axis - 0.5) * offset * scaleY;
                 ctx.fillText(labels[axis], 28, yBase);
             }
             ctx.restore();
@@ -323,12 +338,13 @@
             const offset = this.getOffset();
             const scaleY = this.displayHeight / (3 * offset);
             const currentIndex = this.writeIndex;
-            const currentX = (currentIndex / this.totalPoints) * this.displayWidth;
-            const clearWidth = Math.max(3, (this.displayWidth / this.totalPoints) * 2);
+            const metrics = this.getPlotMetrics();
+            const currentX = this.getPlotX(currentIndex);
+            const clearWidth = Math.max(3, (metrics.width / this.totalPoints) * 2);
             const dashStyles = [[], [5, 3], [1, 3], [6, 2, 1, 2]];
 
             ctx.setTransform(1, 0, 0, 1, 0, 0);
-            ctx.clearRect(34 * dpr, 0, clearWidth * dpr + 34 * dpr, this.canvas.height);
+            ctx.clearRect(currentX * dpr, 0, clearWidth * dpr, this.canvas.height);
             ctx.scale(dpr, dpr);
 
             for (let c = 0; c < chips.length; c++) {
@@ -338,7 +354,7 @@
 
                 for (let axis = 0; axis < 3; axis++) {
                     const value = chip.values[axis] || 0;
-                    const yBase = (2 - axis) * offset;
+                    const yBase = (3 - axis - 0.5) * offset;
                     const y = (yBase - value) * scaleY;
                     const stateIndex = chipIndex * 3 + axis;
 
@@ -377,17 +393,18 @@
             var ctx = this.ctx;
             var totalHeight = this.channels * offset;  // 总 uV 高度
             var scaleY = this.displayHeight / totalHeight;
+            var metrics = this.getPlotMetrics();
 
             var channelSelect = this.getVisibleChannels();
 
             for (var i = 0; i < pointsCount; i++) {
                 var currentIndex = this.writeIndex;
-                var currentX = (currentIndex / this.totalPoints) * this.displayWidth;
+                var currentX = this.getPlotX(currentIndex);
 
-                // 清除当前位置前方的区域（包含左侧标签区）
-                var clearWidth = Math.max(3, (this.displayWidth / this.totalPoints) * 2);
+                // Clear the current write column in the plot area.
+                var clearWidth = Math.max(3, (metrics.width / this.totalPoints) * 2);
                 ctx.setTransform(1, 0, 0, 1, 0, 0);
-                ctx.clearRect(32 * dpr, 0, clearWidth * dpr + 32 * dpr, this.canvas.height);
+                ctx.clearRect(currentX * dpr, 0, clearWidth * dpr, this.canvas.height);
                 ctx.scale(dpr, dpr);
 
                 for (var ch = channelSelect.start; ch < channelSelect.end; ch++) {
@@ -398,8 +415,8 @@
                         value = Math.max(-clipLimit, Math.min(clipLimit, value));
                     }
 
-                    // CH1 at top (y=15*offset), CH16 at bottom (y=0*offset)
-                    var yBase = (15 - ch) * offset;
+                    // Use channel centers so edge channels keep half-row headroom.
+                    var yBase = (this.channels - ch - 0.5) * offset;
                     var y = (yBase - value) * scaleY;
 
                     // 连接上一个点

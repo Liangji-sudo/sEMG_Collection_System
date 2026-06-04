@@ -1455,6 +1455,17 @@ def _resolve_num_imus(h5_file, device_id):
 
 # ===================== 一对一同步 =====================
 
+def _get_250hz_anchor_sd_frame_ids(data_250hz, bin_offset=0):
+    """Return the SD 2 kHz frame id for each stored 250 Hz anchor row."""
+    names = data_250hz.dtype.names or ()
+    if 'sd_frame_id' in names:
+        return data_250hz['sd_frame_id'].astype(np.int64), 'sd_frame_id'
+    if 'frame_id' in names:
+        return data_250hz['frame_id'].astype(np.int64) * DOWNSAMPLE_RATIO + (DOWNSAMPLE_RATIO - 1), 'frame_id'
+    return (np.arange(len(data_250hz), dtype=np.int64) * DOWNSAMPLE_RATIO
+            + int(bin_offset) + (DOWNSAMPLE_RATIO - 1)), 'row_index'
+
+
 def sync_h5_one_to_one(h5_path, emg_bin_path, imu_bin_path=None, device_id=1,
                        verify=True, set_synced=True, channel_map_name='V2'):
     """一对一同步：H5 与 bin 一一对应，bin_offset=0，使用 row_index 定位。
@@ -1514,6 +1525,9 @@ def sync_h5_one_to_one(h5_path, emg_bin_path, imu_bin_path=None, device_id=1,
     match_rate = None  # 当 verify=False 时保持 None
 
     # ---- ADC 校验：H5 row i 的 250Hz ADC == bin frame i*8+7 ----
+    anchor_sd_frame_ids, frame_id_mode = _get_250hz_anchor_sd_frame_ids(data_250hz, bin_offset)
+    log(f"[one_to_one] frame_id_mode={frame_id_mode}")
+
     if verify:
         num_check = min(200, num_frames_250hz)
         check_indices = np.linspace(0, num_frames_250hz - 1, num_check, dtype=int)
@@ -1522,7 +1536,7 @@ def sync_h5_one_to_one(h5_path, emg_bin_path, imu_bin_path=None, device_id=1,
         mismatch_details = []
 
         for idx in check_indices:
-            sd_fid = bin_offset + idx * DOWNSAMPLE_RATIO + (DOWNSAMPLE_RATIO - 1)
+            sd_fid = int(anchor_sd_frame_ids[idx])
             bin_data = parser.get_frame(sd_fid)
             if bin_data is None:
                 continue
@@ -1563,13 +1577,15 @@ def sync_h5_one_to_one(h5_path, emg_bin_path, imu_bin_path=None, device_id=1,
         h5_path, parser, imu_parser, device_id, channel_map, resolved_name,
         data_250hz, num_frames_250hz, bin_offset, set_synced,
         sync_mode='one_to_one', sync_match_rate=match_rate, verify_passed=verify,
+        anchor_sd_frame_ids=anchor_sd_frame_ids, sync_frame_id_mode=frame_id_mode,
     )
 
 
 def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
                           channel_map, resolved_map_name,
                           data_250hz, num_frames_250hz, bin_offset,
-                          set_synced, sync_mode, sync_match_rate=None, verify_passed=True):
+                          set_synced, sync_mode, sync_match_rate=None, verify_passed=True,
+                          anchor_sd_frame_ids=None, sync_frame_id_mode='row_index'):
     """构建并写入 2kHz 数据 + IMU 100Hz 数据到 H5（共享逻辑）。
 
     sync_match_rate: 成功路径写入 sync_offset_match_rate_dev{device_id} 供 UI 展示
@@ -1589,7 +1605,10 @@ def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
     missing_frames = 0
 
     for i in range(num_frames_250hz):
-        sd_base = bin_offset + int(i) * DOWNSAMPLE_RATIO
+        if anchor_sd_frame_ids is not None:
+            sd_base = int(anchor_sd_frame_ids[i]) - (DOWNSAMPLE_RATIO - 1)
+        else:
+            sd_base = bin_offset + int(i) * DOWNSAMPLE_RATIO
         for j in range(DOWNSAMPLE_RATIO):
             sd_frame_id = sd_base + j
             idx_2khz = i * DOWNSAMPLE_RATIO + j
@@ -1638,10 +1657,12 @@ def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
             f.attrs["sync_status"] = "synced"
             f.attrs["sync_time"] = datetime.now().isoformat()
             f.attrs["sync_mode"] = sync_mode
+            if "sync_error" in f.attrs:
+                del f.attrs["sync_error"]
             f.attrs[f"sync_bin_offset_dev{device_id}"] = int(bin_offset)
             if sync_match_rate is not None:
                 f.attrs[f"sync_offset_match_rate_dev{device_id}"] = float(sync_match_rate)
-            f.attrs["sync_frame_id_mode"] = "row_index"
+            f.attrs["sync_frame_id_mode"] = sync_frame_id_mode
             f.attrs["sync_bin_offset_mode"] = "none" if bin_offset == 0 else "adc_search"
             f.attrs["sync_time_alignment"] = "anchor_last_sample"
             f.attrs["sync_250hz_anchor_position"] = 7
@@ -1674,6 +1695,11 @@ def _sync_imu_100hz(h5_file, emg_parser, imu_parser, data_2khz, device_id):
     emg_sd_frame_ids = data_2khz['sd_frame_id']
     imu_frame_ids_all = emg_sd_frame_ids // EMG_IMU_RATIO
     imu_frame_ids_unique = np.unique(imu_frame_ids_all)
+    imu_time_by_frame = {}
+    for emg_idx, imu_fid_raw in enumerate(imu_frame_ids_all):
+        imu_fid_int = int(imu_fid_raw)
+        if imu_fid_int not in imu_time_by_frame:
+            imu_time_by_frame[imu_fid_int] = float(data_2khz[emg_idx]['time'])
     num_imu_frames = len(imu_frame_ids_unique)
 
     imu_100hz_dtype = np.dtype([
@@ -1704,8 +1730,7 @@ def _sync_imu_100hz(h5_file, emg_parser, imu_parser, data_2khz, device_id):
             imu_missing += 1
         for k in range(num_imus):
             all_data[k][idx]['sd_frame_id'] = imu_fid
-        emg_idx = idx * EMG_IMU_RATIO
-        t = data_2khz[emg_idx]['time'] if emg_idx < len(data_2khz) else float(idx) * 0.01
+        t = imu_time_by_frame.get(imu_fid, float(idx) * 0.01)
         for k in range(num_imus):
             all_data[k][idx]['time'] = t
 
