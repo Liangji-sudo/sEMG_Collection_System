@@ -201,6 +201,21 @@ class CalibrateTool(QMainWindow):
 
         self.init_ui()
 
+    def _active_emg_sample_rate(self):
+        if self.emg1_data is not None and len(self.emg1_data) > 0 and self.emg1_sample_rate:
+            return self.emg1_sample_rate
+        if self.emg2_data is not None and len(self.emg2_data) > 0 and self.emg2_sample_rate:
+            return self.emg2_sample_rate
+        return 2000
+
+    def _relative_sensor_time(self, times):
+        times = np.asarray(times, dtype=np.float64)
+        if self.emg_start_time is None or len(times) == 0:
+            return times
+        if float(np.nanmedian(times)) > 1e6:
+            return times - float(self.emg_start_time)
+        return times
+
     def init_ui(self):
         """初始化UI"""
         central_widget = QWidget()
@@ -465,7 +480,7 @@ class CalibrateTool(QMainWindow):
 
     def _update_window_sec_label(self):
         """更新窗口标签显示秒数"""
-        sr = getattr(self, 'emg1_sample_rate', 2000)
+        sr = self._active_emg_sample_rate()
         sec = self.window_size / sr if sr > 0 else 0
         self.lbl_window_sec.setText(f'≈{sec:.1f}s')
 
@@ -608,7 +623,7 @@ class CalibrateTool(QMainWindow):
         # 滤波档位显示
         parts.append(f'Q={FILTER_NOTCH_Q_OFFLINE}')
         # 窗口显示信息
-        sr = getattr(self, 'emg1_sample_rate', 2000)
+        sr = self._active_emg_sample_rate()
         parts.append(f'{self.window_size}pt/{self.window_size/sr:.1f}s')
 
         for k in ('last_sync_success_time', 'last_sync_error_time'):
@@ -677,8 +692,8 @@ class CalibrateTool(QMainWindow):
         """加载 EMG 数据：synced→优先2kHz，未同步→优先250Hz"""
         self.emg1_data = None
         self.emg2_data = None
-        self.emg1_sample_rate = 2000
-        self.emg2_sample_rate = 2000
+        self.emg1_sample_rate = None
+        self.emg2_sample_rate = None
         self.emg_start_time = None
         self.emg1_loaded_name = None
         self.emg2_loaded_name = None
@@ -733,7 +748,7 @@ class CalibrateTool(QMainWindow):
                 break
 
         # 设置默认窗口（5 秒）
-        sr = self.emg1_sample_rate if self.emg1_sample_rate else self.emg2_sample_rate
+        sr = self._active_emg_sample_rate()
         if sr == 250:
             self.window_size = WINDOW_250HZ
         else:
@@ -807,7 +822,7 @@ class CalibrateTool(QMainWindow):
                     # 读取 time 字段用于窗口对齐
                     imu_time = None
                     if hasattr(raw, 'dtype') and raw.dtype.names and 'time' in raw.dtype.names:
-                        imu_time = raw['time'][:].astype(np.float64)
+                        imu_time = self._relative_sensor_time(raw['time'][:])
                     if acc_data is not None and len(acc_data) > 0:
                         setattr(self, f'{attr_name}_data', acc_data)
                     if gyr_data is not None and len(gyr_data) > 0:
@@ -853,7 +868,7 @@ class CalibrateTool(QMainWindow):
                     gyr_data = self._extract_imu_gyr(subset)
                     imu_time = None
                     if hasattr(subset, 'dtype') and subset.dtype.names and 'time' in subset.dtype.names:
-                        imu_time = subset['time'][:].astype(np.float64)
+                        imu_time = self._relative_sensor_time(subset['time'][:])
                     if acc_data is not None and len(acc_data) > 0:
                         setattr(self, attr_name, acc_data)
                     if gyr_data is not None and len(gyr_data) > 0:
@@ -1133,7 +1148,7 @@ class CalibrateTool(QMainWindow):
 
         start = self.current_pos
         end = start + self.window_size
-        sample_rate = getattr(self, 'emg1_sample_rate', 2000)
+        sample_rate = self._active_emg_sample_rate()
         time_start = start / sample_rate
         time_end = end / sample_rate
         use_filter = self.chk_filter.isChecked() and not fast_mode
@@ -1204,7 +1219,7 @@ class CalibrateTool(QMainWindow):
         lsb_uv_1 = getattr(self, 'emg1_lsb_uv', calculate_lsb_uv())
         lsb_uv_2 = getattr(self, 'emg2_lsb_uv', calculate_lsb_uv())
         use_filter = self.chk_filter.isChecked() and not fast_mode
-        sample_rate = getattr(self, 'emg1_sample_rate', 2000)
+        sample_rate = self._active_emg_sample_rate()
         time_start = start / sample_rate
         time_end = end / sample_rate
         filter_padding = 0 if not use_filter else min(1000, max(50, int(sample_rate * 0.25)))
@@ -1285,7 +1300,7 @@ class CalibrateTool(QMainWindow):
             if ax: ax.clear()
 
         start = self.current_pos
-        emg_sample_rate = getattr(self, 'emg1_sample_rate', 2000)
+        emg_sample_rate = self._active_emg_sample_rate()
         # 显示窗口的绝对时间范围（秒，相对于 EMG 起始）
         time_start = start / emg_sample_rate
         time_end = time_start + self.window_size / emg_sample_rate
@@ -1461,7 +1476,7 @@ class CalibrateTool(QMainWindow):
         prompt_time = self.prompt_times[idx]
 
         # 转换为采样点位置（EMG 2kHz）
-        sample_rate = getattr(self, 'emg1_sample_rate', 2000)
+        sample_rate = self._active_emg_sample_rate()
         sample_pos = int(prompt_time * sample_rate)
 
         # 将prompt放在窗口中间偏左的位置

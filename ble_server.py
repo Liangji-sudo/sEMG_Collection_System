@@ -380,6 +380,7 @@ class DeviceState:
     raw_buffer: deque = field(default_factory=lambda: deque(maxlen=1000))
     data_buffer: deque = field(default_factory=lambda: deque(maxlen=500))
     raw_dropped_packets: int = 0
+    notification_epoch: int = 0
     connect_task: Any = None
 
     # ===== V2 新增: 设备状态字段 =====
@@ -401,6 +402,7 @@ class DeviceState:
         self.raw_buffer.clear()
         self.data_buffer.clear()
         self.raw_dropped_packets = 0
+        self.notification_epoch += 1
         self.sd_filename = None  # 【新增】重置SD卡文件名
         self.stream_mode = "idle"  # 【新增】重置流模式
 
@@ -779,6 +781,7 @@ def clear_stream_buffers(dev: DeviceState):
     dev.raw_buffer.clear()
     dev.data_buffer.clear()
     dev.last_data_time = 0.0
+    dev.notification_epoch += 1
     reset_callback_timing(dev.device_id)
 
 
@@ -841,8 +844,12 @@ def _legacy_create_notification_handler(dev: DeviceState):
 # ================= 消息队列 =================
 
 def create_notification_handler(dev: DeviceState):
+    handler_epoch = dev.notification_epoch
+
     def handler(sender: int, data: bytearray):
         try:
+            if handler_epoch != dev.notification_epoch:
+                return
             ts = time.time()
             device_key = dev.device_id
 
@@ -1430,6 +1437,7 @@ async def start_stream(ws, device_id: int):
         # 供应商代码也是这样做的：只在用户点击"应用配置"时才发送配置命令
         # ESP32默认配置: 24-bit, 9帧/包, IMU启用, 增益12
 
+        dev.notification_epoch += 1
         handler = create_notification_handler(dev)
         reset_callback_timing(dev.device_id)
         await dev.client.start_notify(EMG_DATA_CHAR_UUID, handler)
