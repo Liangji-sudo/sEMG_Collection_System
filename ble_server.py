@@ -1129,11 +1129,16 @@ async def scan_devices(ws):
         })
 
 
-async def send_control_command(dev: DeviceState, payload: bytes, timeout: float = 5.0, retries: int = 1):
+async def send_control_command(dev: DeviceState, payload: bytes, timeout: float = 3.0):
     """V1/V2 统一的控制命令写入封装
 
-    V2 设备使用 Write with Response + 超时保护
-    V1 设备使用 Write without Response
+    V2 设备使用 Write with Response + 超时保护（与 main_windows 原始逻辑一致）。
+    V1 设备使用 Write without Response。
+
+    注意：response=True 会阻塞事件循环最多 timeout 秒。V2 设备仅在连接后的
+    初始配置（connect_device）和启停流（_do_start_stream）时调用，总共 2-4 次。
+    这个阻塞量级在 04-55 工作日志中验证正常，不会导致 BLE 参数协商失败。
+    真正导致 70% 丢包的是后来叠加上去的 retry+fallback 逻辑（每次 13s+）。
     """
     if dev.client is None or not dev.is_connected():
         raise RuntimeError(f"Dev{dev.device_id} not connected")
@@ -1142,37 +1147,19 @@ async def send_control_command(dev: DeviceState, payload: bytes, timeout: float 
         await dev.client.write_gatt_char(CONTROL_CHAR_UUID, payload, response=False)
         return
 
-    last_error = None
-    for attempt in range(retries + 1):
-        try:
-            await asyncio.wait_for(
-                dev.client.write_gatt_char(CONTROL_CHAR_UUID, payload, response=True),
-                timeout=timeout,
-            )
-            return
-        except (asyncio.TimeoutError, TimeoutError) as e:
-            last_error = e
-            log(f"[Dev{dev.device_id}] 控制命令 write-with-response 超时，尝试 without-response fallback "
-                f"(attempt {attempt + 1}/{retries + 1}, cmd=0x{payload[0]:02X})")
-            try:
-                await asyncio.wait_for(
-                    dev.client.write_gatt_char(CONTROL_CHAR_UUID, payload, response=False),
-                    timeout=1.5,
-                )
-                await asyncio.sleep(0.05)
-                return
-            except Exception as fallback_error:
-                last_error = fallback_error
-                if attempt < retries:
-                    await asyncio.sleep(0.2)
-        except Exception as e:
-            last_error = e
-            if attempt < retries:
-                await asyncio.sleep(0.2)
-            else:
-                break
-
-    raise last_error
+    try:
+        await asyncio.wait_for(
+            dev.client.write_gatt_char(CONTROL_CHAR_UUID, payload, response=True),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        # 设备响应慢但命令可能已生效，对 SET_FILENAME 做一次 without-response 兜底
+        if payload and payload[0] == CMD_MAP['SET_FILENAME']:
+            log(f"[Dev{dev.device_id}] SET_FILENAME response timeout; retry write without response")
+            await asyncio.sleep(0.1)
+            await dev.client.write_gatt_char(CONTROL_CHAR_UUID, payload, response=False)
+        else:
+            raise
 
 
 async def connect_device(ws, device_id: int, mac_or_name: str):
@@ -1219,7 +1206,9 @@ async def connect_device(ws, device_id: int, mac_or_name: str):
     
     if dev.is_connected():
         await disconnect_device(ws, device_id, silent=True)
-    
+        # 【修复重连】等待 BLE 栈完全释放资源后再建新连接
+        await asyncio.sleep(0.5)
+
     for retry in range(MAX_RETRIES):
         try:
             await send_to_control(ws, action, {
@@ -1243,7 +1232,7 @@ async def connect_device(ws, device_id: int, mac_or_name: str):
                 log(f"[Dev{device_id}] 连接成功: {mac}")
 
                 # ===================== V1/V2 检测 (方法A: STATUS_CHAR 特征) ======
-                # 必须在配置命令之前检测，确保 V2 设备后续走 send_control_command() 的 response=True 分支
+                # 必须在配置命令之前检测，以便配置正确的 channel_map 和 num_imus
                 try:
                     await dev.client.start_notify(
                         STATUS_CHAR_UUID,
@@ -1629,6 +1618,14 @@ async def _do_start_stream_for_device(dev, filename_str):
         bool: 成功返回 True
     """
     try:
+        # 0. 【修复重连 0 数据】先发送 STOP 重置设备状态，再走正常启流流程。
+        # 重连场景下设备可能还处于上次会话的 streaming 状态，直接发 START 会被忽略。
+        # 用 response=False 快速发送，不阻塞流程。
+        try:
+            await dev.client.write_gatt_char(CONTROL_CHAR_UUID, bytes([CMD_MAP['STOP']]), response=False)
+        except Exception:
+            pass  # 设备可能未在 streaming，忽略错误
+
         # 1. 发送 TIMESTAMP（SD 卡文件名）
         filename_bytes = filename_str.encode('ascii')
         if len(filename_bytes) > 31:
@@ -1641,6 +1638,13 @@ async def _do_start_stream_for_device(dev, filename_str):
         await asyncio.sleep(TIMESTAMP_TO_START_DELAY_MS / 1000.0)
 
         # 3. 订阅 EMG 数据通知
+        # 【修复】先设 is_streaming=True 再创建 handler，阻止 data_sender_thread
+        # 反复调用 clear_stream_buffers() 递增 notification_epoch 导致 handler 失效。
+        # 之前 handler_epoch 在 create_notification_handler 时捕获，但 start_notify/
+        # sleep/send_control_command 都是 async，期间 is_streaming=False 让
+        # clear_stream_buffers 被调用数百次，epoch 远超 handler_epoch，所有 BLE
+        # 通知被静默丢弃 → 前端 0 信号。
+        dev.is_streaming = True
         handler = create_notification_handler(dev)
         reset_callback_timing(dev.device_id)
         await dev.client.start_notify(EMG_DATA_CHAR_UUID, handler)
@@ -1655,13 +1659,14 @@ async def _do_start_stream_for_device(dev, filename_str):
         log(f"[Dev{dev.device_id}] START 命令已发送")
 
         dev.sd_filename = filename_str
-        dev.is_streaming = True
         return True
 
     except Exception as e:
         log(f"[Dev{dev.device_id}] 启动 stream 失败: {e}")
         import traceback
         traceback.print_exc()
+        # 失败时确保 is_streaming 回滚，防止 data_sender_thread 在无效状态下持续运行
+        dev.is_streaming = False
         return False
 
 
@@ -1701,10 +1706,29 @@ async def start_preview_stream(ws, device_id=None):
                 devices_to_start.append(dev)
 
     if not devices_to_start:
-        log("[preview] 没有需要启动 preview 的设备（已全部 streaming 或未连接）")
+        device_status = {
+            f'dev{did}': {
+                'connected': state.get_device(did).is_connected(),
+                'streaming': state.get_device(did).is_streaming,
+                'stream_mode': state.get_device(did).stream_mode,
+                'name': state.get_device(did).name,
+            }
+            for did in [1, 2]
+        }
+        log(f"[preview] 没有需要启动 preview 的设备: {device_status}")
+        if ws:
+            has_connected = any(info['connected'] for info in device_status.values())
+            await send_to_control(ws, 'start_preview_stream', {
+                'success': False,
+                'started': [],
+                'stream_mode': 'preview',
+                'device_status': device_status,
+                'error': '没有已连接设备' if not has_connected else '设备已全部在采集中',
+            })
         return
 
     started_ids = []
+    errors = {}
     for dev in devices_to_start:
         dev.reset_stats()
         dev.stream_mode = "preview"
@@ -1713,12 +1737,17 @@ async def start_preview_stream(ws, device_id=None):
         if ok:
             started_ids.append(dev.device_id)
             log(f"[preview] Dev{dev.device_id} preview stream 已启动: {filename_str}")
+        else:
+            # 【修复】失败时回滚 stream_mode，避免卡在 preview 状态
+            dev.stream_mode = "idle"
+            errors[f'dev{dev.device_id}'] = '启动 stream 失败，请检查设备连接和蓝牙状态'
 
     if ws:
         await send_to_control(ws, 'start_preview_stream', {
-            'success': True,
+            'success': bool(started_ids),
             'started': started_ids,
             'stream_mode': 'preview',
+            'errors': errors if errors else None,
         })
 
 
