@@ -18,7 +18,7 @@ from scipy import signal as scipy_signal
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFileDialog, QSlider, QSpinBox, QGroupBox,
-    QSplitter, QComboBox, QCheckBox, QMessageBox
+    QSplitter, QComboBox, QCheckBox, QMessageBox, QScrollArea
 )
 from PyQt5.QtCore import Qt, QTimer
 import matplotlib
@@ -126,7 +126,8 @@ class CalibrateTool(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle('H5数据可视化工具 - calibrate_tool')
-        self.setGeometry(100, 100, 1600, 900)
+        self.resize(1200, 800)
+        self.setMinimumSize(900, 600)
 
         # 数据存储
         self.h5_file = None
@@ -207,7 +208,9 @@ class CalibrateTool(QMainWindow):
         main_layout = QVBoxLayout(central_widget)
 
         # === 顶部控制栏 ===
-        control_layout = QHBoxLayout()
+        control_widget = QWidget()
+        control_layout = QHBoxLayout(control_widget)
+        control_layout.setContentsMargins(0, 0, 0, 0)
 
         # 文件选择
         self.btn_open = QPushButton('打开H5文件')
@@ -281,7 +284,12 @@ class CalibrateTool(QMainWindow):
         self.btn_next_prompt.setEnabled(False)
         control_layout.addWidget(self.btn_next_prompt)
 
-        main_layout.addLayout(control_layout)
+        control_scroll = QScrollArea()
+        control_scroll.setWidget(control_widget)
+        control_scroll.setWidgetResizable(False)
+        control_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        control_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        main_layout.addWidget(control_scroll)
 
         # === 图表区域 ===
         splitter = QSplitter(Qt.Vertical)
@@ -695,6 +703,9 @@ class CalibrateTool(QMainWindow):
         for name in emg1_names:
             if name in self.h5_file:
                 raw_data = self.h5_file[name][:]
+                if len(raw_data) == 0:
+                    print(f'[CalibrateTool] 跳过空数据集 {name}')
+                    continue
                 self.emg1_data = self._extract_emg_channels(raw_data)
                 self.emg1_loaded_name = name
                 if raw_data.dtype.names is not None and 'time' in raw_data.dtype.names:
@@ -707,8 +718,14 @@ class CalibrateTool(QMainWindow):
 
         for name in emg2_names:
             if name in self.h5_file:
-                self.emg2_data = self._extract_emg_channels(self.h5_file[name][:])
+                raw_data = self.h5_file[name][:]
+                if len(raw_data) == 0:
+                    print(f'[CalibrateTool] 跳过空数据集 {name}')
+                    continue
+                self.emg2_data = self._extract_emg_channels(raw_data)
                 self.emg2_loaded_name = name
+                if self.emg_start_time is None and raw_data.dtype.names is not None and 'time' in raw_data.dtype.names:
+                    self.emg_start_time = raw_data['time'][0]
                 self.emg2_sample_rate = 250 if '250hz' in name else 2000
                 self.emg2_lsb_uv = self._get_lsb_uv_for_dataset(name)
                 print(f'[CalibrateTool] 已加载 {name}: shape={self.emg2_data.shape}, '

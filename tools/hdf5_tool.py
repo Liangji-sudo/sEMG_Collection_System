@@ -182,7 +182,7 @@ class SyncWorker(QThread):
 
                         if self.sync_mode == 'one_to_one':
                             # 新格式：一个 H5 对一对 collection bin
-                            self.log.emit(f"    [one_to_one] bin_offset=0, row_index")
+                            self.log.emit(f"    [one_to_one] bin_offset=0, auto_anchor")
                             result = sync_h5_one_to_one(
                                 h5_path=h5_file,
                                 emg_bin_path=emg_bin,
@@ -1964,7 +1964,7 @@ class SyncTab(QWidget):
             "📋 适用于新采集数据：一个 H5 对应一对 collection bin。\n"
             "默认 bin_offset=0，通过 H5 attrs (sd_bin_dev1/dev2) 自动定位 bin。\n"
             "stream_format_version>=2 且 bin_pair_source=collection_stream 时推荐使用。\n"
-            "旧格式数据（长 bin 多 H5）请使用\"同步（一对多）\"标签页。"
+            "旧格式数据（长 bin 多 H5）请使用\"同步（旧版本）\"标签页。"
         )
         hint.setStyleSheet("color: #1e40af; background: #e0e7ff; padding: 8px; border-radius: 6px; font-size: 11px;")
         hint.setWordWrap(True)
@@ -2088,9 +2088,9 @@ class SyncTab(QWidget):
         self.emg2_check = QCheckBox("EMG2 (emg2_250hz → emg2_2khz)")
         self.emg2_check.setChecked(True)
         # 【修改】每个设备有2个IMU传感器（A和B）
-        self.imu1_check = QCheckBox("IMU1 A+B (imu1a/1b_ble → 100hz)")
+        self.imu1_check = QCheckBox("IMU1 A/B/C (按设备IMU数量 → 100hz)")
         self.imu1_check.setChecked(True)
-        self.imu2_check = QCheckBox("IMU2 A+B (imu2a/2b_ble → 100hz)")
+        self.imu2_check = QCheckBox("IMU2 A/B/C (按设备IMU数量 → 100hz)")
         self.imu2_check.setChecked(True)
         self.validate_check = QCheckBox("数据校验")
         self.validate_check.setChecked(True)
@@ -3234,10 +3234,10 @@ class HDF5Tool(QMainWindow):
         self.tabs.addTab(self.viewer_tab, "查看")
 
         self.sync_tab = SyncTab()
-        self.tabs.addTab(self.sync_tab, "同步（一对一）")
+        self.tabs.addTab(self.sync_tab, "同步（新版本）")
 
         self.one_to_many_tab = OneToManySyncTab()
-        self.tabs.addTab(self.one_to_many_tab, "同步（一对多）")
+        self.tabs.addTab(self.one_to_many_tab, "同步（旧版本）")
 
         self.sync_tools_tab = SyncToolsTab()
         self.tabs.addTab(self.sync_tools_tab, "擦除同步")

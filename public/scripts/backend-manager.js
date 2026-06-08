@@ -27,6 +27,8 @@
             this.sortMode = 'time-desc'; // 默认按时间降序
             this.currentPage = 1;
             this.pageSize = 15;
+            this.sessionStartStats = null;
+            this._sessionStartStatsPromise = null;
             this._loadRequestId = 0;    // 异步请求 ID，防止旧请求 toast 覆盖
         }
 
@@ -42,8 +44,9 @@
         /**
          * 每次进入后台页面时调用
          */
-        onPageShow() {
+        async onPageShow() {
             console.log('[BackendManager] 进入后台页面，开始加载数据...');
+            await this.primeSessionStartStats();
             this.loadLastStats();  // 先加载上次的统计数据
             this.renderLoadingState();
             this.loadStorageFiles();  // 再加载当前数据
@@ -63,8 +66,50 @@
                     this.lastStats = null;
                 }
             } else {
-                this.lastStats = null;
+                this.lastStats = this.sessionStartStats;
             }
+        }
+
+        buildStatsSnapshot(files) {
+            const stats = {
+                totalFiles: files.length,
+                totalSize: 0,
+                subjectCount: 0,
+                taskCount: 0,
+                timestamp: Date.now(),
+                fingerprint: ''
+            };
+            const subjects = {};
+            const tasks = {};
+            files.forEach(file => {
+                stats.totalSize += file.size || 0;
+                const parsed = this.parseFileName(file.name);
+                if (parsed) {
+                    subjects[parsed.subjectId] = true;
+                    tasks[parsed.taskName] = true;
+                }
+            });
+            stats.subjectCount = Object.keys(subjects).length;
+            stats.taskCount = Object.keys(tasks).length;
+            const firstFileName = files.length > 0 ? files[0].name : '';
+            stats.fingerprint = `${stats.totalFiles}_${firstFileName}`;
+            return stats;
+        }
+
+        primeSessionStartStats() {
+            if (this._sessionStartStatsPromise) return this._sessionStartStatsPromise;
+            this._sessionStartStatsPromise = fetch('/api/storage/files')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success && Array.isArray(data.files)) {
+                        this.sessionStartStats = this.buildStatsSnapshot(data.files);
+                        console.log('[BackendManager] session start stats:', this.sessionStartStats);
+                    }
+                })
+                .catch(err => {
+                    console.warn('[BackendManager] session start stats failed:', err);
+                });
+            return this._sessionStartStatsPromise;
         }
 
         /**
@@ -72,7 +117,8 @@
          * 
          * 注意：保存时会记录一个简单的"指纹"，用于检测目录是否发生变化
          */
-        saveCurrentStats() {
+        saveCurrentStats(options = {}) {
+            const { updateMemory = true } = options;
             // 使用第一个文件名作为简单的目录指纹
             // 如果目录内容完全不同，这个指纹会变化
             const firstFileName = this.files.length > 0 ? this.files[0].name : '';
@@ -88,7 +134,9 @@
             };
             localStorage.setItem('emg_backend_last_stats', JSON.stringify(statsToSave));
             // 同步更新内存基准，避免停留期间重复显示增量
-            this.lastStats = statsToSave;
+            if (updateMemory) {
+                this.lastStats = statsToSave;
+            }
             console.log('[BackendManager] 已保存当前统计数据 (内存+localStorage)');
         }
 
@@ -167,7 +215,7 @@
                     this.render();
 
                     // 渲染完成后保存当前快照（刷新基准）
-                    this.saveCurrentStats();
+                    this.saveCurrentStats({ updateMemory: false });
 
                     // 区分文案
                     if (!hadPriorSnapshot) {
@@ -259,7 +307,7 @@
             
             // 新格式：受试者ID_Stage名_日期_时间
             // 例如: S001_palm_up_20260105_143000
-            const newRegex = /^(S\d+|s\d+)_(.+)_(\d{8})_(\d{6})$/;
+            const newRegex = /^([SZ]\d+)_(.+)_(\d{8})_(\d{6})$/i;
             const newMatch = baseName.match(newRegex);
             
             if (newMatch) {
@@ -274,7 +322,7 @@
             }
             
             // 旧格式：任务名_受试者ID_日期_时间
-            const oldRegex = /^(.+)_(S\d+|s\d+)_(\d{8})_(\d{6})$/;
+            const oldRegex = /^(.+)_([SZ]\d+)_(\d{8})_(\d{6})$/i;
             const oldMatch = baseName.match(oldRegex);
 
             if (oldMatch) {
@@ -289,7 +337,7 @@
             }
 
             // 宽松匹配
-            const looseRegex = /^(S\d+|s\d+)_(.+?)_?(\d*)$/i;
+            const looseRegex = /^([SZ]\d+)_(.+?)_?(\d*)$/i;
             const looseMatch = baseName.match(looseRegex);
             
             if (looseMatch) {
@@ -833,6 +881,7 @@
         
         const manager = new BackendManager();
         window.backendManager = manager;
+        manager.primeSessionStartStats();
 
         const observer = new MutationObserver((mutations) => {
             mutations.forEach((mutation) => {

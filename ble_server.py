@@ -697,6 +697,12 @@ _callback_interval_warning_printed = {}
 _callback_interval_last_log = {}
 
 
+def reset_callback_timing(device_id: int):
+    _last_callback_time.pop(device_id, None)
+    _callback_interval_warning_printed.pop(device_id, None)
+    _callback_interval_last_log.pop(device_id, None)
+
+
 def create_status_handler(dev: DeviceState):
     """V2 设备状态通知回调 — 仅更新本地状态，不影响控制流"""
 
@@ -712,6 +718,8 @@ def create_status_handler(dev: DeviceState):
                 # 同步 IMU 数量 (仅当固件上报值在有效范围内)
                 fw_num_imus = s[6]
                 if 0 <= fw_num_imus <= MAX_NUM_IMUS_V2:
+                    if fw_num_imus != dev.num_imus:
+                        log(f"[Dev{dev.device_id}] STATUS IMU 数量: {fw_num_imus}")
                     dev.num_imus = fw_num_imus
                 dev.status_flags = s[7]
                 dev.storage_state = s[9]
@@ -771,6 +779,7 @@ def clear_stream_buffers(dev: DeviceState):
     dev.raw_buffer.clear()
     dev.data_buffer.clear()
     dev.last_data_time = 0.0
+    reset_callback_timing(dev.device_id)
 
 
 def _legacy_create_notification_handler(dev: DeviceState):
@@ -1422,6 +1431,7 @@ async def start_stream(ws, device_id: int):
         # ESP32默认配置: 24-bit, 9帧/包, IMU启用, 增益12
 
         handler = create_notification_handler(dev)
+        reset_callback_timing(dev.device_id)
         await dev.client.start_notify(EMG_DATA_CHAR_UUID, handler)
         log(f"[Dev{device_id}] 已订阅数据通知")
 
@@ -1624,6 +1634,7 @@ async def _do_start_stream_for_device(dev, filename_str):
 
         # 3. 订阅 EMG 数据通知
         handler = create_notification_handler(dev)
+        reset_callback_timing(dev.device_id)
         await dev.client.start_notify(EMG_DATA_CHAR_UUID, handler)
         log(f"[Dev{dev.device_id}] EMG 数据通知已订阅")
 

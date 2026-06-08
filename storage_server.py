@@ -887,8 +887,8 @@ class HDF5StorageServer:
                 for i in range(num_frames):
                     channels = [emg_data[ch][i] for ch in range(16)]
                     ble_frame_id = frame_ids[i]
-                    # 计算对应的SD卡帧号: SD帧号 = BLE帧号 * 8 + 7
-                    sd_frame_id = ble_frame_id * 8 + 7
+                    # H5 250Hz row matches the first 2kHz SD sample in each 8-sample group.
+                    sd_frame_id = ble_frame_id * 8
 
                     data_250hz[i]["channels"] = np.array(channels, dtype=np.int32)
                     data_250hz[i]["frame_id"] = ble_frame_id
@@ -933,8 +933,8 @@ class HDF5StorageServer:
 
                 # 计算BLE帧号和SD卡帧号
                 ble_frame_id = frame_id if frame_id is not None else 0
-                # SD帧号 = BLE帧号 * 8 + 7
-                sd_frame_id = ble_frame_id * 8 + 7
+                # H5 BLE IMU row is anchored to the first 2kHz SD sample in the group.
+                sd_frame_id = ble_frame_id * 8
 
                 # 构造BLE数据结构化数组（每次一帧）
                 data_ble = np.empty(1, dtype=IMU_BLE_DTYPE)
@@ -985,7 +985,7 @@ class HDF5StorageServer:
 
             ds = self.f[ds_name]
             ble_frame_id = frame_id if frame_id is not None else 0
-            sd_frame_id = ble_frame_id * 8 + 7
+            sd_frame_id = ble_frame_id * 8
             timestamp = timestamps[0] if timestamps else 0.0
             num_imus = len(imu_list)
 

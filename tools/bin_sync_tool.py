@@ -1466,6 +1466,64 @@ def _get_250hz_anchor_sd_frame_ids(data_250hz, bin_offset=0):
             + int(bin_offset) + (DOWNSAMPLE_RATIO - 1)), 'row_index'
 
 
+def _verify_anchor_matches(parser, channels_250hz, channel_map, anchor_sd_frame_ids, num_check=200):
+    total = len(channels_250hz)
+    if total == 0:
+        return 0, 0, 0.0, []
+
+    check_indices = np.linspace(0, total - 1, min(num_check, total), dtype=int)
+    matched = 0
+    checked = 0
+    mismatch_details = []
+
+    for idx in check_indices:
+        sd_fid = int(anchor_sd_frame_ids[idx])
+        if sd_fid < 0:
+            continue
+        bin_data = parser.get_frame(sd_fid)
+        if bin_data is None:
+            continue
+        checked += 1
+        bin_mapped = map_physical_to_h5_order(bin_data, channel_map)
+        if np.all(np.abs(np.array(bin_mapped, dtype=np.int32) - channels_250hz[idx]) <= 1):
+            matched += 1
+        elif len(mismatch_details) < 5:
+            mismatch_details.append({
+                'h5_row': int(idx), 'sd_fid': sd_fid,
+                'h5_ch0': int(channels_250hz[idx][0]),
+                'bin_ch0': int(bin_mapped[0]),
+            })
+
+    match_rate = matched / checked if checked > 0 else 0.0
+    return matched, checked, match_rate, mismatch_details
+
+
+def _recover_one_to_one_anchors(parser, channels_250hz, channel_map):
+    row_result = _scan_bin_for_h5_rows(parser, channels_250hz, channel_map)
+    threshold = VALIDATION_CONFIG['adc_match_threshold']
+    if not row_result.get('found') or row_result.get('match_rate', 0.0) < threshold:
+        return None, row_result
+
+    matched_map = row_result.get('matched_row_map', {})
+    anchors = np.full(len(channels_250hz), -1, dtype=np.int64)
+    for row_idx, sd_fid in matched_map.items():
+        anchors[int(row_idx)] = int(sd_fid)
+
+    matched_positions = np.flatnonzero(anchors >= 0)
+    if len(matched_positions) >= 2:
+        first_pos = int(matched_positions[0])
+        first_anchor = int(anchors[first_pos])
+        for i in range(first_pos - 1, -1, -1):
+            anchors[i] = first_anchor - (first_pos - i) * DOWNSAMPLE_RATIO
+
+        last_pos = int(matched_positions[-1])
+        last_anchor = int(anchors[last_pos])
+        for i in range(last_pos + 1, len(anchors)):
+            anchors[i] = last_anchor + (i - last_pos) * DOWNSAMPLE_RATIO
+
+    return anchors, row_result
+
+
 def sync_h5_one_to_one(h5_path, emg_bin_path, imu_bin_path=None, device_id=1,
                        verify=True, set_synced=True, channel_map_name='V2'):
     """一对一同步：H5 与 bin 一一对应，bin_offset=0，使用 row_index 定位。
@@ -1526,6 +1584,7 @@ def sync_h5_one_to_one(h5_path, emg_bin_path, imu_bin_path=None, device_id=1,
 
     # ---- ADC 校验：H5 row i 的 250Hz ADC == bin frame i*8+7 ----
     anchor_sd_frame_ids, frame_id_mode = _get_250hz_anchor_sd_frame_ids(data_250hz, bin_offset)
+    anchor_position = int(anchor_sd_frame_ids[0] % DOWNSAMPLE_RATIO) if len(anchor_sd_frame_ids) else DOWNSAMPLE_RATIO - 1
     log(f"[one_to_one] frame_id_mode={frame_id_mode}")
 
     if verify:
@@ -1555,6 +1614,25 @@ def sync_h5_one_to_one(h5_path, emg_bin_path, imu_bin_path=None, device_id=1,
         log(f"ADC 校验: {matched}/{checked} matched, rate={match_rate:.3f}")
 
         if match_rate < VALIDATION_CONFIG['adc_match_threshold']:
+            recovered_anchors, scan_result = _recover_one_to_one_anchors(parser, channels_250hz, channel_map)
+            if recovered_anchors is not None:
+                anchor_sd_frame_ids = recovered_anchors
+                frame_id_mode = 'adc_row_scan'
+                anchor_position = int(scan_result['start_sd_frame_id'] % DOWNSAMPLE_RATIO)
+                match_rate = float(scan_result.get('match_rate', 0.0))
+                checked = int(scan_result.get('matched_rows', 0))
+                matched = checked
+                log(
+                    f"[one_to_one] H5 sd_frame_id 校验失败，已通过 ADC 行扫描恢复: "
+                    f"matched_rows={checked}/{num_frames_250hz}, rate={match_rate:.3f}, "
+                    f"start_sd={scan_result.get('start_sd_frame_id')}, "
+                    f"anchor_position={anchor_position}"
+                )
+            else:
+                scan_rate = float(scan_result.get('match_rate', 0.0)) if scan_result else 0.0
+                log(f"[one_to_one] ADC 行扫描未找到可靠锚点: rate={scan_rate:.3f}")
+
+        if match_rate < VALIDATION_CONFIG['adc_match_threshold']:
             with h5py.File(h5_path, 'r+') as f:
                 f.attrs['sync_status'] = 'sync_failed'
                 f.attrs['sync_time'] = datetime.now().isoformat()
@@ -1573,11 +1651,20 @@ def sync_h5_one_to_one(h5_path, emg_bin_path, imu_bin_path=None, device_id=1,
             }
 
     # ---- 构建 2kHz ----
+    if anchor_sd_frame_ids is not None and np.any(anchor_sd_frame_ids < 0):
+        valid_mask = anchor_sd_frame_ids >= 0
+        dropped_rows = int(len(anchor_sd_frame_ids) - np.count_nonzero(valid_mask))
+        data_250hz = data_250hz[valid_mask]
+        anchor_sd_frame_ids = anchor_sd_frame_ids[valid_mask]
+        num_frames_250hz = int(len(data_250hz))
+        log(f"[one_to_one] 丢弃 {dropped_rows} 行不属于当前 bin 的 250Hz 前缀数据")
+
     return _build_and_write_2khz(
         h5_path, parser, imu_parser, device_id, channel_map, resolved_name,
         data_250hz, num_frames_250hz, bin_offset, set_synced,
         sync_mode='one_to_one', sync_match_rate=match_rate, verify_passed=verify,
         anchor_sd_frame_ids=anchor_sd_frame_ids, sync_frame_id_mode=frame_id_mode,
+        anchor_position=anchor_position,
     )
 
 
@@ -1585,7 +1672,8 @@ def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
                           channel_map, resolved_map_name,
                           data_250hz, num_frames_250hz, bin_offset,
                           set_synced, sync_mode, sync_match_rate=None, verify_passed=True,
-                          anchor_sd_frame_ids=None, sync_frame_id_mode='row_index'):
+                          anchor_sd_frame_ids=None, sync_frame_id_mode='row_index',
+                          anchor_position=DOWNSAMPLE_RATIO - 1):
     """构建并写入 2kHz 数据 + IMU 100Hz 数据到 H5（共享逻辑）。
 
     sync_match_rate: 成功路径写入 sync_offset_match_rate_dev{device_id} 供 UI 展示
@@ -1606,7 +1694,7 @@ def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
 
     for i in range(num_frames_250hz):
         if anchor_sd_frame_ids is not None:
-            sd_base = int(anchor_sd_frame_ids[i]) - (DOWNSAMPLE_RATIO - 1)
+            sd_base = int(anchor_sd_frame_ids[i]) - int(anchor_position)
         else:
             sd_base = bin_offset + int(i) * DOWNSAMPLE_RATIO
         for j in range(DOWNSAMPLE_RATIO):
@@ -1619,7 +1707,7 @@ def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
                 data_2khz[idx_2khz]['sd_frame_id'] = sd_frame_id
                 filled_frames += 1
             else:
-                if j == DOWNSAMPLE_RATIO - 1:
+                if j == int(anchor_position):
                     data_2khz[idx_2khz]['channels'] = channels_250hz[i].astype(np.int32)
                 elif idx_2khz > 0:
                     data_2khz[idx_2khz]['channels'] = data_2khz[idx_2khz - 1]['channels']
@@ -1628,9 +1716,8 @@ def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
                 data_2khz[idx_2khz]['sd_frame_id'] = sd_frame_id
                 missing_frames += 1
 
-            # anchor_last_sample: H5 row i = bin frame i*8+7 (j=7), back-fill j=0..6
             anchor_time = timestamps_250hz[i]
-            data_2khz[idx_2khz]['time'] = anchor_time - (DOWNSAMPLE_RATIO - 1 - j) / 2000.0
+            data_2khz[idx_2khz]['time'] = anchor_time + (j - int(anchor_position)) / 2000.0
 
     log(f"2kHz: {filled_frames} from bin, {missing_frames} interpolated")
 
@@ -1664,8 +1751,8 @@ def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
                 f.attrs[f"sync_offset_match_rate_dev{device_id}"] = float(sync_match_rate)
             f.attrs["sync_frame_id_mode"] = sync_frame_id_mode
             f.attrs["sync_bin_offset_mode"] = "none" if bin_offset == 0 else "adc_search"
-            f.attrs["sync_time_alignment"] = "anchor_last_sample"
-            f.attrs["sync_250hz_anchor_position"] = 7
+            f.attrs["sync_time_alignment"] = "anchor_sample"
+            f.attrs["sync_250hz_anchor_position"] = int(anchor_position)
             f.attrs["sync_2khz_sample_interval"] = 0.0005
             detail = {'mode': sync_mode, 'offset': bin_offset, 'filled': filled_frames, 'missing': missing_frames}
             if sync_match_rate is not None:
