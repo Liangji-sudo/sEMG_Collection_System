@@ -4964,9 +4964,236 @@
             transform: none;
         }
 
+        /* ==================== 设备状态悬浮窗口 ==================== */
+        .device-status-float {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+            z-index: 9999;
+            min-width: 280px;
+            transition: all 0.3s ease;
+        }
+
+        .device-status-float.collapsed .device-status-body {
+            display: none;
+        }
+
+        .device-status-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 12px 12px 0 0;
+            font-weight: 600;
+            font-size: 13px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .device-status-float.collapsed .device-status-header {
+            border-radius: 12px;
+        }
+
+        .status-toggle-btn {
+            background: transparent;
+            border: none;
+            color: white;
+            cursor: pointer;
+            padding: 4px 8px;
+            transition: transform 0.3s ease;
+        }
+
+        .device-status-float.collapsed .status-toggle-btn i {
+            transform: rotate(180deg);
+        }
+
+        .device-status-body {
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .device-item {
+            background: #f8fafc;
+            border-radius: 8px;
+            padding: 10px;
+            border: 1px solid #e2e8f0;
+        }
+
+        .device-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+            font-size: 12px;
+            color: #334155;
+            margin-bottom: 8px;
+        }
+
+        .device-label i {
+            color: #667eea;
+        }
+
+        .device-info {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            font-size: 11px;
+        }
+
+        .battery-info {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: #475569;
+        }
+
+        .battery-info i {
+            font-size: 14px;
+        }
+
+        .battery-full { color: #10b981 !important; }
+        .battery-high { color: #22c55e !important; }
+        .battery-medium { color: #eab308 !important; }
+        .battery-low { color: #f59e0b !important; }
+        .battery-critical { color: #ef4444 !important; }
+
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: #64748b;
+        }
+
+        .connection-status i {
+            font-size: 8px;
+        }
+
+        .connection-status.connected {
+            color: #10b981;
+        }
+
+        .connection-status.connected i {
+            color: #10b981;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        .connection-status.disconnected {
+            color: #94a3b8;
+        }
+
+        .stream-mode {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: #64748b;
+            font-size: 10px;
+        }
+
+        .stream-mode i {
+            font-size: 8px;
+        }
+
+        .stream-mode.preview {
+            color: #3b82f6;
+        }
+
+        .stream-mode.preview i {
+            color: #3b82f6;
+            animation: blink 1.5s ease-in-out infinite;
+        }
+
+        .stream-mode.collection {
+            color: #ef4444;
+        }
+
+        .stream-mode.collection i {
+            color: #ef4444;
+            animation: blink 1s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        @keyframes blink {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.3;
+            }
+        }
+
     </style>
 </head>
 <body class="font-inter bg-light-2 text-dark min-h-screen overflow-x-hidden">
+    <!-- 设备状态悬浮窗口 -->
+    <div id="deviceStatusFloat" class="device-status-float">
+        <div class="device-status-header">
+            <span>设备状态</span>
+            <button id="deviceStatusToggle" class="status-toggle-btn" title="收起/展开">
+                <i class="fas fa-chevron-up"></i>
+            </button>
+        </div>
+        <div class="device-status-body">
+            <!-- 左手环 -->
+            <div class="device-item">
+                <div class="device-label">
+                    <i class="fas fa-hand-paper"></i>
+                    <span>左手</span>
+                </div>
+                <div class="device-info">
+                    <div class="battery-info">
+                        <i class="fas fa-battery-three-quarters" id="leftBatteryIcon"></i>
+                        <span id="leftBattery">--</span>
+                    </div>
+                    <div class="connection-status" id="leftConnection">
+                        <i class="fas fa-circle"></i>
+                        <span>未连接</span>
+                    </div>
+                    <div class="stream-mode" id="leftStream">
+                        <i class="fas fa-dot-circle"></i>
+                        <span>空闲</span>
+                    </div>
+                </div>
+            </div>
+            <!-- 右手环 -->
+            <div class="device-item">
+                <div class="device-label">
+                    <i class="fas fa-hand-paper"></i>
+                    <span>右手</span>
+                </div>
+                <div class="device-info">
+                    <div class="battery-info">
+                        <i class="fas fa-battery-three-quarters" id="rightBatteryIcon"></i>
+                        <span id="rightBattery">--</span>
+                    </div>
+                    <div class="connection-status" id="rightConnection">
+                        <i class="fas fa-circle"></i>
+                        <span>未连接</span>
+                    </div>
+                    <div class="stream-mode" id="rightStream">
+                        <i class="fas fa-dot-circle"></i>
+                        <span>空闲</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast提示 -->
     <div class="toast" id="toast">
         <i class="fas fa-check-circle"></i>
@@ -5677,6 +5904,8 @@
     <!-- #1 蓝牙ble设备扫描，连接，断开 控制逻辑 -->
     <script defer src="scripts/ble_control.js"></script>
 
+    <!-- 设备状态悬浮窗口 -->
+    <script defer src="scripts/device-status-widget.js"></script>
 
     <!-- 信号质量颜色指示模块 (必须在 waveform.js 前加载) -->
     <script src="scripts/signal-quality.js"></script>

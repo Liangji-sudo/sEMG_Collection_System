@@ -392,6 +392,7 @@ class DeviceState:
     status_flags: int = 0                       # 设备状态标志位
     storage_state: int = 0                      # SD 卡状态
     sd_free_kb: int = 0                         # SD 卡剩余空间
+    battery_percent: int = 0                    # 电池百分比 (0-100)
 
     def reset_stats(self):
         self.total_frames = 0
@@ -438,6 +439,7 @@ class DeviceState:
             'firmware_version': self.firmware_version,
             'hardware_version': self.hardware_version,
             'stream_mode': self.stream_mode,
+            'battery_percent': self.battery_percent,  # 新增电池百分比
         }
 
 
@@ -724,6 +726,7 @@ def create_status_handler(dev: DeviceState):
                         log(f"[Dev{dev.device_id}] STATUS IMU 数量: {fw_num_imus}")
                     dev.num_imus = fw_num_imus
                 dev.status_flags = s[7]
+                dev.battery_percent = s[8]  # 解析电池百分比
                 dev.storage_state = s[9]
                 dev.sd_free_kb = s[10]
                 dev.firmware_version = s[17].split(b'\x00')[0].decode('ascii', errors='ignore')

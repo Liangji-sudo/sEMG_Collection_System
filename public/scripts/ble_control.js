@@ -17,6 +17,7 @@
     const WS_URL = 'ws://localhost:8764';  // 控制端口
     const RECONNECT_DELAY = 1000;  // 1秒重连，加快连接速度
     const HEARTBEAT_INTERVAL = 30000;
+    const STATUS_UPDATE_INTERVAL = 5000;  // 【新增】状态更新间隔：5秒（用于电池和流模式显示）
     const MAX_RECONNECT_ATTEMPTS = 10;  // 【新增】最大重连次数
 
     // ================= 状态 =================
@@ -26,16 +27,17 @@
         reconnecting: false,
         reconnectAttempts: 0,  // 【新增】重连次数计数
         heartbeatTimer: null,
-        
+        statusUpdateTimer: null,  // 【新增】状态更新定时器
+
         // 设备状态
         devices: {
             1: { connected: false, streaming: false, mac: null, name: null, rssi: null },
             2: { connected: false, streaming: false, mac: null, name: null, rssi: null },
         },
-        
+
         // 扫描结果
         scannedDevices: [],
-        
+
         // 回调
         onStatusChange: null,
         onDeviceChange: null,
@@ -155,15 +157,31 @@
         stopHeartbeat();
         BleState.heartbeatTimer = setInterval(() => {
             if (BleState.connected) {
-                send({ action: 'status' });
+                send({ action: 'ping' });  // 心跳用ping，保持连接
             }
         }, HEARTBEAT_INTERVAL);
+
+        // 【新增】启动状态更新定时器（用于电池和流模式显示）
+        BleState.statusUpdateTimer = setInterval(() => {
+            if (BleState.connected) {
+                send({ action: 'status' });  // 定期获取设备状态
+            }
+        }, STATUS_UPDATE_INTERVAL);
+
+        // 首次立即获取状态
+        if (BleState.connected) {
+            send({ action: 'status' });
+        }
     }
-    
+
     function stopHeartbeat() {
         if (BleState.heartbeatTimer) {
             clearInterval(BleState.heartbeatTimer);
             BleState.heartbeatTimer = null;
+        }
+        if (BleState.statusUpdateTimer) {
+            clearInterval(BleState.statusUpdateTimer);
+            BleState.statusUpdateTimer = null;
         }
     }
 
@@ -402,7 +420,18 @@ async function decodeData(buffer) {
             mac: data.mac,
             name: data.name,
             rssi: data.rssi,
+            battery_percent: data.battery_percent || 0,
+            stream_mode: data.stream_mode || 'idle',
         };
+
+        // 更新设备状态悬浮窗口
+        if (window.deviceStatusWidget) {
+            window.deviceStatusWidget.updateDevice(deviceId, {
+                connected: data.connected,
+                battery_percent: data.battery_percent || 0,
+                stream_mode: data.stream_mode || 'idle',
+            });
+        }
     }
 
     // ================= UI 更新 =================
