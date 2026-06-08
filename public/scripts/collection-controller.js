@@ -436,11 +436,19 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
          * 【新增】重置所有动画模块的状态
          */
         resetAnimationModules() {
+            // 重置离散手势动画模块
+            if (window.discreteGestureAnimation) {
+                window.discreteGestureAnimation.reset?.();
+            }
+            // 重置连续手势动画模块
             if (window.continualGesture1Animation) {
                 window.continualGesture1Animation.reset?.();
             }
             if (window.continualGesture2Animation) {
                 window.continualGesture2Animation.reset?.();
+            }
+            if (window.continualGesture3Animation) {
+                window.continualGesture3Animation.reset?.();
             }
             this.continualTrialCount = 0;
         }

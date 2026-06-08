@@ -1029,19 +1029,46 @@
         }
 
         /**
+         * 重置状态（用于页面切换或任务重新开始）
+         */
+        reset() {
+            console.log('[DiscreteGestureAnimation] 重置状态');
+
+            // 停止动画
+            this.stop();
+
+            // 重置计数器
+            this.executedCount = 0;
+            this.nextPromptIndex = 0;
+            this.prompts = [];
+
+            // 重置序列和库
+            this.promptSequence = [];
+
+            // 重置当前状态
+            this.currentStage = null;
+            this.currentPhase = null;
+
+            // 重置乱序模式标志
+            this._shuffleModeActive = false;
+
+            console.log('[DiscreteGestureAnimation] 状态已重置');
+        }
+
+        /**
          * 销毁
          */
         destroy() {
             this.stop();
-            
+
             if (this._resizeHandler) {
                 window.removeEventListener('resize', this._resizeHandler);
             }
-            
+
             if (this.canvas && this.canvas.parentElement) {
                 this.canvas.parentElement.removeChild(this.canvas);
             }
-            
+
             this.canvas = null;
             this.ctx = null;
             this.containerElement = null;
