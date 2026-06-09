@@ -942,6 +942,30 @@
             font-size: 10px;
             font-weight: 600;
             margin: 0 0 1px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .fullscreen-btn {
+            background: transparent;
+            border: none;
+            color: #3b82f6;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            transition: all 0.2s ease;
+        }
+
+        .fullscreen-btn:hover {
+            background: rgba(59, 130, 246, 0.1);
+            color: #1e40af;
+            transform: scale(1.1);
+        }
+
+        .fullscreen-btn:active {
+            transform: scale(0.95);
         }
 
         .control-bar {
@@ -5140,6 +5164,130 @@
             }
         }
 
+        /* ==================== 全屏波形模态窗口 ==================== */
+        .fullscreen-waveform-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 10000;
+            display: none;
+            flex-direction: column;
+        }
+
+        .fullscreen-waveform-modal.active {
+            display: flex;
+        }
+
+        .fullscreen-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+        }
+
+        .fullscreen-title {
+            font-size: 18px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .fullscreen-close-btn {
+            background: rgba(255, 255, 255, 0.2);
+            border: none;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .fullscreen-close-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .fullscreen-body {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            overflow: hidden;
+        }
+
+        .fullscreen-controls {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 12px 20px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .fullscreen-control-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+        }
+
+        .fullscreen-control-group label {
+            font-weight: 500;
+            color: #334155;
+        }
+
+        .fullscreen-control-group input[type="number"],
+        .fullscreen-control-group select {
+            padding: 6px 10px;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .fullscreen-waveform-area {
+            flex: 1;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .fullscreen-canvas-container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+
+        .fullscreen-canvas-container canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .fullscreen-time-pointer {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: rgba(231, 76, 60, 0.8);
+            pointer-events: none;
+            z-index: 10;
+        }
+
     </style>
 </head>
 <body class="font-inter bg-light-2 text-dark min-h-screen overflow-x-hidden">
@@ -5201,6 +5349,31 @@
     <div class="toast" id="toast">
         <i class="fas fa-check-circle"></i>
         <span id="toastMessage">操作成功</span>
+    </div>
+
+    <!-- 全屏波形模态窗口 -->
+    <div class="fullscreen-waveform-modal" id="fullscreenWaveformModal">
+        <div class="fullscreen-header">
+            <div class="fullscreen-title">
+                <i class="fas fa-expand-arrows-alt"></i>
+                <span id="fullscreenModalTitle">信号全屏查看</span>
+            </div>
+            <button class="fullscreen-close-btn" id="fullscreenCloseBtn">
+                <i class="fas fa-times"></i>
+                <span>关闭</span>
+            </button>
+        </div>
+        <div class="fullscreen-body">
+            <div class="fullscreen-controls" id="fullscreenControls">
+                <!-- 控制项将由JavaScript动态插入 -->
+            </div>
+            <div class="fullscreen-waveform-area">
+                <div class="fullscreen-canvas-container" id="fullscreenCanvasContainer">
+                    <div class="fullscreen-time-pointer" id="fullscreenPointer"></div>
+                    <canvas id="fullscreenCanvas"></canvas>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- ==================== 初始欢迎界面 ==================== -->
@@ -5506,7 +5679,12 @@
                     </div>
                     
                     <div class="emg-sub-card">
-                        <div class="sub-title">EMG1 (16通道)</div>
+                        <div class="sub-title">
+                            <span>EMG1 (16通道)</span>
+                            <button class="fullscreen-btn" data-signal="emg1" title="全屏查看">
+                                <i class="fas fa-expand"></i>
+                            </button>
+                        </div>
                         <div class="control-bar">
                             <div class="control-group">
                                 <span>Offset:</span>
@@ -5541,7 +5719,12 @@
                     </div>
 
                     <div class="emg-sub-card">
-                        <div class="sub-title">EMG2 (16通道)</div>
+                        <div class="sub-title">
+                            <span>EMG2 (16通道)</span>
+                            <button class="fullscreen-btn" data-signal="emg2" title="全屏查看">
+                                <i class="fas fa-expand"></i>
+                            </button>
+                        </div>
                         <div class="control-bar">
                             <div class="control-group">
                                 <span>Offset:</span>
@@ -5589,7 +5772,12 @@
                     </div>
                     <div class="imu-content-wrapper">
                         <div class="imu-group">
-                            <div class="sub-title">IMU1</div>
+                            <div class="sub-title">
+                                <span>IMU1</span>
+                                <button class="fullscreen-btn" data-signal="imu1" title="全屏查看">
+                                    <i class="fas fa-expand"></i>
+                                </button>
+                            </div>
                             <div class="control-bar">
                                 <span class="control-group">加速度计 (g)</span>
                                 <div class="control-group">
@@ -5628,7 +5816,12 @@
                         </div>
                         
                         <div class="imu-group">
-                            <div class="sub-title">IMU2</div>
+                            <div class="sub-title">
+                                <span>IMU2</span>
+                                <button class="fullscreen-btn" data-signal="imu2" title="全屏查看">
+                                    <i class="fas fa-expand"></i>
+                                </button>
+                            </div>
                             <div class="control-bar">
                                 <span class="control-group">加速度计 (g)</span>
                                 <div class="control-group">
@@ -5916,6 +6109,8 @@
     <script src="scripts/waveform.js"></script>
     <!-- 波形显示模块 -->
     <script src="scripts/waveform-renderer.js"></script>
+    <!-- 全屏波形查看模块 -->
+    <script src="scripts/fullscreen-waveform.js"></script>
 
 
     <!-- ==================== 采集系统配置和控制 ==================== -->
