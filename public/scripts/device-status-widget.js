@@ -19,6 +19,13 @@
             this.toggleBtn = null;
             this.isCollapsed = false;
 
+            // 拖拽相关
+            this.isDragging = false;
+            this.dragStartX = 0;
+            this.dragStartY = 0;
+            this.elementStartX = 0;
+            this.elementStartY = 0;
+
             // 设备状态缓存
             this.device1Status = {
                 connected: false,
@@ -56,16 +63,84 @@
 
             // 绑定收起/展开按钮
             if (this.toggleBtn) {
-                this.toggleBtn.addEventListener('click', () => this.toggle());
+                this.toggleBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();  // 阻止冒泡到标题栏的拖拽事件
+                    this.toggle();
+                });
             }
 
-            // 也可以点击标题栏收起/展开
-            const header = this.floatElement.querySelector('.device-status-header');
-            if (header) {
-                header.addEventListener('click', () => this.toggle());
-            }
+            // 绑定拖拽事件
+            this.setupDragging();
 
             console.log('[DeviceStatusWidget] 初始化完成');
+        }
+
+        /**
+         * 设置拖拽功能
+         */
+        setupDragging() {
+            const header = this.floatElement.querySelector('.device-status-header');
+            if (!header) return;
+
+            // 鼠标按下
+            header.addEventListener('mousedown', (e) => {
+                // 如果点击的是按钮，不触发拖拽
+                if (e.target.closest('.status-toggle-btn')) {
+                    return;
+                }
+
+                this.isDragging = true;
+                this.dragStartX = e.clientX;
+                this.dragStartY = e.clientY;
+
+                const rect = this.floatElement.getBoundingClientRect();
+                this.elementStartX = rect.left;
+                this.elementStartY = rect.top;
+
+                // 添加拖拽样式
+                this.floatElement.style.cursor = 'grabbing';
+                header.style.cursor = 'grabbing';
+
+                e.preventDefault();
+            });
+
+            // 鼠标移动
+            document.addEventListener('mousemove', (e) => {
+                if (!this.isDragging) return;
+
+                const deltaX = e.clientX - this.dragStartX;
+                const deltaY = e.clientY - this.dragStartY;
+
+                let newX = this.elementStartX + deltaX;
+                let newY = this.elementStartY + deltaY;
+
+                // 限制在视口内
+                const rect = this.floatElement.getBoundingClientRect();
+                const maxX = window.innerWidth - rect.width;
+                const maxY = window.innerHeight - rect.height;
+
+                newX = Math.max(0, Math.min(newX, maxX));
+                newY = Math.max(0, Math.min(newY, maxY));
+
+                // 移除fixed的top/right定位，改用transform
+                this.floatElement.style.top = newY + 'px';
+                this.floatElement.style.right = 'auto';
+                this.floatElement.style.left = newX + 'px';
+
+                e.preventDefault();
+            });
+
+            // 鼠标释放
+            document.addEventListener('mouseup', () => {
+                if (this.isDragging) {
+                    this.isDragging = false;
+                    this.floatElement.style.cursor = '';
+                    header.style.cursor = 'move';
+                }
+            });
+
+            // 设置标题栏光标样式
+            header.style.cursor = 'move';
         }
 
         /**
