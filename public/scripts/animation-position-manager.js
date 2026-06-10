@@ -358,8 +358,9 @@
             if (elRect.width <= 0 || elRect.height <= 0) return;
 
             if (storageKey === STORAGE_KEY_PANEL) {
+                // 水平和垂直都居中
                 const left = Math.max(0, (containerRect.width - elRect.width) / 2);
-                const top = Math.max(0, containerRect.height * 0.05);
+                const top = Math.max(0, (containerRect.height - elRect.height) / 2);
                 el.style.left = left + 'px';
                 el.style.top = top + 'px';
             } else if (storageKey === STORAGE_KEY_GIF) {
