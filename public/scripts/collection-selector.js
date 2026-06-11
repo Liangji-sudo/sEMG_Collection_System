@@ -95,6 +95,14 @@
                 });
             }
 
+            // 【新增】阻止模态框内部的点击事件冒泡到 overlay
+            const modalContent = overlay?.querySelector('.selector-modal');
+            if (modalContent) {
+                modalContent.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                });
+            }
+
             const prevBtn = document.getElementById('selectorPrevBtn');
             if (prevBtn) {
                 prevBtn.addEventListener('click', () => this.prevStep());
