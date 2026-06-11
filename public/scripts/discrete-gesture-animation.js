@@ -1122,20 +1122,44 @@
             // 【重构】从executionParams读取配置参数，实现：距离 = 速度 × 时间
             // scrollSpeed: 整体移动速度（px/帧），默认2
             // shuffleInterval: 手势间隔时间（秒），默认1.0
+            // shuffleIntervalMin/Max: 间隔时间随机范围（秒）
             // sustainedDuration: 持续性手势的持续时间（秒），默认2.0
             const scrollSpeed = executionParams?.scrollSpeed || 2;
-            const shuffleInterval = executionParams?.shuffleInterval || 1.0;
             this.sustainedDuration = executionParams?.sustainedDuration || 2.0;
 
-            // 【核心计算】手势间距 = 滚动速度 × 间隔时间 × 帧率(60fps)
-            // 这样配置1秒的间隔，动画实际运行1秒后下一个手势到达指示线
-            this.config.scrollSpeed = scrollSpeed;
-            this.config.promptSpacing = scrollSpeed * shuffleInterval * 60;
+            // 【新增】保存随机范围参数，用于动态计算每个手势的间隔
+            this.shuffleIntervalMin = executionParams?.shuffleIntervalMin;
+            this.shuffleIntervalMax = executionParams?.shuffleIntervalMax;
+            const baseShuffleInterval = executionParams?.shuffleInterval || 1.0;
 
-            console.log('[DiscreteGestureAnimation] 乱序模式配置:');
-            console.log('  - 滚动速度:', this.config.scrollSpeed, 'px/帧');
-            console.log('  - 间隔时间:', shuffleInterval, '秒');
-            console.log('  - 计算得到的手势间距:', this.config.promptSpacing, 'px');
+            // 【核心计算】手势间距 = 滚动速度 × 间隔时间 × 帧率(60fps)
+            // 注意：如果配置了随机范围，promptSpacing将在创建每个prompt时动态计算
+            this.config.scrollSpeed = scrollSpeed;
+
+            // 判断是否使用随机间隔
+            const useRandomInterval = this.shuffleIntervalMin !== undefined &&
+                                      this.shuffleIntervalMax !== undefined &&
+                                      this.shuffleIntervalMin !== this.shuffleIntervalMax;
+
+            if (useRandomInterval) {
+                // 随机模式：使用平均值作为基准间距（用于初始布局）
+                const avgInterval = (this.shuffleIntervalMin + this.shuffleIntervalMax) / 2;
+                this.config.promptSpacing = scrollSpeed * avgInterval * 60;
+                console.log('[DiscreteGestureAnimation] 乱序模式配置（随机间隔）:');
+                console.log('  - 滚动速度:', this.config.scrollSpeed, 'px/帧');
+                console.log('  - 间隔时间范围:', this.shuffleIntervalMin, '-', this.shuffleIntervalMax, '秒');
+                console.log('  - 平均间距（用于初始布局）:', this.config.promptSpacing, 'px');
+            } else {
+                // 固定模式：使用固定间距
+                const fixedInterval = (this.shuffleIntervalMin !== undefined && this.shuffleIntervalMax !== undefined)
+                    ? this.shuffleIntervalMin
+                    : baseShuffleInterval;
+                this.config.promptSpacing = scrollSpeed * fixedInterval * 60;
+                console.log('[DiscreteGestureAnimation] 乱序模式配置（固定间隔）:');
+                console.log('  - 滚动速度:', this.config.scrollSpeed, 'px/帧');
+                console.log('  - 间隔时间:', fixedInterval, '秒');
+                console.log('  - 计算得到的手势间距:', this.config.promptSpacing, 'px');
+            }
             console.log('  - 持续手势时长:', this.sustainedDuration, '秒');
 
             // 清空并重新构建promptLibrary
@@ -1200,6 +1224,7 @@
         /**
          * 【新增】创建乱序模式的初始提示（同时显示多个）
          * 【修复】正确计算持续性手势的位置：下一个手势从上一个手势的右边缘 + 间隔开始
+         * 【新增】支持随机间隔：每个手势的间隔在 [min, max] 范围内随机
          */
         createInitialShufflePrompts() {
             // 计算屏幕上能显示多少个手势（估算）
@@ -1210,7 +1235,7 @@
             const remaining = this.promptSequence.length - startIdx;
             const createCount = Math.min(visibleCount, remaining);
 
-            // 【修复】累积计算位置，考虑持续性手势的宽度
+            // 【修复】累积计算位置，考虑持续性手势的宽度和随机间隔
             let currentX = this.config.canvasWidth + 50;
 
             for (let i = 0; i < createCount; i++) {
@@ -1222,8 +1247,21 @@
                 this.prompts.push(prompt);
                 this.nextPromptIndex = seqIdx + 1;
 
-                // 【关键】下一个手势的起始位置 = 当前手势的右边缘 + 间隔
-                currentX = currentX + (prompt.rectWidth || 0) + this.config.promptSpacing;
+                // 【新增】计算随机间隔距离
+                let spacing = this.config.promptSpacing;  // 默认使用基准间距
+                if (this.shuffleIntervalMin !== undefined &&
+                    this.shuffleIntervalMax !== undefined &&
+                    this.shuffleIntervalMin !== this.shuffleIntervalMax) {
+                    // 在 [min, max] 范围内随机选择间隔时间（秒）
+                    const randomInterval = this.shuffleIntervalMin +
+                        Math.random() * (this.shuffleIntervalMax - this.shuffleIntervalMin);
+                    // 转换为像素距离
+                    spacing = this.config.scrollSpeed * randomInterval * 60;
+                    console.log(`[DiscreteGestureAnimation] 手势 ${seqIdx} 随机间隔: ${randomInterval.toFixed(2)}秒 = ${spacing.toFixed(0)}px`);
+                }
+
+                // 【关键】下一个手势的起始位置 = 当前手势的右边缘 + 随机间隔
+                currentX = currentX + (prompt.rectWidth || 0) + spacing;
             }
 
             console.log('[DiscreteGestureAnimation] 初始创建', this.prompts.length, '个提示 (从索引', startIdx, '开始)');
@@ -1267,15 +1305,29 @@
             });
 
             // 创建新提示（如果需要）
-            // 【修复】新手势的位置基于上一个手势的右边缘 + 间隔来计算
+            // 【修复】新手势的位置基于上一个手势的右边缘 + 随机间隔来计算
             if (this.nextPromptIndex < this.promptSequence.length) {
                 const last = this.prompts[this.prompts.length - 1];
                 const lastRightEdge = last ? (last.x + (last.rectWidth || 0)) : 0;
                 // 当上一个手势的右边缘即将进入画布时，创建新手势
                 if (!last || lastRightEdge < this.config.canvasWidth + 50) {
                     const promptName = this.promptSequence[this.nextPromptIndex];
-                    // 【关键修复】新手势的起始位置 = 上一个手势的右边缘 + 间隔
-                    const startX = last ? (lastRightEdge + this.config.promptSpacing) : (this.config.canvasWidth + 50);
+
+                    // 【新增】计算随机间隔距离
+                    let spacing = this.config.promptSpacing;  // 默认使用基准间距
+                    if (this.shuffleIntervalMin !== undefined &&
+                        this.shuffleIntervalMax !== undefined &&
+                        this.shuffleIntervalMin !== this.shuffleIntervalMax) {
+                        // 在 [min, max] 范围内随机选择间隔时间（秒）
+                        const randomInterval = this.shuffleIntervalMin +
+                            Math.random() * (this.shuffleIntervalMax - this.shuffleIntervalMin);
+                        // 转换为像素距离
+                        spacing = this.config.scrollSpeed * randomInterval * 60;
+                        console.log(`[DiscreteGestureAnimation] 手势 ${this.nextPromptIndex} 随机间隔: ${randomInterval.toFixed(2)}秒 = ${spacing.toFixed(0)}px`);
+                    }
+
+                    // 【关键修复】新手势的起始位置 = 上一个手势的右边缘 + 随机间隔
+                    const startX = last ? (lastRightEdge + spacing) : (this.config.canvasWidth + 50);
                     const gestureConfig = this.promptLibrary[promptName]?.originalGesture;
                     const prompt = this.createPromptObject(promptName, startX, this.nextPromptIndex, gestureConfig);
                     this.prompts.push(prompt);

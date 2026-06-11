@@ -115,6 +115,8 @@
                 gestureDisplayTime: 2.0,       // 手势提示显示时间（秒）
                 sustainedDuration: 2.0,        // 持续性手势的持续时间（秒）
                 shuffleInterval: 1.0,          // 乱序模式手势间隔（秒）
+                shuffleIntervalMin: 1.0,       // 【新增】乱序手势间隔最小值（秒）
+                shuffleIntervalMax: 1.0,       // 【新增】乱序手势间隔最大值（秒）
                 scrollSpeed: 2,                // 【新增】整体移动速度（px/帧）
                 orderedShuffleRatio: 0.6       // 乱序中顺序占比（0.6 = 前60%顺序，后40%乱序）
             },
@@ -1684,7 +1686,21 @@
                             <input type="number" data-task="${task.id}" data-param="shuffleInterval"
                                    value="${taskExec.shuffleInterval || 1.0}" min="0.5" max="10" step="0.5">
                             <span class="param-unit">秒</span>
-                            <span class="param-hint">（乱序模式下每个手势经过采集线的时间间隔）</span>
+                            <span class="param-hint">（乱序模式下每个手势经过采集线的时间间隔，固定值）</span>
+                        </div>
+                        <div class="config-param-item config-param-shuffle">
+                            <label><i class="fa fa-random"></i> 乱序间隔随机范围（最小值）</label>
+                            <input type="number" data-task="${task.id}" data-param="shuffleIntervalMin"
+                                   value="${taskExec.shuffleIntervalMin !== undefined ? taskExec.shuffleIntervalMin : (taskExec.shuffleInterval || 1.0)}" min="0.5" max="10" step="0.5">
+                            <span class="param-unit">秒</span>
+                            <span class="param-hint">（每个手势间隔在此范围内随机）</span>
+                        </div>
+                        <div class="config-param-item config-param-shuffle">
+                            <label><i class="fa fa-random"></i> 乱序间隔随机范围（最大值）</label>
+                            <input type="number" data-task="${task.id}" data-param="shuffleIntervalMax"
+                                   value="${taskExec.shuffleIntervalMax !== undefined ? taskExec.shuffleIntervalMax : (taskExec.shuffleInterval || 1.0)}" min="0.5" max="10" step="0.5">
+                            <span class="param-unit">秒</span>
+                            <span class="param-hint">（最小值=最大值时为固定间隔）</span>
                         </div>
                         <div class="config-param-item config-param-shuffle">
                             <label><i class="fa fa-tachometer-alt"></i> 整体移动速度</label>
