@@ -110,6 +110,8 @@
                 intervalBetweenRepeat: 1.0,    // 重复间隔（秒）
                 restBetweenGestures: 30.0,     // 手势间休息时间（秒）
                 preparationTime: 3.0,          // Stage开始前准备时间（秒）
+                preparationTimeMin: 3.0,       // 【新增】准备时间最小值（秒）
+                preparationTimeMax: 3.0,       // 【新增】准备时间最大值（秒）
                 gestureDisplayTime: 2.0,       // 手势提示显示时间（秒）
                 sustainedDuration: 2.0,        // 持续性手势的持续时间（秒）
                 shuffleInterval: 1.0,          // 乱序模式手势间隔（秒）
@@ -121,6 +123,8 @@
                 trialsPerStage: 5,             // 每个Stage的动作次数（扩张+收缩为一次）
                 stageTimeout: 120,             // Stage超时时间（秒）
                 preparationTime: 3.0,          // Stage开始前准备时间（秒）
+                preparationTimeMin: 3.0,       // 【新增】准备时间最小值（秒）
+                preparationTimeMax: 3.0,       // 【新增】准备时间最大值（秒）
                 restBetweenTrials: 1,          // 【新增】试次间隔休息时间（秒）
                 expandDuration: 3.0,           // 扩张阶段时长（秒）- 基准时长
                 holdDuration: 1.0,             // 保持阶段时长（秒）
@@ -136,6 +140,8 @@
                 trialsPerStage: 5,             // 每个Stage的动作次数
                 stageTimeout: 120,             // Stage超时时间（秒）
                 preparationTime: 3.0,          // Stage开始前准备时间（秒）
+                preparationTimeMin: 3.0,       // 【新增】准备时间最小值（秒）
+                preparationTimeMax: 3.0,       // 【新增】准备时间最大值（秒）
                 restBetweenTrials: 1,          // 【新增】试次间隔休息时间（秒）
                 expandDuration: 3.0,           // 扩张阶段时长（秒）- 基准时长
                 holdDuration: 1.0,             // 保持阶段时长（秒）
@@ -154,7 +160,9 @@
                 guideSpeed: 0.15,              // 引导速度（每秒移动的比例，0.1-0.5）
                 guideSize: 0.15,               // 引导区域大小（占半圆弧比例，0.1-0.3）
                 holdDuration: 1.0,             // 端点停留时间（秒）
-                preparationTime: 3.0           // Stage开始前准备时间（秒）
+                preparationTime: 3.0,          // Stage开始前准备时间（秒）
+                preparationTimeMin: 3.0,       // 【新增】准备时间最小值（秒）
+                preparationTimeMax: 3.0        // 【新增】准备时间最大值（秒）
             }
         },
 
@@ -1642,6 +1650,21 @@
                             <input type="number" data-task="${task.id}" data-param="preparationTime"
                                    value="${taskExec.preparationTime || 3.0}" min="1" max="10" step="1">
                             <span class="param-unit">秒</span>
+                            <span class="param-hint">（固定时间，若需要随机则设置下方范围）</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label><i class="fa fa-random"></i> 准备时间随机范围（最小值）</label>
+                            <input type="number" data-task="${task.id}" data-param="preparationTimeMin"
+                                   value="${taskExec.preparationTimeMin !== undefined ? taskExec.preparationTimeMin : (taskExec.preparationTime || 3.0)}" min="1" max="10" step="0.5">
+                            <span class="param-unit">秒</span>
+                            <span class="param-hint">（每次随机选择该范围内的时间）</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label><i class="fa fa-random"></i> 准备时间随机范围（最大值）</label>
+                            <input type="number" data-task="${task.id}" data-param="preparationTimeMax"
+                                   value="${taskExec.preparationTimeMax !== undefined ? taskExec.preparationTimeMax : (taskExec.preparationTime || 3.0)}" min="1" max="10" step="0.5">
+                            <span class="param-unit">秒</span>
+                            <span class="param-hint">（最小值=最大值时为固定时间）</span>
                         </div>
                         <div class="config-param-item">
                             <label>手势提示显示时间</label>
@@ -1699,6 +1722,21 @@
                             <input type="number" data-task="${task.id}" data-param="preparationTime"
                                    value="${taskExec.preparationTime || 3.0}" min="1" max="10" step="1">
                             <span class="param-unit">秒</span>
+                            <span class="param-hint">（固定时间，若需要随机则设置下方范围）</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label><i class="fa fa-random"></i> 准备时间随机范围（最小值）</label>
+                            <input type="number" data-task="${task.id}" data-param="preparationTimeMin"
+                                   value="${taskExec.preparationTimeMin !== undefined ? taskExec.preparationTimeMin : (taskExec.preparationTime || 3.0)}" min="1" max="10" step="0.5">
+                            <span class="param-unit">秒</span>
+                            <span class="param-hint">（每次随机选择该范围内的时间）</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label><i class="fa fa-random"></i> 准备时间随机范围（最大值）</label>
+                            <input type="number" data-task="${task.id}" data-param="preparationTimeMax"
+                                   value="${taskExec.preparationTimeMax !== undefined ? taskExec.preparationTimeMax : (taskExec.preparationTime || 3.0)}" min="1" max="10" step="0.5">
+                            <span class="param-unit">秒</span>
+                            <span class="param-hint">（最小值=最大值时为固定时间）</span>
                         </div>
                         <div class="config-param-item">
                             <label>试次间隔休息时间</label>
@@ -1826,6 +1864,21 @@
                             <input type="number" data-task="${task.id}" data-param="preparationTime"
                                    value="${taskExec.preparationTime || 3.0}" min="1" max="10" step="1">
                             <span class="param-unit">秒</span>
+                            <span class="param-hint">（固定时间，若需要随机则设置下方范围）</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label><i class="fa fa-random"></i> 准备时间随机范围（最小值）</label>
+                            <input type="number" data-task="${task.id}" data-param="preparationTimeMin"
+                                   value="${taskExec.preparationTimeMin !== undefined ? taskExec.preparationTimeMin : (taskExec.preparationTime || 3.0)}" min="1" max="10" step="0.5">
+                            <span class="param-unit">秒</span>
+                            <span class="param-hint">（每次随机选择该范围内的时间）</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label><i class="fa fa-random"></i> 准备时间随机范围（最大值）</label>
+                            <input type="number" data-task="${task.id}" data-param="preparationTimeMax"
+                                   value="${taskExec.preparationTimeMax !== undefined ? taskExec.preparationTimeMax : (taskExec.preparationTime || 3.0)}" min="1" max="10" step="0.5">
+                            <span class="param-unit">秒</span>
+                            <span class="param-hint">（最小值=最大值时为固定时间）</span>
                         </div>
                     `;
                 }

@@ -1995,23 +1995,37 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
 
         showPreparation(callback) {
-            const prepTime = this.currentExecutionParams.preparationTime;
+            // 【修改】支持准备时间随机范围
+            let prepTime = this.currentExecutionParams.preparationTime || 3.0;
+            const prepTimeMin = this.currentExecutionParams.preparationTimeMin;
+            const prepTimeMax = this.currentExecutionParams.preparationTimeMax;
+
+            // 如果配置了随机范围（最小值和最大值不同），则在范围内随机选择
+            if (prepTimeMin !== undefined && prepTimeMax !== undefined && prepTimeMin !== prepTimeMax) {
+                // 在 [min, max] 范围内随机选择，保留1位小数
+                prepTime = Math.round((prepTimeMin + Math.random() * (prepTimeMax - prepTimeMin)) * 10) / 10;
+                console.log(`[Collection] 准备时间随机: ${prepTime}秒 (范围: ${prepTimeMin}-${prepTimeMax}秒)`);
+            } else if (prepTimeMin !== undefined && prepTimeMax !== undefined) {
+                // 最小值=最大值，使用该值作为固定时间
+                prepTime = prepTimeMin;
+            }
+
             const currentStage = this.stages[this.currentStageIndex];
-            
+
             this.updateGestureDisplay({
                 name: '准备开始',
                 instruction: currentStage?.instruction || `采集即将开始，请保持 ${currentStage?.name || ''} 姿势...`,
                 showCountdown: true,
                 countdownValue: prepTime
             });
-            
+
             let countdown = prepTime;
             const countdownEl = document.getElementById('countdown');
-            
+
             this.countdownTimer = setInterval(() => {
                 countdown--;
                 if (countdownEl) countdownEl.textContent = countdown;
-                
+
                 if (countdown <= 0) {
                     clearInterval(this.countdownTimer);
                     this.countdownTimer = null;
