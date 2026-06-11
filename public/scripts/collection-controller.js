@@ -839,12 +839,20 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             let baseGestures = [];
             if (currentStage?.gestures && currentStage.gestures.length > 0) {
-                // Stage有自己的手势配置，根据ID筛选
+                // Stage有自己的手势配置，根据ID或name筛选（兼容修改过名称的配置）
                 const stageGestureIds = currentStage.gestures;
-                baseGestures = allGestures.filter(g => stageGestureIds.includes(g.id));
-                // 按配置顺序排序
+                baseGestures = allGestures.filter(g =>
+                    stageGestureIds.includes(g.id) || stageGestureIds.includes(g.name)
+                );
+                // 按配置顺序排序（优先匹配id，其次匹配name）
                 baseGestures.sort((a, b) => {
-                    return stageGestureIds.indexOf(a.id) - stageGestureIds.indexOf(b.id);
+                    const indexA = stageGestureIds.indexOf(a.id) !== -1
+                        ? stageGestureIds.indexOf(a.id)
+                        : stageGestureIds.indexOf(a.name);
+                    const indexB = stageGestureIds.indexOf(b.id) !== -1
+                        ? stageGestureIds.indexOf(b.id)
+                        : stageGestureIds.indexOf(b.name);
+                    return indexA - indexB;
                 });
                 console.log(`[Collection] Stage "${currentStage.name}" 加载专属手势库: ${baseGestures.length}个`);
             } else {
