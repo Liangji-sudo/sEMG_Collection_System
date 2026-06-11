@@ -1682,18 +1682,11 @@
                             <span class="param-hint">（持续手势从_start到_end的时间）</span>
                         </div>
                         <div class="config-param-item config-param-shuffle">
-                            <label><i class="fa fa-random"></i> 乱序模式手势间隔</label>
-                            <input type="number" data-task="${task.id}" data-param="shuffleInterval"
-                                   value="${taskExec.shuffleInterval || 1.0}" min="0.5" max="10" step="0.5">
-                            <span class="param-unit">秒</span>
-                            <span class="param-hint">（乱序模式下每个手势经过采集线的时间间隔，固定值）</span>
-                        </div>
-                        <div class="config-param-item config-param-shuffle">
                             <label><i class="fa fa-random"></i> 乱序间隔随机范围（最小值）</label>
                             <input type="number" data-task="${task.id}" data-param="shuffleIntervalMin"
                                    value="${taskExec.shuffleIntervalMin !== undefined ? taskExec.shuffleIntervalMin : (taskExec.shuffleInterval || 1.0)}" min="0.5" max="10" step="0.5">
                             <span class="param-unit">秒</span>
-                            <span class="param-hint">（每个手势间隔在此范围内随机）</span>
+                            <span class="param-hint">（乱序模式下每个手势间隔在此范围内随机）</span>
                         </div>
                         <div class="config-param-item config-param-shuffle">
                             <label><i class="fa fa-random"></i> 乱序间隔随机范围（最大值）</label>
