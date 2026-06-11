@@ -2048,6 +2048,15 @@ def run_gui():
             self.device_combo.addItems(["设备1 (emg1)", "设备2 (emg2)"])
             opt_layout.addWidget(self.device_combo)
 
+            # 【新增】IMU数量选择
+            opt_layout.addWidget(QLabel("IMU数量:"))
+            self.num_imus_spin = QSpinBox()
+            self.num_imus_spin.setMinimum(2)
+            self.num_imus_spin.setMaximum(3)
+            self.num_imus_spin.setValue(3)  # 默认3个IMU
+            self.num_imus_spin.setToolTip("bin文件中IMU芯片的数量（通常为3个）")
+            opt_layout.addWidget(self.num_imus_spin)
+
             opt_layout.addStretch()
             opt_group.setLayout(opt_layout)
             layout.addWidget(opt_group)
@@ -2151,8 +2160,12 @@ def run_gui():
 
             device_id = self.device_combo.currentIndex() + 1
             verify = self.verify_cb.isChecked()
+            num_imus = self.num_imus_spin.value()  # 【新增】获取IMU数量
 
-            # 过滤出pending状态的文件
+            self.log(f"\n{'='*60}")
+            self.log(f"开始批量同步 ({len(self.h5_paths)} 个文件)")
+            self.log(f"设备: {device_id}, 校验: {verify}, IMU数量: {num_imus}")
+            self.log(f"{'='*60}\n")
             pending_files = []
             for path in self.h5_paths:
                 try:
@@ -2193,6 +2206,14 @@ def run_gui():
                 self.log(f"[{i+1}/{len(pending_files)}] {os.path.basename(h5_path)}")
 
                 try:
+                    # 【新增】在同步前设置IMU数量到H5文件属性中
+                    with h5py.File(h5_path, 'r+') as f:
+                        # 设置通用的 num_imus 属性
+                        f.attrs['num_imus'] = num_imus
+                        # 设置设备特定的 imu{device}_num_imus 属性（优先级更高）
+                        f.attrs[f'imu{device_id}_num_imus'] = num_imus
+                        self.log(f"  设置 IMU 数量: {num_imus}")
+
                     result = sync_h5_with_bin(
                         h5_path,
                         self.emg_bin_path,
