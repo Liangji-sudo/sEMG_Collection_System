@@ -207,19 +207,34 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
         // ==================== 配置加载 ====================
 
         loadCollectionConfig() {
+            console.log('[Collection] ========== loadCollectionConfig 开始 ==========');
+
             this.collectionConfig = window.currentCollectionConfig ||
                 JSON.parse(localStorage.getItem('emg_current_collection_config') || 'null');
+
+            console.log('[Collection] collectionConfig:', this.collectionConfig);
 
             if (this.collectionConfig) {
                 console.log('[Collection] 加载采集配置:', this.collectionConfig);
 
                 this.currentTaskId = this.collectionConfig.task_id || this.collectionConfig.task || 'discrete_gesture';
+                console.log('[Collection] currentTaskId:', this.currentTaskId);
 
                 // 【关键】强制从localStorage读取最新模板
                 const template = this.getLatestTemplate();
+                console.log('[Collection] template:', template);
+                console.log('[Collection] template.category3长度:', template?.category3?.length);
 
                 if (this.collectionConfig.category3List && this.collectionConfig.category3List.length > 0) {
                     this.stages = this.collectionConfig.category3List;
+                    console.log('[Collection] ✅ 从collectionConfig.category3List加载stages，数量:', this.stages.length);
+                } else {
+                    this.stages = (template.category3 || []).filter(s => s.enabled);
+                    console.log('[Collection] ✅ 从template.category3加载stages，数量:', this.stages.length);
+                }
+
+                console.log('[Collection] 最终stages:', this.stages);
+                console.log('[Collection] stages详情:', JSON.stringify(this.stages, null, 2));
                 } else {
                     this.stages = (template.category3 || []).filter(s => s.enabled);
                 }
