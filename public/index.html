@@ -5470,15 +5470,6 @@
                     <div class="btn-desc">管理历史数据文件</div>
                 </button>
             </div>
-
-            <!-- 摄像头推流按钮 -->
-            <div style="margin-top: 30px; display: flex; justify-content: center; gap: 20px;">
-                <button class="action-btn secondary" id="cameraStreamBtn" style="width: 160px; height: 120px;">
-                    <i class="fas fa-camera"></i>
-                    <div class="btn-title" style="font-size: 16px;">摄像头推流</div>
-                    <div class="btn-desc" style="font-size: 11px;">启动/停止视频流</div>
-                </button>
-            </div>
         </main>
 
         <!-- 底部状态栏 -->
@@ -5543,18 +5534,18 @@
                     </div>
                 </div>
 
-                <!-- 存储状态 -->
+                <!-- 摄像头控制 -->
                 <div class="status-card">
                     <div class="status-card-header">
                         <div class="status-card-title">
-                            <i class="fas fa-hdd"></i> 磁盘存储
+                            <i class="fas fa-camera"></i> 摄像头控制
                         </div>
+                        <span class="status-badge disconnected" id="cameraStreamStatus">未启动</span>
                     </div>
-                    <div class="status-value"><span id="storagePercent">85</span>%</div>
-                    <div class="status-sub">剩余 <span id="storageValue">128</span> GB</div>
-                    <div class="status-progress">
-                        <div class="status-progress-fill blue" id="storageBar" style="width: 85%;"></div>
-                    </div>
+                    <div class="status-sub" id="cameraStreamInfo">点击按钮配置摄像头</div>
+                    <button class="config-btn load-btn" id="cameraStreamBtn" style="width: 100%; margin-top: 8px;">
+                        <i class="fas fa-video"></i> <span id="cameraStreamBtnText">启动推流</span>
+                    </button>
                 </div>
 
                 <!-- 动捕控制 -->

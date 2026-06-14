@@ -250,24 +250,32 @@
      */
     function updateCameraStreamButton(streaming) {
         const btn = document.getElementById('cameraStreamBtn');
+        const btnText = document.getElementById('cameraStreamBtnText');
+        const statusBadge = document.getElementById('cameraStreamStatus');
+        const infoText = document.getElementById('cameraStreamInfo');
+
         if (!btn) return;
 
-        const icon = btn.querySelector('i');
-        const title = btn.querySelector('.btn-title');
-        const desc = btn.querySelector('.btn-desc');
-
         if (streaming) {
-            btn.style.background = 'linear-gradient(145deg, #ef4444 0%, #dc2626 100%)';
-            btn.style.boxShadow = '0 8px 24px rgba(239, 68, 68, 0.35)';
-            if (icon) icon.className = 'fas fa-stop-circle';
-            if (title) title.textContent = '停止推流';
-            if (desc) desc.textContent = '点击停止视频流';
+            btn.className = 'config-btn load-btn';
+            btn.style.background = '#ef4444';
+            btn.style.color = 'white';
+            if (btnText) btnText.textContent = '停止推流';
+            if (statusBadge) {
+                statusBadge.className = 'status-badge connected';
+                statusBadge.textContent = '推流中';
+            }
+            if (infoText) infoText.textContent = '视频流已启动';
         } else {
-            btn.style.background = 'white';
-            btn.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.08)';
-            if (icon) icon.className = 'fas fa-camera';
-            if (title) title.textContent = '摄像头推流';
-            if (desc) desc.textContent = '启动/停止视频流';
+            btn.className = 'config-btn load-btn';
+            btn.style.background = '';
+            btn.style.color = '';
+            if (btnText) btnText.textContent = '启动推流';
+            if (statusBadge) {
+                statusBadge.className = 'status-badge disconnected';
+                statusBadge.textContent = '未启动';
+            }
+            if (infoText) infoText.textContent = '点击按钮配置摄像头';
         }
     }
 

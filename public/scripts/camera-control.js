@@ -2,7 +2,7 @@
  * camera-control.js - 前端摄像头控制模块
  *
  * 功能：
- * 1. 枚举和识别USB摄像头
+ * 1. 枚举和识别USB摄像头（过滤系统自带摄像头）
  * 2. 管理视频流（MediaStream）
  * 3. 控制视频录制（MediaRecorder）
  * 4. 与后端API同步状态
@@ -79,16 +79,29 @@
         }
 
         /**
-         * 枚举所有可用的摄像头设备
+         * 枚举所有可用的摄像头设备（仅USB摄像头）
          */
         async enumerateCameras() {
             console.log('[CameraControl] 枚举摄像头设备...');
 
             try {
                 const devices = await navigator.mediaDevices.enumerateDevices();
-                this.availableCameras = devices.filter(device => device.kind === 'videoinput');
+                const allCameras = devices.filter(device => device.kind === 'videoinput');
 
-                console.log(`[CameraControl] 找到 ${this.availableCameras.length} 个摄像头设备:`);
+                // 过滤掉系统自带摄像头（通常包含"Integrated"或"Built-in"等关键词）
+                this.availableCameras = allCameras.filter(camera => {
+                    const label = camera.label.toLowerCase();
+                    // 排除常见的内置摄像头标识
+                    const isBuiltIn = label.includes('integrated') ||
+                                     label.includes('built-in') ||
+                                     label.includes('facetime') ||
+                                     label.includes('内置') ||
+                                     label.includes('前置') ||
+                                     label.includes('后置');
+                    return !isBuiltIn;
+                });
+
+                console.log(`[CameraControl] 找到 ${allCameras.length} 个摄像头设备 (过滤后 ${this.availableCameras.length} 个USB摄像头):`);
                 this.availableCameras.forEach((camera, index) => {
                     console.log(`  [${index}] ${camera.label || `摄像头 ${index + 1}`} (${camera.deviceId})`);
                 });
