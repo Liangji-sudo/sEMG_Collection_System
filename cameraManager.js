@@ -236,10 +236,13 @@ class CameraManager extends EventEmitter {
             // 监听 ffmpeg 输出（用于调试）
             ffmpegProcess.stderr.on('data', (data) => {
                 const output = data.toString();
-                // 只记录关键信息
-                if (output.includes('frame=') || output.includes('error') || output.includes('Error')) {
-                    console.log(`[CameraManager] [${side}] ffmpeg:`, output.trim());
-                }
+                // 【调试】打印所有 ffmpeg 输出
+                console.log(`[CameraManager] [${side}] ffmpeg stderr:`, output.trim());
+            });
+
+            ffmpegProcess.stdout.on('data', (data) => {
+                const output = data.toString();
+                console.log(`[CameraManager] [${side}] ffmpeg stdout:`, output.trim());
             });
 
             // 监听进程退出
