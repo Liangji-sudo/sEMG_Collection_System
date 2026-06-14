@@ -29,8 +29,13 @@ const deviceSync = require('./deviceSync');
 // 引入实时引擎模块
 const realtimeEngine = require('./realtimeEngine');
 
-// 引入设备协同模块
+// 引入数据存储模块
 const dataStorage = require('./dataStorage');
+
+// 【新增】引入摄像头管理模块
+const CameraManager = require('./cameraManager');
+const cameraManager = new CameraManager();
+console.log('[CameraManager] 模块加载完成');
 
 
 // 中间件配置， 用于给前端获取数据的接口
@@ -454,7 +459,10 @@ async function startServer() {
         // 启动realtimeEngine模块
         await realtimeEngine.start(8080);
         console.log('[server.js] realtimeEngine 启动成功');
-        
+
+        // 【新增】将cameraManager传递给realtimeEngine
+        realtimeEngine.setCameraManager(cameraManager);
+        console.log('[server.js] cameraManager 已注入到 realtimeEngine');
 
         // 启动deviceSync模块（deviceSync启动ble_server模块）
         await deviceSync.initialize();

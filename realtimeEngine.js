@@ -116,6 +116,15 @@ class RealtimeEngine extends EventEmitter {
         this.pendingAbortFreeze = null;       // { interruptedAt, progress }
     }
 
+    /**
+     * 设置摄像头管理器
+     * @param {CameraManager} cameraManager - 摄像头管理器实例
+     */
+    setCameraManager(cameraManager) {
+        this.cameraManager = cameraManager;
+        console.log('[realtimeEngine] cameraManager 已设置');
+    }
+
     start(port = 8080) {
         return new Promise((resolve, reject) => {
             try {
@@ -588,7 +597,7 @@ class RealtimeEngine extends EventEmitter {
         console.log('[realtimeEngine] 🎥 启动后端视频录制...');
 
         if (!this.cameraManager) {
-            console.warn('[realtimeEngine] cameraManager未初始化');
+            console.error('[realtimeEngine] ❌ cameraManager未初始化，无法启动视频录制');
             return;
         }
 
