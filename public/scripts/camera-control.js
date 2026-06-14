@@ -88,22 +88,41 @@
                 const devices = await navigator.mediaDevices.enumerateDevices();
                 const allCameras = devices.filter(device => device.kind === 'videoinput');
 
-                // 过滤掉系统自带摄像头（通常包含"Integrated"或"Built-in"等关键词）
+                // 过滤掉系统自带摄像头
                 this.availableCameras = allCameras.filter(camera => {
                     const label = camera.label.toLowerCase();
-                    // 排除常见的内置摄像头标识
-                    const isBuiltIn = label.includes('integrated') ||
-                                     label.includes('built-in') ||
-                                     label.includes('facetime') ||
-                                     label.includes('内置') ||
-                                     label.includes('前置') ||
-                                     label.includes('后置');
+
+                    // 排除常见的内置摄像头标识（增强版）
+                    const builtInKeywords = [
+                        'integrated',
+                        'built-in',
+                        'builtin',
+                        'facetime',
+                        '内置',
+                        '前置',
+                        '后置',
+                        'front camera',
+                        'rear camera',
+                        'webcam',  // 笔记本自带摄像头常用词
+                        'hd camera', // 笔记本HD摄像头
+                        'ir camera'  // 红外摄像头
+                    ];
+
+                    const isBuiltIn = builtInKeywords.some(keyword => label.includes(keyword));
+
+                    // 额外检查：如果设备标签为空或太短，也可能是内置的
+                    if (!label || label.length < 3) {
+                        console.warn(`[CameraControl] 跳过未标记的设备: ${camera.deviceId}`);
+                        return false;
+                    }
+
                     return !isBuiltIn;
                 });
 
                 console.log(`[CameraControl] 找到 ${allCameras.length} 个摄像头设备 (过滤后 ${this.availableCameras.length} 个USB摄像头):`);
-                this.availableCameras.forEach((camera, index) => {
-                    console.log(`  [${index}] ${camera.label || `摄像头 ${index + 1}`} (${camera.deviceId})`);
+                allCameras.forEach((camera, index) => {
+                    const filtered = !this.availableCameras.includes(camera) ? ' [已过滤]' : '';
+                    console.log(`  [${index}] ${camera.label || `未命名`}${filtered}`);
                 });
 
                 return this.availableCameras;

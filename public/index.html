@@ -5320,6 +5320,16 @@
                         <span>空闲</span>
                     </div>
                 </div>
+                <!-- 左手摄像头状态 -->
+                <div class="device-info" style="margin-top: 4px; padding-top: 4px; border-top: 1px solid #e5e7eb;">
+                    <div class="connection-status" id="leftCameraStatus">
+                        <i class="fas fa-camera"></i>
+                        <span>摄像头未配置</span>
+                    </div>
+                    <button class="status-toggle-btn" id="leftCameraPreviewBtn" title="预览摄像头" style="font-size: 10px; padding: 2px 6px; display: none;">
+                        <i class="fas fa-eye"></i>
+                    </button>
+                </div>
             </div>
             <!-- 右手环 -->
             <div class="device-item">
@@ -5341,31 +5351,20 @@
                         <span>空闲</span>
                     </div>
                 </div>
-            </div>
-
-            <!-- 分隔线 -->
-            <div style="border-top: 1px solid #e5e7eb; margin: 8px 0;"></div>
-
-            <!-- 摄像头状态 -->
-            <div class="device-item">
-                <div class="device-label">
-                    <i class="fas fa-camera"></i>
-                    <span>摄像头</span>
-                </div>
-                <div class="device-info">
-                    <div class="connection-status" id="cameraStatus">
-                        <i class="fas fa-circle"></i>
-                        <span>未启动</span>
+                <!-- 右手摄像头状态 -->
+                <div class="device-info" style="margin-top: 4px; padding-top: 4px; border-top: 1px solid #e5e7eb;">
+                    <div class="connection-status" id="rightCameraStatus">
+                        <i class="fas fa-camera"></i>
+                        <span>摄像头未配置</span>
                     </div>
-                    <div class="stream-mode" id="cameraMode">
-                        <i class="fas fa-video"></i>
-                        <span>--</span>
-                    </div>
-                    <button class="status-toggle-btn" id="cameraPreviewBtn" title="预览视频" style="font-size: 10px; padding: 2px 6px;">
+                    <button class="status-toggle-btn" id="rightCameraPreviewBtn" title="预览摄像头" style="font-size: 10px; padding: 2px 6px; display: none;">
                         <i class="fas fa-eye"></i>
                     </button>
                 </div>
             </div>
+
+            <!-- 分隔线 -->
+            <div style="border-top: 1px solid #e5e7eb; margin: 8px 0;"></div>
 
             <!-- 磁盘空间 -->
             <div class="device-item">

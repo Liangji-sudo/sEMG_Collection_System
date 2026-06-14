@@ -5,7 +5,7 @@
  * 1. 绑定摄像头推流按钮事件
  * 2. 管理摄像头配置弹窗
  * 3. 管理摄像头预览弹窗
- * 4. 更新设备状态显示
+ * 4. 更新设备状态显示（集成到左右手状态中）
  * 5. 与后端API通信
  */
 
@@ -33,10 +33,16 @@
             cameraStreamBtn.addEventListener('click', handleCameraStreamToggle);
         }
 
-        // 绑定摄像头预览按钮
-        const cameraPreviewBtn = document.getElementById('cameraPreviewBtn');
-        if (cameraPreviewBtn) {
-            cameraPreviewBtn.addEventListener('click', openCameraPreview);
+        // 绑定左手摄像头预览按钮
+        const leftCameraPreviewBtn = document.getElementById('leftCameraPreviewBtn');
+        if (leftCameraPreviewBtn) {
+            leftCameraPreviewBtn.addEventListener('click', () => openCameraPreview('left'));
+        }
+
+        // 绑定右手摄像头预览按钮
+        const rightCameraPreviewBtn = document.getElementById('rightCameraPreviewBtn');
+        if (rightCameraPreviewBtn) {
+            rightCameraPreviewBtn.addEventListener('click', () => openCameraPreview('right'));
         }
 
         // 绑定预览弹窗关闭按钮
@@ -122,7 +128,7 @@
         }
 
         const cameras = await window.cameraControl.enumerateCameras();
-        console.log(`[CameraUI] 找到 ${cameras.length} 个摄像头`);
+        console.log(`[CameraUI] 找到 ${cameras.length} 个USB摄像头`);
 
         // 更新下拉列表
         const leftSelect = document.getElementById('leftCameraSelect');
@@ -135,20 +141,23 @@
             cameras.forEach((camera, index) => {
                 const option1 = document.createElement('option');
                 option1.value = camera.deviceId;
-                option1.textContent = camera.label || `摄像头 ${index + 1}`;
+                option1.textContent = camera.label || `USB摄像头 ${index + 1}`;
                 leftSelect.appendChild(option1);
 
                 const option2 = document.createElement('option');
                 option2.value = camera.deviceId;
-                option2.textContent = camera.label || `摄像头 ${index + 1}`;
+                option2.textContent = camera.label || `USB摄像头 ${index + 1}`;
                 rightSelect.appendChild(option2);
             });
 
-            // 自动选择前两个摄像头
-            if (cameras.length >= 1) {
+            // 如果只有1个摄像头，自动选择给左手和右手
+            if (cameras.length === 1) {
                 leftSelect.value = cameras[0].deviceId;
-            }
-            if (cameras.length >= 2) {
+                rightSelect.value = cameras[0].deviceId;
+                console.log('[CameraUI] 检测到单个USB摄像头，已自动分配给左右手');
+            } else if (cameras.length >= 2) {
+                // 多个摄像头，分配前两个
+                leftSelect.value = cameras[0].deviceId;
                 rightSelect.value = cameras[1].deviceId;
             }
         }
@@ -183,6 +192,7 @@
                 console.error('[CameraUI] 左手摄像头映射失败');
                 return;
             }
+            updateCameraStatus('left', '已配置', false);
         }
 
         if (rightDeviceId) {
@@ -191,6 +201,7 @@
                 console.error('[CameraUI] 右手摄像头映射失败');
                 return;
             }
+            updateCameraStatus('right', '已配置', false);
         }
 
         // 关闭配置弹窗
@@ -211,13 +222,40 @@
             return;
         }
 
-        const result = await window.cameraControl.startStreaming('both');
-        console.log('[CameraUI] 推流结果:', result);
+        // 检查哪些摄像头已配置
+        const leftConfigured = window.cameraControl.selectedCameras.left !== null;
+        const rightConfigured = window.cameraControl.selectedCameras.right !== null;
 
-        if (result.left?.success || result.right?.success) {
+        if (!leftConfigured && !rightConfigured) {
+            showToast('请先配置摄像头', 'warning');
+            return;
+        }
+
+        // 只启动已配置的摄像头
+        let leftSuccess = false;
+        let rightSuccess = false;
+
+        if (leftConfigured) {
+            const result = await window.cameraControl.startStreaming('left');
+            leftSuccess = result.success || result.left?.success;
+            if (leftSuccess) {
+                updateCameraStatus('left', '推流中', true);
+                console.log('[CameraUI] 左手摄像头推流成功');
+            }
+        }
+
+        if (rightConfigured) {
+            const result = await window.cameraControl.startStreaming('right');
+            rightSuccess = result.success || result.right?.success;
+            if (rightSuccess) {
+                updateCameraStatus('right', '推流中', true);
+                console.log('[CameraUI] 右手摄像头推流成功');
+            }
+        }
+
+        if (leftSuccess || rightSuccess) {
             isCameraStreaming = true;
             updateCameraStreamButton(true);
-            updateCameraStatus('推流中', 'streaming');
             showToast('摄像头推流已启动 📹', 'success');
         } else {
             console.error('[CameraUI] 推流失败');
@@ -241,7 +279,8 @@
 
         isCameraStreaming = false;
         updateCameraStreamButton(false);
-        updateCameraStatus('未启动', 'idle');
+        updateCameraStatus('left', '已配置', false);
+        updateCameraStatus('right', '已配置', false);
         showToast('摄像头推流已停止', 'info');
     }
 
@@ -280,45 +319,31 @@
     }
 
     /**
-     * 更新设备状态窗口中的摄像头状态
+     * 更新单侧摄像头状态
+     * @param {string} side - 'left' 或 'right'
+     * @param {string} statusText - 状态文字
+     * @param {boolean} showPreview - 是否显示预览按钮
      */
-    function updateCameraStatus(statusText, mode) {
-        const statusEl = document.getElementById('cameraStatus');
-        const modeEl = document.getElementById('cameraMode');
+    function updateCameraStatus(side, statusText, showPreview) {
+        const statusEl = document.getElementById(`${side}CameraStatus`);
+        const previewBtn = document.getElementById(`${side}CameraPreviewBtn`);
 
         if (statusEl) {
             const span = statusEl.querySelector('span');
-            const icon = statusEl.querySelector('i');
             if (span) span.textContent = statusText;
-
-            if (mode === 'streaming') {
-                statusEl.className = 'connection-status connected';
-            } else if (mode === 'recording') {
-                statusEl.className = 'connection-status recording';
-            } else {
-                statusEl.className = 'connection-status';
-            }
         }
 
-        if (modeEl) {
-            const span = modeEl.querySelector('span');
-            if (span) {
-                if (mode === 'streaming') {
-                    span.textContent = '推流中';
-                } else if (mode === 'recording') {
-                    span.textContent = '录制中';
-                } else {
-                    span.textContent = '--';
-                }
-            }
+        if (previewBtn) {
+            previewBtn.style.display = showPreview ? 'inline-block' : 'none';
         }
     }
 
     /**
      * 打开摄像头预览弹窗
+     * @param {string} side - 'left' 或 'right' 或 null（显示全部）
      */
-    function openCameraPreview() {
-        console.log('[CameraUI] 打开摄像头预览');
+    function openCameraPreview(side = null) {
+        console.log('[CameraUI] 打开摄像头预览:', side || 'both');
 
         if (!isCameraStreaming) {
             showToast('摄像头未推流', 'warning');
@@ -332,11 +357,11 @@
         const leftVideo = document.getElementById('leftCameraPreview');
         const rightVideo = document.getElementById('rightCameraPreview');
 
-        if (leftVideo && window.cameraControl) {
+        if (leftVideo && window.cameraControl && (side === null || side === 'left')) {
             window.cameraControl.attachStreamToVideo('left', leftVideo);
         }
 
-        if (rightVideo && window.cameraControl) {
+        if (rightVideo && window.cameraControl && (side === null || side === 'right')) {
             window.cameraControl.attachStreamToVideo('right', rightVideo);
         }
 
