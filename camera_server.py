@@ -321,31 +321,27 @@ class CameraServer:
             result = subprocess.run(
                 [self.ffmpeg_path, '-list_devices', 'true', '-f', 'dshow', '-i', 'dummy'],
                 capture_output=True,
-                text=True,
+                encoding='utf-8',
+                errors='ignore',  # 忽略编码错误
                 timeout=10
             )
 
             # ffmpeg 的设备列表输出在 stderr 中
             output = result.stderr
 
-            # 简单解析：查找 "video devices" 后的设备列表
+            # 解析设备列表
+            # 新格式: [in#0 @ xxx] "设备名称" (video)
+            # 旧格式: DirectShow video devices 后面的 "设备名称"
             devices = []
-            in_video_section = False
+            import re
 
             for line in output.split('\n'):
-                if 'DirectShow video devices' in line:
-                    in_video_section = True
-                    continue
-                if 'DirectShow audio devices' in line:
-                    in_video_section = False
-                    break
-
-                if in_video_section and '"' in line:
-                    # 提取设备名称 (例如: "USB Camera")
-                    import re
-                    match = re.search(r'"([^"]+)"', line)
-                    if match:
-                        device_name = match.group(1)
+                # 新格式匹配: [in#0 @ xxx] "设备名称" (video)
+                match = re.search(r'\[in#\d+.*?\] "([^"]+)"\s+\(video\)', line)
+                if match:
+                    device_name = match.group(1)
+                    # 过滤掉 Alternative name 行
+                    if 'Alternative name' not in line:
                         devices.append({
                             'name': device_name,
                             'id': device_name  # DirectShow 使用名称作为ID
