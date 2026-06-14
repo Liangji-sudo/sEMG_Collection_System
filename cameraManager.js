@@ -213,7 +213,22 @@ class CameraManager extends EventEmitter {
 
         try {
             // 启动 ffmpeg 进程
-            const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
+            // Windows: 通过 cmd.exe 调用以继承完整的 PATH 环境
+            const isWindows = process.platform === 'win32';
+            let ffmpegProcess;
+
+            if (isWindows) {
+                // 在 Windows 上通过 cmd.exe 调用
+                const cmdArgs = ['/c', 'ffmpeg', ...ffmpegArgs];
+                ffmpegProcess = spawn('cmd.exe', cmdArgs, {
+                    windowsHide: true,
+                    shell: false
+                });
+                console.log(`[CameraManager] 通过 cmd.exe 启动 ffmpeg`);
+            } else {
+                // Linux/Mac 直接调用
+                ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
+            }
 
             // 记录进程
             this.ffmpegProcesses[side] = ffmpegProcess;
