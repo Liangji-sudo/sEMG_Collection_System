@@ -1622,7 +1622,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
         /**
          * 【新增】执行异常中断
          */
-        _executeAbort(reason) {
+        async _executeAbort(reason) {
             console.log('[Collection] ===== 异常中断执行 =====');
             console.log('[Collection] 中断原因:', reason);
 
