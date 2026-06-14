@@ -34,7 +34,7 @@ class CameraServer:
         print('[CameraServer] 摄像头服务器初始化完成')
         print(f'[CameraServer] 视频输出目录: {self.output_dir.absolute()}')
 
-    async def handle_client(self, websocket, path):
+    async def handle_client(self, websocket):
         """处理客户端连接"""
         client_addr = websocket.remote_address
         print(f'[CameraServer] 客户端已连接: {client_addr}')
