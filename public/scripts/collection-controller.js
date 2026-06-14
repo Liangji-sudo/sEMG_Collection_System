@@ -235,9 +235,6 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
                 console.log('[Collection] 最终stages:', this.stages);
                 console.log('[Collection] stages详情:', JSON.stringify(this.stages, null, 2));
-                } else {
-                    this.stages = (template.category3 || []).filter(s => s.enabled);
-                }
 
                 // 加载Session数量（优先从collectionConfig，其次从template）
                 if (this.collectionConfig.sessionConfig?.count) {
