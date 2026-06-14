@@ -135,8 +135,8 @@
         const rightSelect = document.getElementById('rightCameraSelect');
 
         if (leftSelect && rightSelect) {
-            leftSelect.innerHTML = '<option value="">请选择摄像头...</option>';
-            rightSelect.innerHTML = '<option value="">请选择摄像头...</option>';
+            leftSelect.innerHTML = '<option value="">不使用</option>';
+            rightSelect.innerHTML = '<option value="">不使用</option>';
 
             cameras.forEach((camera, index) => {
                 const option1 = document.createElement('option');
@@ -150,16 +150,30 @@
                 rightSelect.appendChild(option2);
             });
 
-            // 如果只有1个摄像头，自动选择给左手和右手
+            // 如果只有1个摄像头，默认不选择（用户自己决定给哪只手）
             if (cameras.length === 1) {
-                leftSelect.value = cameras[0].deviceId;
-                rightSelect.value = cameras[0].deviceId;
-                console.log('[CameraUI] 检测到单个USB摄像头，已自动分配给左右手');
+                console.log('[CameraUI] 检测到1个USB摄像头，请手动选择分配给左手或右手');
             } else if (cameras.length >= 2) {
                 // 多个摄像头，分配前两个
                 leftSelect.value = cameras[0].deviceId;
                 rightSelect.value = cameras[1].deviceId;
+                console.log('[CameraUI] 检测到多个USB摄像头，已自动分配前两个');
             }
+
+            // 添加选择变化监听，防止同一摄像头分配给两只手
+            leftSelect.addEventListener('change', () => {
+                if (leftSelect.value && leftSelect.value === rightSelect.value) {
+                    alert('同一摄像头不能同时分配给左手和右手');
+                    leftSelect.value = '';
+                }
+            });
+
+            rightSelect.addEventListener('change', () => {
+                if (rightSelect.value && rightSelect.value === leftSelect.value) {
+                    alert('同一摄像头不能同时分配给左手和右手');
+                    rightSelect.value = '';
+                }
+            });
         }
     }
 
