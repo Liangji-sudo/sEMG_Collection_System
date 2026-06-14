@@ -54,6 +54,7 @@ class RealtimeEngine extends EventEmitter {
         this.camera_currentReconnectTimes = 0;
         this.camera_reconnectTimer = null;
         this.camera_connected = false;
+        this.camerasConfigured = false;  // 【新增】摄像头是否已配置
 
         // 数据包计数
         this.emg_packet_count = 0;
@@ -632,6 +633,41 @@ class RealtimeEngine extends EventEmitter {
         }
 
         console.log('[realtimeEngine] Collection bins:', this.collectionBins);
+
+        // 【新增】自动枚举并配置摄像头（如果尚未配置）
+        if (!this.camerasConfigured) {
+            console.log('[realtimeEngine] 摄像头尚未配置，开始自动枚举...');
+            try {
+                const listResult = await this.sendCameraCommand('list_cameras', {});
+                if (listResult.success && listResult.devices && listResult.devices.length > 0) {
+                    console.log(`[realtimeEngine] 找到 ${listResult.devices.length} 个摄像头`);
+
+                    // 自动配置第一个摄像头为左侧
+                    const firstCamera = listResult.devices[0];
+                    console.log(`[realtimeEngine] 自动配置左侧摄像头: ${firstCamera.name}`);
+
+                    const setResult = await this.sendCameraCommand('set_camera', {
+                        side: 'left',
+                        device_name: firstCamera.name,
+                        device_id: firstCamera.id
+                    });
+
+                    if (setResult.success) {
+                        console.log('[realtimeEngine] ✅ 左侧摄像头配置成功');
+                        this.camerasConfigured = true;
+                    } else {
+                        console.error('[realtimeEngine] ❌ 摄像头配置失败:', setResult.error);
+                        return;
+                    }
+                } else {
+                    console.error('[realtimeEngine] ❌ 未找到可用摄像头');
+                    return;
+                }
+            } catch (error) {
+                console.error('[realtimeEngine] ❌ 摄像头枚举/配置失败:', error.message);
+                return;
+            }
+        }
 
         // 构建输出路径
         const results = {};
