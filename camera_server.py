@@ -13,6 +13,11 @@ WebSocket端口: 8768
 import asyncio
 import websockets
 import json
+import sys
+
+# 强制输出立即刷新
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 import subprocess
 import os
 import signal
