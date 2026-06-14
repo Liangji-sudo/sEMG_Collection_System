@@ -325,16 +325,27 @@
      * @param {boolean} showPreview - 是否显示预览按钮
      */
     function updateCameraStatus(side, statusText, showPreview) {
+        console.log(`[CameraUI] updateCameraStatus: ${side}, ${statusText}, showPreview=${showPreview}`);
+
         const statusEl = document.getElementById(`${side}CameraStatus`);
         const previewBtn = document.getElementById(`${side}CameraPreviewBtn`);
 
+        console.log(`[CameraUI] statusEl:`, statusEl);
+        console.log(`[CameraUI] previewBtn:`, previewBtn);
+
         if (statusEl) {
             const span = statusEl.querySelector('span');
-            if (span) span.textContent = statusText;
+            if (span) {
+                span.textContent = statusText;
+                console.log(`[CameraUI] 已更新${side}状态文字为: ${statusText}`);
+            }
         }
 
         if (previewBtn) {
             previewBtn.style.display = showPreview ? 'inline-block' : 'none';
+            console.log(`[CameraUI] 已设置${side}预览按钮display为: ${showPreview ? 'inline-block' : 'none'}`);
+        } else {
+            console.error(`[CameraUI] 找不到${side}CameraPreviewBtn元素！`);
         }
     }
 
