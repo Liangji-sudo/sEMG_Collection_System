@@ -4,15 +4,16 @@
  * 功能：
  * 1. 枚举和识别USB摄像头设备
  * 2. 管理视频流的开启/关闭
- * 3. 控制视频录制（开始/停止）- 使用 ffmpeg 后端录制
+ * 3. 控制视频录制状态管理（实际录制由 camera_server 通过 ffmpeg 完成）
  * 4. 同步录制到H5采集任务
  * 5. 提供摄像头状态信息（分辨率、帧率、推流状态）
+ *
+ * 注意：本模块不直接调用 ffmpeg，所有录制通过 camera_server 完成
  */
 
 const EventEmitter = require('events');
 const path = require('path');
 const fs = require('fs').promises;
-const { spawn } = require('child_process');
 
 class CameraManager extends EventEmitter {
     constructor() {
@@ -52,12 +53,6 @@ class CameraManager extends EventEmitter {
 
         // 当前录制文件路径
         this.currentRecordingFiles = {
-            left: null,
-            right: null
-        };
-
-        // ffmpeg 进程
-        this.ffmpegProcesses = {
             left: null,
             right: null
         };
@@ -161,9 +156,6 @@ class CameraManager extends EventEmitter {
             return { success: false, error: '无效的side参数' };
         }
 
-        // 注意：这里不再检查 streaming 状态
-        // 因为录制通过 camera_server 的 ffmpeg 完成，不依赖前端推流状态
-
         if (this.cameraStatus[side].recording) {
             return { success: false, error: `${side}侧摄像头已在录制中` };
         }
@@ -173,133 +165,43 @@ class CameraManager extends EventEmitter {
             return { success: false, error: `${side}侧摄像头未配置` };
         }
 
-        // 构建完整文件路径
-        const fullPath = path.join(PATHS.storage, 'video', outputFilename);
-
-        // 确保输出目录存在
-        const outputDir = path.dirname(fullPath);
-        try {
-            await fs.mkdir(outputDir, { recursive: true });
-        } catch (error) {
-            console.error(`[CameraManager] 创建输出目录失败:`, error);
-            return { success: false, error: '创建输出目录失败' };
-        }
-
-        // 在 Windows 上，需要使用设备索引而不是 deviceId
-        // 从前端传来的 deviceId 中提取设备索引
-        const deviceIndex = this._getDeviceIndex(side);
-
-        // 构建 ffmpeg 命令
-        const ffmpegArgs = [
-            '-f', 'dshow',                          // Windows 使用 DirectShow
-            '-video_size', this.recordingConfig.resolution,
-            '-framerate', String(this.recordingConfig.fps),
-            '-i', `video=${this.cameraStatus[side].label}`,  // 使用设备名称
-            '-c:v', 'libx264',                      // H.264 编码
-            '-preset', 'ultrafast',                 // 快速编码
-            '-crf', '23',                           // 质量
-            '-pix_fmt', 'yuv420p',                  // 像素格式
-            '-y',                                   // 覆盖输出文件
-            fullPath
-        ];
-
-        console.log(`[CameraManager] ${side}侧摄像头开始录制: ${videoFileName}`);
-        console.log(`[CameraManager] 完整路径: ${fullPath}`);
-        console.log(`[CameraManager] ffmpeg命令:`, 'ffmpeg', ffmpegArgs.join(' '));
+        console.log(`[CameraManager] ${side}侧摄像头开始录制: ${outputFilename}`);
         console.log(`[CameraManager] 元数据:`, metadata);
 
+        // 通过 realtimeEngine 调用 camera_server
+        // 注意：realtimeEngine 在 startRecording 中已经处理了录制逻辑
+        // cameraManager 只负责状态管理
+
         try {
-            // 启动 ffmpeg 进程
-            // Windows: 通过 cmd.exe 调用以继承完整的 PATH 环境
-            const isWindows = process.platform === 'win32';
-            let ffmpegProcess;
-
-            if (isWindows) {
-                // 在 Windows 上通过 cmd.exe 调用
-                const cmdArgs = ['/c', 'ffmpeg', ...ffmpegArgs];
-                ffmpegProcess = spawn('cmd.exe', cmdArgs, {
-                    windowsHide: true,
-                    shell: false
-                });
-                console.log(`[CameraManager] 通过 cmd.exe 启动 ffmpeg`);
-            } else {
-                // Linux/Mac 直接调用
-                ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
-            }
-
-            // 记录进程
-            this.ffmpegProcesses[side] = ffmpegProcess;
-
-            // 监听 ffmpeg 输出（用于调试）
-            ffmpegProcess.stderr.on('data', (data) => {
-                const output = data.toString();
-                // 【调试】打印所有 ffmpeg 输出
-                console.log(`[CameraManager] [${side}] ffmpeg stderr:`, output.trim());
-            });
-
-            ffmpegProcess.stdout.on('data', (data) => {
-                const output = data.toString();
-                console.log(`[CameraManager] [${side}] ffmpeg stdout:`, output.trim());
-            });
-
-            // 监听进程退出
-            ffmpegProcess.on('exit', (code, signal) => {
-                console.log(`[CameraManager] [${side}] ffmpeg进程退出, code: ${code}, signal: ${signal}`);
-                if (this.cameraStatus[side].recording) {
-                    // 非正常退出
-                    this.cameraStatus[side].recording = false;
-                    this.ffmpegProcesses[side] = null;
-                    this.emit('recording-error', { side, error: `ffmpeg进程异常退出: ${code}` });
-                }
-            });
-
-            ffmpegProcess.on('error', (error) => {
-                console.error(`[CameraManager] [${side}] ffmpeg进程错误:`, error);
-                this.cameraStatus[side].recording = false;
-                this.ffmpegProcesses[side] = null;
-                this.emit('recording-error', { side, error: error.message });
-            });
-
             // 更新状态
             this.cameraStatus[side].recording = true;
-            this.currentRecordingFiles[side] = fullPath;
+            this.currentRecordingFiles[side] = outputFilename;
             this.recordingSessions[side] = {
                 startTime: Date.now(),
-                outputPath: fullPath,
-                metadata: metadata,
-                ffmpegProcess: ffmpegProcess
+                outputFilename: outputFilename,
+                metadata: metadata
             };
 
             this.emit('recording-started', {
                 side,
-                outputPath: fullPath,
-                fileName: videoFileName,
+                outputFilename: outputFilename,
                 metadata
             });
 
             return {
                 success: true,
-                outputPath: fullPath,
-                fileName: videoFileName
+                outputFilename: outputFilename
             };
 
         } catch (error) {
-            console.error(`[CameraManager] 启动ffmpeg失败:`, error);
+            console.error(`[CameraManager] 启动录制失败:`, error);
             return { success: false, error: error.message };
         }
     }
 
-    /**
-     * 获取设备索引（Windows DirectShow）
-     */
-    _getDeviceIndex(side) {
-        // 简化版本：假设left=0, right=1
-        // 实际应该通过枚举设备来确定
-        return side === 'left' ? 0 : 1;
-    }
 
     /**
-     * 停止录制视频（停止 ffmpeg 进程）
+     * 停止录制视频
      * @param {string} side - 'left' 或 'right'
      */
     async stopRecording(side) {
@@ -314,59 +216,30 @@ class CameraManager extends EventEmitter {
         const session = this.recordingSessions[side];
         const duration = Date.now() - session.startTime;
 
-        // 停止 ffmpeg 进程
-        const ffmpegProcess = this.ffmpegProcesses[side];
-        if (ffmpegProcess && !ffmpegProcess.killed) {
-            console.log(`[CameraManager] 正在停止${side}侧ffmpeg进程...`);
+        console.log(`[CameraManager] ${side}侧摄像头停止录制`);
+        console.log(`[CameraManager] 录制时长: ${(duration / 1000).toFixed(2)}秒`);
 
-            // 发送 'q' 命令让 ffmpeg 优雅退出
-            try {
-                ffmpegProcess.stdin.write('q');
-                ffmpegProcess.stdin.end();
-            } catch (error) {
-                console.warn(`[CameraManager] 无法发送quit命令，尝试强制终止:`, error.message);
-                ffmpegProcess.kill('SIGTERM');
-            }
-
-            // 等待进程退出（最多2秒）
-            await new Promise((resolve) => {
-                const timeout = setTimeout(() => {
-                    if (!ffmpegProcess.killed) {
-                        console.warn(`[CameraManager] ffmpeg进程未响应，强制终止`);
-                        ffmpegProcess.kill('SIGKILL');
-                    }
-                    resolve();
-                }, 2000);
-
-                ffmpegProcess.on('exit', () => {
-                    clearTimeout(timeout);
-                    resolve();
-                });
-            });
-        }
+        // 通过 realtimeEngine 调用 camera_server
+        // 注意：realtimeEngine 在 stopRecording 中已经处理了停止逻辑
+        // cameraManager 只负责状态管理
 
         // 更新状态
         this.cameraStatus[side].recording = false;
-        const outputPath = this.currentRecordingFiles[side];
+        const outputFilename = this.currentRecordingFiles[side];
 
         // 清除会话
         this.recordingSessions[side] = null;
         this.currentRecordingFiles[side] = null;
-        this.ffmpegProcesses[side] = null;
-
-        console.log(`[CameraManager] ${side}侧摄像头停止录制`);
-        console.log(`[CameraManager] 录制时长: ${(duration / 1000).toFixed(2)}秒`);
-        console.log(`[CameraManager] 输出文件: ${outputPath}`);
 
         this.emit('recording-stopped', {
             side,
-            outputPath,
+            outputFilename,
             duration
         });
 
         return {
             success: true,
-            outputPath,
+            outputFilename,
             duration
         };
     }

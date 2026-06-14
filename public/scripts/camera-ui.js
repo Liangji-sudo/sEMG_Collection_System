@@ -403,15 +403,34 @@
             modal.style.display = 'none';
         }
 
-        // 停止video播放
+        // 停止video播放并释放摄像头流
         const leftVideo = document.getElementById('leftCameraPreview');
         const rightVideo = document.getElementById('rightCameraPreview');
 
-        if (leftVideo) {
+        if (leftVideo && leftVideo.srcObject) {
+            // 停止所有轨道以释放摄像头
+            leftVideo.srcObject.getTracks().forEach(track => {
+                track.stop();
+                console.log('[CameraUI] 左侧摄像头轨道已停止');
+            });
             leftVideo.srcObject = null;
         }
-        if (rightVideo) {
+        if (rightVideo && rightVideo.srcObject) {
+            // 停止所有轨道以释放摄像头
+            rightVideo.srcObject.getTracks().forEach(track => {
+                track.stop();
+                console.log('[CameraUI] 右侧摄像头轨道已停止');
+            });
             rightVideo.srcObject = null;
+        }
+
+        // 更新 cameraControl 的流状态
+        if (window.cameraControl) {
+            // 清空流对象
+            window.cameraControl.streams.left = null;
+            window.cameraControl.streams.right = null;
+            window.cameraControl.isStreaming = false;
+            console.log('[CameraUI] 摄像头流已释放');
         }
     }
 

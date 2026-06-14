@@ -345,6 +345,7 @@ class DeviceSync extends EventEmitter {
             return { success: false, error: '无效的recordings参数' };
         }
 
+        // 调用 realtimeEngine 通过 camera_server 录制
         const results = {};
 
         for (const recording of recordings) {
@@ -354,12 +355,33 @@ class DeviceSync extends EventEmitter {
                 continue;
             }
 
-            const result = await this.cameraManager.startRecording(side, output_filename, metadata);
-            results[side] = result;
+            // 通过 realtimeEngine 发送命令到 camera_server
+            try {
+                const result = await this.realtimeEngine.sendCameraCommand('start_recording', {
+                    side: side,
+                    output_filename: output_filename
+                });
+
+                results[side] = result;
+
+                // 更新 cameraManager 状态
+                if (result.success) {
+                    this.cameraManager.cameraStatus[side].recording = true;
+                    this.cameraManager.currentRecordingFiles[side] = output_filename;
+                    this.cameraManager.recordingSessions[side] = {
+                        startTime: Date.now(),
+                        outputFilename: output_filename,
+                        metadata: metadata
+                    };
+                }
+            } catch (error) {
+                console.error(`[deviceSync] ${side}侧录制启动失败:`, error);
+                results[side] = { success: false, error: error.message };
+            }
         }
 
         // 检查是否至少有一个成功
-        const hasSuccess = Object.values(results).some(r => r.success);
+        const hasSuccess = Object.values(results).some(r => r && r.success);
 
         return {
             success: hasSuccess,
@@ -371,13 +393,39 @@ class DeviceSync extends EventEmitter {
      * 停止录制视频
      */
     async stopCameraRecording() {
-        const leftResult = await this.cameraManager.stopRecording('left');
-        const rightResult = await this.cameraManager.stopRecording('right');
+        // 通过 realtimeEngine 发送命令到 camera_server
+        const results = {};
+
+        for (const side of ['left', 'right']) {
+            if (this.cameraManager.cameraStatus[side].recording) {
+                try {
+                    const result = await this.realtimeEngine.sendCameraCommand('stop_recording', {
+                        side: side
+                    });
+
+                    results[side] = result;
+
+                    // 更新 cameraManager 状态
+                    if (result.success) {
+                        this.cameraManager.cameraStatus[side].recording = false;
+                        this.cameraManager.currentRecordingFiles[side] = null;
+                        this.cameraManager.recordingSessions[side] = null;
+                    }
+                } catch (error) {
+                    console.error(`[deviceSync] ${side}侧录制停止失败:`, error);
+                    results[side] = { success: false, error: error.message };
+                }
+            } else {
+                results[side] = { success: true, message: '未在录制中' };
+            }
+        }
+
+        const hasSuccess = Object.values(results).some(r => r && r.success);
 
         return {
-            success: leftResult.success && rightResult.success,
-            left: leftResult,
-            right: rightResult
+            success: hasSuccess,
+            left: results.left || { success: false },
+            right: results.right || { success: false }
         };
     }
 

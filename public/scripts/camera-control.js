@@ -250,14 +250,12 @@
             const sides = side === 'both' ? ['left', 'right'] : [side];
 
             for (const s of sides) {
-                // 先停止录制
-                if (this.recorders[s]) {
-                    await this.stopRecording(s);
-                }
-
                 // 停止视频流
                 if (this.streams[s]) {
-                    this.streams[s].getTracks().forEach(track => track.stop());
+                    this.streams[s].getTracks().forEach(track => {
+                        track.stop();
+                        console.log(`[CameraControl] ${s}侧摄像头轨道已停止`);
+                    });
                     this.streams[s] = null;
                     console.log(`[CameraControl] ${s}侧摄像头推流已停止`);
 
