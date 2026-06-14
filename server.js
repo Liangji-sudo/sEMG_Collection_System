@@ -20,6 +20,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const { spawn } = require('child_process');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -32,9 +33,12 @@ const realtimeEngine = require('./realtimeEngine');
 // 引入数据存储模块
 const dataStorage = require('./dataStorage');
 
-// 【新增】引入摄像头管理模块（已经是实例）
-const cameraManager = require('./cameraManager');
-console.log('[server.js] cameraManager模块已加载');
+// 【新增】Python 环境配置（与 deviceSync 一致）
+const { getPythonCommand, PYTHON_ENV } = require('./pythonHelper');
+
+// 【新增】Camera Server 进程管理
+let cameraServerProcess = null;
+const CAMERA_SERVER_SCRIPT = path.join(__dirname, 'camera_server.py');
 
 
 // 中间件配置， 用于给前端获取数据的接口
@@ -427,17 +431,18 @@ function openBrowser() {
 function setupGracefulShutdown() {
     const shutdown = async (signal) => {
         console.log(`\n收到 ${signal} 信号，正在关闭服务器...`);
-        
+
         try {
             await deviceSync.close();
             await realtimeEngine.stop();
             await dataStorage.close();
-            
+            await stopCameraServer();  // 【新增】停止 camera_server
+
             // 关闭日志系统
             if (logger) {
                 logger.close();
             }
-            
+
             console.log('服务器关闭完成');
             process.exit(0);
         } catch (error) {
@@ -450,22 +455,84 @@ function setupGracefulShutdown() {
     process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
+// ==================== Camera Server 管理 ====================
+
+function startCameraServer() {
+    return new Promise((resolve, reject) => {
+        try {
+            console.log('[server.js] 正在启动 camera_server...');
+
+            const { command, args } = getPythonCommand(CAMERA_SERVER_SCRIPT);
+            cameraServerProcess = spawn(command, args, { env: PYTHON_ENV });
+
+            cameraServerProcess.on('spawn', () => {
+                console.log('[server.js] ✅ camera_server 已启动');
+                resolve();
+            });
+
+            // 接收 Python 脚本的输出
+            cameraServerProcess.stdout.on('data', (data) => {
+                const output = data.toString().trim();
+                if (output) console.log(`[camera_server] ${output}`);
+            });
+
+            cameraServerProcess.stderr.on('data', (data) => {
+                const output = data.toString().trim();
+                if (output) console.log(`[camera_server] ${output}`);
+            });
+
+            cameraServerProcess.on('error', (error) => {
+                console.error('[server.js] ❌ camera_server 启动失败:', error);
+                reject(error);
+            });
+
+            cameraServerProcess.on('exit', (code, signal) => {
+                console.log(`[server.js] camera_server 进程退出, code: ${code}, signal: ${signal}`);
+                cameraServerProcess = null;
+            });
+
+        } catch (error) {
+            console.error('[server.js] 启动 camera_server 时出错:', error);
+            reject(error);
+        }
+    });
+}
+
+function stopCameraServer() {
+    return new Promise((resolve) => {
+        if (cameraServerProcess) {
+            console.log('[server.js] 正在停止 camera_server...');
+            cameraServerProcess.kill('SIGTERM');
+            setTimeout(() => {
+                if (cameraServerProcess) {
+                    cameraServerProcess.kill('SIGKILL');
+                }
+                resolve();
+            }, 2000);
+        } else {
+            resolve();
+        }
+    });
+}
+
+// ==================== End Camera Server ====================
+
 // 启动服务器
 async function startServer() {
-    try {
+    try:
 
 
         // 启动realtimeEngine模块
         await realtimeEngine.start(8080);
         console.log('[server.js] realtimeEngine 启动成功');
 
-        // 【新增】将cameraManager传递给realtimeEngine
-        realtimeEngine.setCameraManager(cameraManager);
-        console.log('[server.js] cameraManager 已注入到 realtimeEngine');
-
         // 启动deviceSync模块（deviceSync启动ble_server模块）
         await deviceSync.initialize();
         console.log('[server.js] deviceSync 启动成功');
+
+        // 【新增】启动 camera_server
+        await startCameraServer();
+        console.log('[server.js] camera_server 启动成功');
 
         // 启动dataStorage模块(dataStorage模块启动storage_server模块)
         await dataStorage.initialize();

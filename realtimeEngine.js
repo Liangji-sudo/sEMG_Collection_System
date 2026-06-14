@@ -46,6 +46,15 @@ class RealtimeEngine extends EventEmitter {
         this.mocap_connected = false;
         this.mocap_activeChannel = null;
 
+        // 【新增】Camera服务器
+        this.camera_client = null;
+        this.camera_clientUrl = 'ws://localhost:8768';
+        this.camera_reconnectInterval = 2000;
+        this.camera_maxReconnectTimes = 10;
+        this.camera_currentReconnectTimes = 0;
+        this.camera_reconnectTimer = null;
+        this.camera_connected = false;
+
         // 数据包计数
         this.emg_packet_count = 0;
         this.emg_5_packets_count = 0;
@@ -117,17 +126,15 @@ class RealtimeEngine extends EventEmitter {
     }
 
     /**
-     * 设置摄像头管理器
-     * @param {CameraManager} cameraManager - 摄像头管理器实例
+     * 【废弃】设置摄像头管理器（现在使用独立的camera_server）
      */
     setCameraManager(cameraManager) {
-        this.cameraManager = cameraManager;
-        console.log('[realtimeEngine] cameraManager 已设置');
+        console.log('[realtimeEngine] setCameraManager已废弃，使用camera_server代替');
     }
 
     start(port = 8080) {
         return new Promise((resolve, reject) => {
-            try {
+            try:
                 // 延迟连接BLE服务器，等待ble_server启动完成（包括蓝牙适配器预热）
                 this.connectTimeoutTimer = setTimeout(() => {
                     this.ble_server_connect();
@@ -137,6 +144,11 @@ class RealtimeEngine extends EventEmitter {
                 setTimeout(() => {
                     this.mocap_server_connect();
                 }, 5500);
+
+                // 【新增】延迟连接Camera服务器
+                setTimeout(() => {
+                    this.camera_server_connect();
+                }, 6000);
 
                 this.websocket_server = new WebSocket.Server({ port });
 
@@ -232,6 +244,9 @@ class RealtimeEngine extends EventEmitter {
                 case 'video_recording_started': this.onVideoRecordingStarted(data); break; // 【新增】处理视频录制信息
                 case 'abnormal_interrupt_freeze': this.onAbnormalInterruptFreeze(data); break;
                 case 'abnormal_interrupt': this.onAbnormalInterrupt(data); break;
+
+                // 【新增】Camera命令
+                case 'camera_set_config': this.onCameraSetConfig(data); break;
 
                 // 【新增】Mocap命令
                 case 'mocap_set_channel': this.onMocapSetChannel(data.channel); break;
@@ -358,21 +373,27 @@ class RealtimeEngine extends EventEmitter {
 
     async onCollectionStop(completed) {
         // 【新增】停止视频录制
-        if (this.videoRecordingStarted && this.cameraManager) {
+        if (this.videoRecordingStarted && this.camera_connected) {
             console.log('[realtimeEngine] 🎥 停止视频录制...');
 
             // 停止左手摄像头
             if (this.collectionBins?.dev1) {
-                await this.cameraManager.stopRecording('left').catch(err => {
+                try {
+                    await this.sendCameraCommand('stop_recording', { side: 'left' });
+                    console.log('[realtimeEngine] ✅ 左手摄像头录制已停止');
+                } catch (err) {
                     console.error('[realtimeEngine] 停止左手摄像头录制失败:', err);
-                });
+                }
             }
 
             // 停止右手摄像头
             if (this.collectionBins?.dev2) {
-                await this.cameraManager.stopRecording('right').catch(err => {
+                try {
+                    await this.sendCameraCommand('stop_recording', { side: 'right' });
+                    console.log('[realtimeEngine] ✅ 右手摄像头录制已停止');
+                } catch (err) {
                     console.error('[realtimeEngine] 停止右手摄像头录制失败:', err);
-                });
+                }
             }
 
             this.videoRecordingStarted = false;
@@ -596,8 +617,8 @@ class RealtimeEngine extends EventEmitter {
     async _startVideoRecording(timestamp, stageName) {
         console.log('[realtimeEngine] 🎥 启动后端视频录制...');
 
-        if (!this.cameraManager) {
-            console.error('[realtimeEngine] ❌ cameraManager未初始化，无法启动视频录制');
+        if (!this.camera_connected) {
+            console.error('[realtimeEngine] ❌ camera_server未连接，无法启动视频录制');
             return;
         }
 
@@ -617,57 +638,90 @@ class RealtimeEngine extends EventEmitter {
 
         // 启动左手摄像头录制
         if (binFileNameLeft) {
-            const outputPath = `storage/video/${binFileNameLeft}`;
-            const metadata = {
-                binFileName: binFileNameLeft,
-                stageName: stageName,
-                timestamp: timestamp,
-                taskId: this.currentTaskId
-            };
+            const outputFilename = `${binFileNameLeft}.mp4`;
 
-            console.log('[realtimeEngine] 启动左手摄像头录制:', outputPath);
-            const result = await this.cameraManager.startRecording('left', outputPath, metadata);
-            results.left = result;
+            console.log('[realtimeEngine] 启动左手摄像头录制:', outputFilename);
 
-            if (result.success) {
-                console.log('[realtimeEngine] ✅ 左手摄像头录制已启动:', result.fileName);
-            } else {
-                console.error('[realtimeEngine] ❌ 左手摄像头录制失败:', result.error);
+            try {
+                const result = await this.sendCameraCommand('start_recording', {
+                    side: 'left',
+                    output_filename: outputFilename
+                });
+
+                results.left = result;
+
+                if (result.success) {
+                    console.log('[realtimeEngine] ✅ 左手摄像头录制已启动:', result.filename);
+                } else {
+                    console.error('[realtimeEngine] ❌ 左手摄像头录制失败:', result.error);
+                }
+            } catch (error) {
+                console.error('[realtimeEngine] ❌ 左手摄像头录制请求失败:', error.message);
             }
         }
 
         // 启动右手摄像头录制
         if (binFileNameRight) {
-            const outputPath = `storage/video/${binFileNameRight}`;
-            const metadata = {
-                binFileName: binFileNameRight,
-                stageName: stageName,
-                timestamp: timestamp,
-                taskId: this.currentTaskId
-            };
+            const outputFilename = `${binFileNameRight}.mp4`;
 
-            console.log('[realtimeEngine] 启动右手摄像头录制:', outputPath);
-            const result = await this.cameraManager.startRecording('right', outputPath, metadata);
-            results.right = result;
+            console.log('[realtimeEngine] 启动右手摄像头录制:', outputFilename);
 
-            if (result.success) {
-                console.log('[realtimeEngine] ✅ 右手摄像头录制已启动:', result.fileName);
-            } else {
-                console.error('[realtimeEngine] ❌ 右手摄像头录制失败:', result.error);
+            try {
+                const result = await this.sendCameraCommand('start_recording', {
+                    side: 'right',
+                    output_filename: outputFilename
+                });
+
+                results.right = result;
+
+                if (result.success) {
+                    console.log('[realtimeEngine] ✅ 右手摄像头录制已启动:', result.filename);
+                } else {
+                    console.error('[realtimeEngine] ❌ 右手摄像头录制失败:', result.error);
+                }
+            } catch (error) {
+                console.error('[realtimeEngine] ❌ 右手摄像头录制请求失败:', error.message);
             }
         }
 
         // 保存视频信息到H5
         if (this.stageFileOpen && !this.isClosingStageFile) {
             const videoInfo = {
-                video_left: results.left?.fileName || null,
-                video_right: results.right?.fileName || null,
+                video_left: results.left?.filename || null,
+                video_right: results.right?.filename || null,
                 video_start_timestamp: timestamp
             };
 
             await this.sendStorageCommand('video_recording_started', videoInfo).catch(err => {
                 console.error('[realtimeEngine] 保存视频信息到H5失败:', err);
             });
+        }
+    }
+
+    // 【新增】Camera命令处理
+    async onCameraSetConfig(data) {
+        const { side, device_name, device_id } = data;
+        console.log(`[realtimeEngine] 设置摄像头配置: ${side} -> ${device_name}`);
+
+        if (!this.camera_connected) {
+            console.warn('[realtimeEngine] camera_server未连接');
+            return;
+        }
+
+        try {
+            const result = await this.sendCameraCommand('set_camera', {
+                side: side,
+                device_name: device_name,
+                device_id: device_id
+            });
+
+            if (result.success) {
+                console.log(`[realtimeEngine] ✅ 摄像头配置已设置: ${side}`);
+            } else {
+                console.error(`[realtimeEngine] ❌ 设置摄像头配置失败:`, result.error);
+            }
+        } catch (error) {
+            console.error('[realtimeEngine] 设置摄像头配置请求失败:', error);
         }
     }
 
@@ -1002,7 +1056,111 @@ class RealtimeEngine extends EventEmitter {
         this.mocap_currentReconnectTimes++;
         this.mocap_reconnectTimer = setTimeout(() => { this.mocap_server_connect(); }, this.mocap_reconnectInterval);
     }
-    
+
+    // ==================== Camera Server 连接管理 ====================
+
+    camera_server_connect() {
+        // 清理旧连接
+        if (this.camera_client) {
+            this.camera_client.onopen = null;
+            this.camera_client.onclose = null;
+            this.camera_client.onerror = null;
+            this.camera_client.onmessage = null;
+            try { this.camera_client.close(); } catch (e) {}
+            this.camera_client = null;
+        }
+
+        try {
+            console.log(`[realtimeEngine] 正在连接Camera服务器: ${this.camera_clientUrl} (尝试 ${this.camera_currentReconnectTimes + 1}/${this.camera_maxReconnectTimes})`);
+            this.camera_client = new WebSocket(this.camera_clientUrl);
+
+            this.camera_client.onopen = () => {
+                console.log(`[realtimeEngine] ✅ Camera服务器连接成功`);
+                this.camera_currentReconnectTimes = 0;
+                this.camera_connected = true;
+                clearTimeout(this.camera_reconnectTimer);
+
+                this.broadcastToClients({ type: 'camera_connection_status', connected: true, message: 'Camera服务器已连接' });
+            };
+
+            this.camera_client.onmessage = (event) => {
+                try {
+                    const response = JSON.parse(event.data);
+                    console.log('[realtimeEngine] Camera服务器响应:', response);
+                    // 这里可以处理响应，例如录制状态更新
+                } catch (error) {
+                    console.error('[realtimeEngine] 解析Camera响应失败:', error);
+                }
+            };
+
+            this.camera_client.onerror = (error) => {
+                console.log(`[realtimeEngine] Camera服务器连接错误`);
+            };
+
+            this.camera_client.onclose = (event) => {
+                console.log(`[realtimeEngine] Camera服务器连接关闭, code: ${event.code}`);
+                this.camera_connected = false;
+                this.camera_client = null;
+                this.broadcastToClients({ type: 'camera_connection_status', connected: false, message: 'Camera服务器连接已断开' });
+                if (event.code !== 1000) this.handleCameraReconnect();
+            };
+
+        } catch (error) {
+            console.error('[realtimeEngine] 创建Camera连接失败:', error);
+            this.handleCameraReconnect('创建连接失败');
+        }
+    }
+
+    handleCameraReconnect(reason = '连接断开') {
+        if (this.camera_currentReconnectTimes >= this.camera_maxReconnectTimes) {
+            console.log('[realtimeEngine] Camera服务器重连次数已达上限，停止重连');
+            return;
+        }
+        this.camera_currentReconnectTimes++;
+        console.log(`[realtimeEngine] 将在${this.camera_reconnectInterval}ms后重连Camera服务器...`);
+        this.camera_reconnectTimer = setTimeout(() => {
+            this.camera_server_connect();
+        }, this.camera_reconnectInterval);
+    }
+
+    /**
+     * 发送命令到Camera服务器
+     */
+    async sendCameraCommand(command, data = {}) {
+        return new Promise((resolve, reject) => {
+            if (!this.camera_client || this.camera_client.readyState !== WebSocket.OPEN) {
+                reject(new Error('Camera服务器未连接'));
+                return;
+            }
+
+            const payload = { command, ...data };
+
+            // 设置超时
+            const timeout = setTimeout(() => {
+                reject(new Error('Camera命令超时'));
+            }, 10000);
+
+            // 发送命令并等待响应
+            const messageHandler = (event) => {
+                try {
+                    const response = JSON.parse(event.data);
+                    clearTimeout(timeout);
+                    this.camera_client.removeEventListener('message', messageHandler);
+                    resolve(response);
+                } catch (error) {
+                    clearTimeout(timeout);
+                    this.camera_client.removeEventListener('message', messageHandler);
+                    reject(error);
+                }
+            };
+
+            this.camera_client.addEventListener('message', messageHandler);
+            this.camera_client.send(JSON.stringify(payload));
+        });
+    }
+
+    // ==================== End Camera Server ====================
+
     // 【新增】处理Mocap数据包
     handleMocapDataPacket(packet) {
         if (!this.isRunning) return;
