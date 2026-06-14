@@ -34,7 +34,12 @@ const realtimeEngine = require('./realtimeEngine');
 const dataStorage = require('./dataStorage');
 
 // 【新增】Python 环境配置（与 deviceSync 一致）
-const { getPythonCommand, PYTHON_ENV } = require('./pythonHelper');
+const { getPythonCommand } = require('./pythonPath');
+const PYTHON_ENV = {
+    ...process.env,
+    PYTHONIOENCODING: 'utf-8',
+    PYTHONUTF8: '1'
+};
 
 // 【新增】Camera Server 进程管理
 let cameraServerProcess = null;
