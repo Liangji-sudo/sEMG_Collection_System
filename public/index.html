@@ -5300,66 +5300,83 @@
             </button>
         </div>
         <div class="device-status-body">
-            <!-- 左手环 -->
-            <div class="device-item">
-                <div class="device-label">
-                    <i class="fas fa-hand-paper"></i>
-                    <span>左手</span>
-                </div>
-                <div class="device-info">
-                    <div class="battery-info">
-                        <i class="fas fa-battery-three-quarters" id="leftBatteryIcon"></i>
-                        <span id="leftBattery">--</span>
+            <!-- 左手 -->
+            <div class="device-item" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: start;">
+                <!-- 左手环状态 -->
+                <div>
+                    <div class="device-label" style="margin-bottom: 6px;">
+                        <i class="fas fa-hand-paper"></i>
+                        <span>左手环</span>
                     </div>
-                    <div class="connection-status" id="leftConnection">
-                        <i class="fas fa-circle"></i>
-                        <span>未连接</span>
-                    </div>
-                    <div class="stream-mode" id="leftStream">
-                        <i class="fas fa-dot-circle"></i>
-                        <span>空闲</span>
+                    <div style="font-size: 10px; color: #6b7280; line-height: 1.4;">
+                        <div style="display: flex; align-items: center; gap: 4px; margin-bottom: 2px;">
+                            <i class="fas fa-battery-three-quarters" id="leftBatteryIcon" style="font-size: 9px;"></i>
+                            <span id="leftBattery">--</span>
+                        </div>
+                        <div class="connection-status" id="leftConnection" style="margin-bottom: 2px;">
+                            <i class="fas fa-circle" style="font-size: 6px;"></i>
+                            <span>未连接</span>
+                        </div>
+                        <div class="stream-mode" id="leftStream">
+                            <i class="fas fa-dot-circle" style="font-size: 6px;"></i>
+                            <span>空闲</span>
+                        </div>
                     </div>
                 </div>
                 <!-- 左手摄像头状态 -->
-                <div class="device-info" style="margin-top: 4px; padding-top: 4px; border-top: 1px solid #e5e7eb;">
-                    <div class="connection-status" id="leftCameraStatus">
+                <div>
+                    <div class="device-label" style="margin-bottom: 6px;">
                         <i class="fas fa-camera"></i>
-                        <span>摄像头未配置</span>
+                        <span>左手摄像头</span>
                     </div>
-                    <button class="status-toggle-btn" id="leftCameraPreviewBtn" title="预览摄像头" style="font-size: 10px; padding: 2px 6px; display: none;">
-                        <i class="fas fa-eye"></i>
-                    </button>
+                    <div style="font-size: 10px; color: #6b7280; line-height: 1.4;">
+                        <div class="connection-status" id="leftCameraStatus" style="margin-bottom: 4px;">
+                            <span>未配置</span>
+                        </div>
+                        <button class="status-toggle-btn" id="leftCameraPreviewBtn" title="预览摄像头" style="font-size: 9px; padding: 2px 6px; display: none; width: 100%;">
+                            <i class="fas fa-eye"></i> 预览
+                        </button>
+                    </div>
                 </div>
             </div>
-            <!-- 右手环 -->
-            <div class="device-item">
-                <div class="device-label">
-                    <i class="fas fa-hand-paper"></i>
-                    <span>右手</span>
-                </div>
-                <div class="device-info">
-                    <div class="battery-info">
-                        <i class="fas fa-battery-three-quarters" id="rightBatteryIcon"></i>
-                        <span id="rightBattery">--</span>
+
+            <!-- 右手 -->
+            <div class="device-item" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: start;">
+                <!-- 右手环状态 -->
+                <div>
+                    <div class="device-label" style="margin-bottom: 6px;">
+                        <i class="fas fa-hand-paper"></i>
+                        <span>右手环</span>
                     </div>
-                    <div class="connection-status" id="rightConnection">
-                        <i class="fas fa-circle"></i>
-                        <span>未连接</span>
-                    </div>
-                    <div class="stream-mode" id="rightStream">
-                        <i class="fas fa-dot-circle"></i>
-                        <span>空闲</span>
+                    <div style="font-size: 10px; color: #6b7280; line-height: 1.4;">
+                        <div style="display: flex; align-items: center; gap: 4px; margin-bottom: 2px;">
+                            <i class="fas fa-battery-three-quarters" id="rightBatteryIcon" style="font-size: 9px;"></i>
+                            <span id="rightBattery">--</span>
+                        </div>
+                        <div class="connection-status" id="rightConnection" style="margin-bottom: 2px;">
+                            <i class="fas fa-circle" style="font-size: 6px;"></i>
+                            <span>未连接</span>
+                        </div>
+                        <div class="stream-mode" id="rightStream">
+                            <i class="fas fa-dot-circle" style="font-size: 6px;"></i>
+                            <span>空闲</span>
+                        </div>
                     </div>
                 </div>
                 <!-- 右手摄像头状态 -->
-                <div class="device-info" style="margin-top: 4px; padding-top: 4px; border-top: 1px solid #e5e7eb;">
-                    <div class="connection-status" id="rightCameraStatus">
+                <div>
+                    <div class="device-label" style="margin-bottom: 6px;">
                         <i class="fas fa-camera"></i>
-                        <span>摄像头未配置</span>
+                        <span>右手摄像头</span>
                     </div>
-                    <button class="status-toggle-btn" id="rightCameraPreviewBtn" title="预览摄像头" style="font-size: 10px; padding: 2px 6px; display: none;">
-                        <i class="fas fa-eye"></i>
-                    </button>
+                    <div style="font-size: 10px; color: #6b7280; line-height: 1.4;">
+                        <div class="connection-status" id="rightCameraStatus" style="margin-bottom: 4px;">
+                            <span>未配置</span>
+                        </div>
+                        <button class="status-toggle-btn" id="rightCameraPreviewBtn" title="预览摄像头" style="font-size: 9px; padding: 2px 6px; display: none; width: 100%;">
+                            <i class="fas fa-eye"></i> 预览
+                        </button>
+                    </div>
                 </div>
             </div>
 
