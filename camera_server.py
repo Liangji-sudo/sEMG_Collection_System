@@ -318,6 +318,14 @@ class CameraServer:
                 'devices': devices
             }
 
+        except FileNotFoundError:
+            error_msg = 'ffmpeg 未安装或不在系统 PATH 中。请安装 ffmpeg: https://ffmpeg.org/download.html'
+            print(f'[CameraServer] ❌ {error_msg}')
+            return {
+                'success': False,
+                'error': error_msg,
+                'devices': []
+            }
         except Exception as e:
             print(f'[CameraServer] 枚举设备失败: {e}')
             import traceback

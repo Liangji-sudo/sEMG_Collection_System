@@ -4,16 +4,20 @@
 import asyncio
 import websockets
 import json
+import sys
+
+# 设置输出编码
+sys.stdout.reconfigure(encoding='utf-8')
 
 async def test_camera_server():
     uri = "ws://localhost:8768"
 
     try:
         async with websockets.connect(uri) as websocket:
-            print("✅ 已连接到 camera_server")
+            print("[OK] 已连接到 camera_server")
 
             # 1. 枚举摄像头
-            print("\n1️⃣ 枚举摄像头设备...")
+            print("\n[1] 枚举摄像头设备...")
             await websocket.send(json.dumps({
                 'command': 'list_cameras'
             }))
@@ -30,7 +34,7 @@ async def test_camera_server():
                 if len(devices) > 0:
                     # 2. 配置第一个摄像头为左侧
                     first_camera = devices[0]
-                    print(f"\n2️⃣ 配置左侧摄像头: {first_camera['name']}")
+                    print(f"\n[2] 配置左侧摄像头: {first_camera['name']}")
                     await websocket.send(json.dumps({
                         'command': 'set_camera',
                         'side': 'left',
@@ -42,7 +46,7 @@ async def test_camera_server():
                     print(f"响应: {json.dumps(result, indent=2, ensure_ascii=False)}")
 
                     # 3. 获取状态
-                    print("\n3️⃣ 获取状态...")
+                    print("\n[3] 获取状态...")
                     await websocket.send(json.dumps({
                         'command': 'get_status'
                     }))
@@ -51,7 +55,7 @@ async def test_camera_server():
                     print(f"响应: {json.dumps(result, indent=2, ensure_ascii=False)}")
 
                     # 4. 开始录制
-                    print("\n4️⃣ 开始录制...")
+                    print("\n[4] 开始录制...")
                     await websocket.send(json.dumps({
                         'command': 'start_recording',
                         'side': 'left',
@@ -62,11 +66,11 @@ async def test_camera_server():
                     print(f"响应: {json.dumps(result, indent=2, ensure_ascii=False)}")
 
                     if result.get('success'):
-                        print("\n⏱️  录制5秒...")
+                        print("\n[WAIT] 录制5秒...")
                         await asyncio.sleep(5)
 
                         # 5. 停止录制
-                        print("\n5️⃣ 停止录制...")
+                        print("\n[5] 停止录制...")
                         await websocket.send(json.dumps({
                             'command': 'stop_recording',
                             'side': 'left'
@@ -75,16 +79,16 @@ async def test_camera_server():
                         result = json.loads(response)
                         print(f"响应: {json.dumps(result, indent=2, ensure_ascii=False)}")
 
-                        print("\n✅ 测试完成！检查 storage/video/ 目录是否有 test_video.mp4")
+                        print("\n[OK] 测试完成！检查 storage/video/ 目录是否有 test_video.mp4")
                     else:
-                        print(f"❌ 录制启动失败: {result.get('error')}")
+                        print(f"[ERROR] 录制启动失败: {result.get('error')}")
                 else:
-                    print("❌ 没有找到摄像头设备")
+                    print("[ERROR] 没有找到摄像头设备")
             else:
-                print(f"❌ 枚举失败: {result.get('error')}")
+                print(f"[ERROR] 枚举失败: {result.get('error')}")
 
     except Exception as e:
-        print(f"❌ 测试失败: {e}")
+        print(f"[ERROR] 测试失败: {e}")
         import traceback
         traceback.print_exc()
 
