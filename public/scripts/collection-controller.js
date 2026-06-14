@@ -1412,6 +1412,22 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             if (restartPreview && !this._switchInProgress && window.BleControl && window.BleControl.isConnected) {
                 this._resumePreviewAfterCollection('manual_stop');
             }
+
+            // 【新增】重新启动摄像头预览流
+            if (restartPreview && window.cameraControl && !window.cameraControl.isStreaming) {
+                console.log('[Collection] 重新启动摄像头预览流...');
+                try {
+                    // 检查是否已配置摄像头
+                    if (window.cameraControl.selectedCameras.left || window.cameraControl.selectedCameras.right) {
+                        await window.cameraControl.startStreaming('both');
+                        console.log('[Collection] ✅ 摄像头预览流已重启');
+                    } else {
+                        console.log('[Collection] 摄像头未配置，跳过重启预览流');
+                    }
+                } catch (error) {
+                    console.warn('[Collection] 重启摄像头预览流失败:', error);
+                }
+            }
         }
 
         // 【已移除】togglePause 方法已被测试模式替代
@@ -3625,29 +3641,27 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
         async _stopCameraRecording() {
             console.log('[Collection] 🎥 停止摄像头录制...');
 
-            if (!window.cameraControl) {
-                console.warn('[Collection] cameraControl未初始化');
-                return;
-            }
-
             if (!this._cameraRecordingStarted) {
                 console.log('[Collection] 摄像头录制未启动，无需停止');
                 return;
             }
 
             try {
-                const result = await window.cameraControl.stopRecording();
+                // 【修改】通过 HTTP API 调用后端停止录制
+                // 因为录制是通过 realtimeEngine → camera_server 完成的
+                const response = await fetch('/api/camera/stop-recording', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
 
-                if (result.left?.success || result.right?.success) {
+                const result = await response.json();
+
+                if (result.success) {
                     console.log('[Collection] ✅ 摄像头录制已停止');
-                    console.log('[Collection] 录制时长:', {
-                        left: result.left?.duration,
-                        right: result.right?.duration
-                    });
-
+                    console.log('[Collection] 录制结果:', result);
                     this.showToast('摄像头录制已停止', 'info');
                 } else {
-                    console.warn('[Collection] 摄像头录制停止失败');
+                    console.warn('[Collection] 摄像头录制停止失败:', result.error);
                 }
 
                 // 重置状态
@@ -3657,6 +3671,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             } catch (error) {
                 console.error('[Collection] 停止摄像头录制失败:', error);
+                this.showToast('停止摄像头录制失败', 'error');
             }
         }
 
