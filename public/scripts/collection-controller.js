@@ -1409,7 +1409,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
          * 然后弹出原因选择对话框（不可取消）。
          * 断点以"点击按钮那一刻"的状态为准，不再继续采集。
          */
-        abortTask(reason) {
+        async abortTask(reason) {
             // 如果已经传了 reason（从弹窗回调），直接执行中断
             if (reason !== undefined) {
                 this._executeAbort(reason);
