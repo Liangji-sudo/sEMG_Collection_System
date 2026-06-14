@@ -1327,7 +1327,61 @@ class HDF5StorageServer:
             "session_count": self.session_count,
             **self.stats
         }
-    
+
+    def record_video_info(self, params):
+        """
+        记录视频文件信息到H5文件属性
+
+        参数:
+            params (dict): 包含视频文件信息
+                - video_left: 左手视频文件名
+                - video_right: 右手视频文件名
+                - video_start_timestamp: 视频开始时间戳（对应space按下时刻）
+                - h5_file_name: 关联的H5文件名（可选，用于验证）
+        """
+        try:
+            if not self.f:
+                debug_log("❌ 记录视频信息失败: H5文件未打开")
+                return {"status": "error", "msg": "H5文件未打开"}
+
+            video_left = params.get("video_left")
+            video_right = params.get("video_right")
+            video_start_timestamp = params.get("video_start_timestamp")
+            h5_file_name = params.get("h5_file_name")
+
+            debug_log(f"📹 记录视频文件信息:")
+
+            # 写入视频文件名到H5属性
+            if video_left:
+                self.f.attrs["video_left"] = video_left
+                debug_log(f"   video_left: {video_left}")
+
+            if video_right:
+                self.f.attrs["video_right"] = video_right
+                debug_log(f"   video_right: {video_right}")
+
+            if video_start_timestamp is not None:
+                self.f.attrs["video_start_timestamp"] = float(video_start_timestamp)
+                debug_log(f"   video_start_timestamp: {video_start_timestamp}")
+
+            if h5_file_name:
+                debug_log(f"   关联H5文件: {h5_file_name}")
+
+            # 强制刷盘
+            self.f.flush()
+            debug_log("✅ 视频信息已写入H5文件")
+
+            return {
+                "status": "success",
+                "msg": "视频信息已记录",
+                "video_left": video_left,
+                "video_right": video_right
+            }
+
+        except Exception as e:
+            debug_log(f"❌ 记录视频信息失败: {e}")
+            return {"status": "error", "msg": f"记录视频信息失败：{str(e)}"}
+
     def get_directory_tree(self):
         """获取存储目录树结构（用于统计页面）"""
         tree = {}
@@ -1401,10 +1455,13 @@ class HDF5StorageServer:
                         response = {"status": "success", "msg": "数据已刷盘"}
                     elif cmd == "tree":
                         response = {"status": "success", "data": self.get_directory_tree()}
+                    elif cmd == "video_recording_started":
+                        # 【新增】处理视频录制信息
+                        response = self.record_video_info(params)
                     else:
                         response = {
                             "status": "error",
-                            "msg": f"未知指令：{cmd}，支持的指令：create/append/close/stats/flush/tree"
+                            "msg": f"未知指令：{cmd}，支持的指令：create/append/close/stats/flush/tree/video_recording_started"
                         }
 
                     # 发送响应

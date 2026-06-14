@@ -220,6 +220,7 @@ class RealtimeEngine extends EventEmitter {
                 case 'prompt_start': this.onPromptStart(data.promptName, data.promptIndex); break;
                 case 'prompt_end': this.onPromptEnd(data.promptName, data.promptIndex); break;
                 case 'prompt': this.onPrompt(data.name, data.stageName, data.timestamp); break;
+                case 'video_recording_started': this.onVideoRecordingStarted(data); break; // 【新增】处理视频录制信息
                 case 'abnormal_interrupt_freeze': this.onAbnormalInterruptFreeze(data); break;
                 case 'abnormal_interrupt': this.onAbnormalInterrupt(data); break;
 
@@ -518,7 +519,36 @@ class RealtimeEngine extends EventEmitter {
 
         savePrompt();
     }
-    
+
+    // 【新增】处理视频录制信息
+    onVideoRecordingStarted(data) {
+        console.log('[realtimeEngine] 📹 收到视频录制信息:', data);
+
+        // 测试模式下不保存
+        if (this.isTestMode) {
+            console.log('[realtimeEngine] 测试模式：跳过保存视频信息');
+            return;
+        }
+
+        // 检查文件是否打开
+        if (!this.stageFileOpen || this.isClosingStageFile) {
+            console.warn('[realtimeEngine] 文件未打开，无法保存视频信息');
+            return;
+        }
+
+        // 发送视频信息到 storage_server
+        this.sendStorageCommand('video_recording_started', {
+            video_left: data.video_left || null,
+            video_right: data.video_right || null,
+            video_start_timestamp: data.video_start_timestamp || null,
+            h5_file_name: data.h5_file_name || null
+        }).then(() => {
+            console.log('[realtimeEngine] ✅ 视频信息已保存到H5文件');
+        }).catch(err => {
+            console.error('[realtimeEngine] ❌ 保存视频信息失败:', err);
+        });
+    }
+
     // 【新增】Mocap命令处理
     onMocapSetChannel(channel) {
         console.log(`[realtimeEngine] 设置Mocap通道: ${channel}`);
