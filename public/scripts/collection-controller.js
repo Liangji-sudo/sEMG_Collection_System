@@ -79,6 +79,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this._recordingSessionId = null;    // 录像会话ID，格式: rec_YYYYMMDD_HHMMSS_N
             this._spaceKeyEnabled = false;      // 是否启用空格键监听
             this._spaceKeyHandler = null;       // 空格键事件处理函数引用
+            this._cameraRecordingStarted = false; // 摄像头录制是否已启动
+            this._currentVideoStartTimestamp = null; // 当前视频录制启动的时间戳
+            this._currentH5FileName = null;      // 当前H5文件名（用于关联视频文件）
 
             // ===== 乱序模式相关状态 =====
             this._shuffleMode = false;          // 当前Stage是否为乱序模式
@@ -105,6 +108,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 this.bindEvents();
                 this.loadCollectionConfig();
                 this.updateUI();
+                // 【新增】初始化空格键监听器
+                this._initSpaceKeyListener();
                 console.log('[Collection] init() 完成 ✓');
             } catch (error) {
                 console.error('[Collection] init() 错误:', error);
@@ -1086,6 +1091,11 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             // 【新增】启用空格键监听
             this._enableSpaceKey();
 
+            // 【新增】重置摄像头录制状态
+            this._cameraRecordingStarted = false;
+            this._currentVideoStartTimestamp = null;
+            this._currentH5FileName = null;
+
             // 构建 collection_start payload
             const startPayload = {
                 taskId: this.currentTaskId,
@@ -1282,7 +1292,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this.hideSessionOverlay();
         }
 
-        stopTask(opts = {}) {
+        async stopTask(opts = {}) {
             // opts.restartPreview: 默认 true（正常停止后切回 preview），false 时抑制（返回首页等场景）
             const { restartPreview = true } = opts;
 
@@ -1355,6 +1365,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             // 【新增】禁用空格键监听
             this._disableSpaceKey();
+
+            // 【新增】停止摄像头录制
+            await this._stopCameraRecording();
 
             this.updateControlButtons(false);
             this.updateNextStageButton();
@@ -1494,6 +1507,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             // 禁用空格键
             this._disableSpaceKey();
+
+            // 【新增】停止摄像头录制
+            await this._stopCameraRecording();
 
             // 重新启用选择器
             const sessionSelect = document.getElementById('sessionSwitchSelect');
@@ -3439,7 +3455,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
         /**
          * 空格键按下时的处理
          */
-        _onSpaceKeyPressed() {
+        async _onSpaceKeyPressed() {
             if (!this._isRunning) {
                 console.log('[Collection] 采集未运行，忽略空格键');
                 return;
@@ -3458,11 +3474,159 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 recordingSessionId: this._recordingSessionId
             });
 
+            // 【新增】第一个space按下时，启动视频录制
+            if (!this._cameraRecordingStarted) {
+                console.log('[Collection] 🎥 第一个space按下，启动摄像头录制...');
+                await this._startCameraRecording(timestamp);
+                this._cameraRecordingStarted = true;
+            }
+
             // 显示视觉同步信号
             this._showSyncVisualSignal();
 
             // 显示提示
             this.showToast('已记录同步信号 ⌨️', 'success');
+        }
+
+        /**
+         * 启动摄像头录制
+         * @param {number} timestamp - space按下的时间戳
+         */
+        async _startCameraRecording(timestamp) {
+            console.log('[Collection] 🎥 启动摄像头录制...');
+
+            // 检查摄像头控制模块是否可用
+            if (!window.cameraControl) {
+                console.warn('[Collection] cameraControl未初始化，跳过摄像头录制');
+                return;
+            }
+
+            // 检查摄像头是否正在推流
+            const status = window.cameraControl.getStatus();
+            if (!status.isStreaming) {
+                console.warn('[Collection] 摄像头未推流，跳过录制');
+                this.showToast('摄像头未推流，无法录制', 'warning');
+                return;
+            }
+
+            try {
+                // 生成输出文件路径（基于当前H5文件名）
+                const currentStage = this.stages[this.currentStageIndex];
+                const userData = JSON.parse(localStorage.getItem('emg_current_user') || '{}');
+                const userId = userData.id ||
+                               this.collectionConfig?.subject?.id ||
+                               `S${Date.now().toString().slice(-6)}`;
+
+                // 生成文件名：userId_session{N}_{stageName}_{timestamp}
+                const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+                const timeStr = new Date().toTimeString().slice(0, 8).replace(/:/g, '');
+                const baseFileName = `${userId}_session${this.currentSessionIndex + 1}_${currentStage?.name || 'stage'}_${dateStr}_${timeStr}`;
+
+                // 保存H5文件名（用于后续写入H5属性）
+                this._currentH5FileName = baseFileName + '.h5';
+
+                // 构建输出路径（不含扩展名和_left/_right后缀）
+                const outputBasePath = `storage/${this.currentTaskId}/${baseFileName}`;
+
+                // 录制元数据
+                const metadata = {
+                    h5FileName: this._currentH5FileName,
+                    subjectId: userId,
+                    sessionIndex: this.currentSessionIndex,
+                    sessionNumber: this.currentSessionIndex + 1,
+                    stageName: currentStage?.name || 'unknown',
+                    stageIndex: this.currentStageIndex,
+                    recordingSessionId: this._recordingSessionId,
+                    videoStartTimestamp: timestamp
+                };
+
+                // 保存视频启动时间戳
+                this._currentVideoStartTimestamp = timestamp;
+
+                // 启动录制
+                const result = await window.cameraControl.startRecording(outputBasePath, metadata);
+
+                if (result.left?.success || result.right?.success) {
+                    console.log('[Collection] ✅ 摄像头录制已启动');
+                    console.log('[Collection] 视频文件:', {
+                        left: result.left?.fileName,
+                        right: result.right?.fileName
+                    });
+
+                    // 通知后端记录视频文件信息到H5
+                    this._notifyVideoRecordingToBackend(result, metadata);
+
+                    this.showToast('摄像头录制已启动 🎥', 'success');
+                } else {
+                    console.error('[Collection] ❌ 摄像头录制启动失败');
+                    this.showToast('摄像头录制启动失败', 'error');
+                }
+
+            } catch (error) {
+                console.error('[Collection] 启动摄像头录制失败:', error);
+                this.showToast('摄像头录制失败: ' + error.message, 'error');
+            }
+        }
+
+        /**
+         * 停止摄像头录制
+         */
+        async _stopCameraRecording() {
+            console.log('[Collection] 🎥 停止摄像头录制...');
+
+            if (!window.cameraControl) {
+                console.warn('[Collection] cameraControl未初始化');
+                return;
+            }
+
+            if (!this._cameraRecordingStarted) {
+                console.log('[Collection] 摄像头录制未启动，无需停止');
+                return;
+            }
+
+            try {
+                const result = await window.cameraControl.stopRecording();
+
+                if (result.left?.success || result.right?.success) {
+                    console.log('[Collection] ✅ 摄像头录制已停止');
+                    console.log('[Collection] 录制时长:', {
+                        left: result.left?.duration,
+                        right: result.right?.duration
+                    });
+
+                    this.showToast('摄像头录制已停止', 'info');
+                } else {
+                    console.warn('[Collection] 摄像头录制停止失败');
+                }
+
+                // 重置状态
+                this._cameraRecordingStarted = false;
+                this._currentVideoStartTimestamp = null;
+                this._currentH5FileName = null;
+
+            } catch (error) {
+                console.error('[Collection] 停止摄像头录制失败:', error);
+            }
+        }
+
+        /**
+         * 通知后端记录视频文件信息到H5
+         */
+        _notifyVideoRecordingToBackend(recordingResult, metadata) {
+            console.log('[Collection] 通知后端记录视频文件信息...');
+
+            // 构建视频文件信息
+            const videoInfo = {
+                video_left: recordingResult.left?.fileName || null,
+                video_right: recordingResult.right?.fileName || null,
+                video_start_timestamp: metadata.videoStartTimestamp,
+                h5_file_name: metadata.h5FileName
+            };
+
+            console.log('[Collection] 视频文件信息:', videoInfo);
+
+            // 通过 realtimeEngine 发送到后端
+            this.sendToRealtimeEngine('video_recording_started', videoInfo);
         }
 
         /**

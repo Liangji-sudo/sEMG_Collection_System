@@ -5342,6 +5342,46 @@
                     </div>
                 </div>
             </div>
+
+            <!-- 分隔线 -->
+            <div style="border-top: 1px solid #e5e7eb; margin: 8px 0;"></div>
+
+            <!-- 摄像头状态 -->
+            <div class="device-item">
+                <div class="device-label">
+                    <i class="fas fa-camera"></i>
+                    <span>摄像头</span>
+                </div>
+                <div class="device-info">
+                    <div class="connection-status" id="cameraStatus">
+                        <i class="fas fa-circle"></i>
+                        <span>未启动</span>
+                    </div>
+                    <div class="stream-mode" id="cameraMode">
+                        <i class="fas fa-video"></i>
+                        <span>--</span>
+                    </div>
+                    <button class="status-toggle-btn" id="cameraPreviewBtn" title="预览视频" style="font-size: 10px; padding: 2px 6px;">
+                        <i class="fas fa-eye"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 磁盘空间 -->
+            <div class="device-item">
+                <div class="device-label">
+                    <i class="fas fa-hdd"></i>
+                    <span>磁盘空间</span>
+                </div>
+                <div class="device-info">
+                    <div class="battery-info">
+                        <span id="diskSpace">--</span>
+                    </div>
+                    <div class="stream-mode" id="diskPercent">
+                        <span>-- %</span>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -5428,6 +5468,15 @@
                     <i class="fas fa-database"></i>
                     <div class="btn-title">后台</div>
                     <div class="btn-desc">管理历史数据文件</div>
+                </button>
+            </div>
+
+            <!-- 摄像头推流按钮 -->
+            <div style="margin-top: 30px; display: flex; justify-content: center; gap: 20px;">
+                <button class="action-btn secondary" id="cameraStreamBtn" style="width: 160px; height: 120px;">
+                    <i class="fas fa-camera"></i>
+                    <div class="btn-title" style="font-size: 16px;">摄像头推流</div>
+                    <div class="btn-desc" style="font-size: 11px;">启动/停止视频流</div>
                 </button>
             </div>
         </main>
@@ -6094,11 +6143,79 @@
     </div>
 
 
+    <!-- 摄像头预览弹窗 -->
+    <div id="cameraPreviewModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.8); z-index: 10000; justify-content: center; align-items: center;">
+        <div style="background: white; border-radius: 12px; padding: 20px; width: 90%; max-width: 1200px; max-height: 90vh; overflow: auto;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <h3 style="margin: 0; font-size: 18px; color: #1f2937;">
+                    <i class="fas fa-camera"></i> 摄像头预览
+                </h3>
+                <button id="closeCameraPreviewBtn" style="background: #ef4444; color: white; border: none; border-radius: 6px; padding: 6px 12px; cursor: pointer;">
+                    <i class="fas fa-times"></i> 关闭
+                </button>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                <div>
+                    <h4 style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">左手摄像头</h4>
+                    <video id="leftCameraPreview" autoplay playsinline style="width: 100%; border-radius: 8px; background: #000;"></video>
+                </div>
+                <div>
+                    <h4 style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">右手摄像头</h4>
+                    <video id="rightCameraPreview" autoplay playsinline style="width: 100%; border-radius: 8px; background: #000;"></video>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 摄像头配置弹窗 -->
+    <div id="cameraConfigModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.8); z-index: 10001; justify-content: center; align-items: center;">
+        <div style="background: white; border-radius: 12px; padding: 24px; width: 90%; max-width: 600px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h3 style="margin: 0; font-size: 18px; color: #1f2937;">
+                    <i class="fas fa-cog"></i> 摄像头配置
+                </h3>
+                <button id="closeCameraConfigBtn" style="background: #6b7280; color: white; border: none; border-radius: 6px; padding: 6px 12px; cursor: pointer;">
+                    <i class="fas fa-times"></i> 关闭
+                </button>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 8px; font-size: 13px; font-weight: 600; color: #374151;">
+                    <i class="fas fa-hand-paper" style="color: #3b82f6;"></i> 左手摄像头
+                </label>
+                <select id="leftCameraSelect" style="width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px;">
+                    <option value="">请选择摄像头...</option>
+                </select>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 8px; font-size: 13px; font-weight: 600; color: #374151;">
+                    <i class="fas fa-hand-paper" style="color: #10b981;"></i> 右手摄像头
+                </label>
+                <select id="rightCameraSelect" style="width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px;">
+                    <option value="">请选择摄像头...</option>
+                </select>
+            </div>
+
+            <div style="display: flex; gap: 12px; justify-content: flex-end;">
+                <button id="refreshCamerasBtn" style="background: #6b7280; color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer; font-size: 13px;">
+                    <i class="fas fa-sync-alt"></i> 刷新列表
+                </button>
+                <button id="applyCameraConfigBtn" style="background: #3b82f6; color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer; font-size: 13px;">
+                    <i class="fas fa-check"></i> 应用配置
+                </button>
+            </div>
+        </div>
+    </div>
 
 
 
     <!-- #1 蓝牙ble设备扫描，连接，断开 控制逻辑 -->
     <script defer src="scripts/ble_control.js"></script>
+
+    <!-- 摄像头控制模块 -->
+    <script defer src="scripts/camera-control.js"></script>
+    <script defer src="scripts/camera-ui.js"></script>
 
     <!-- 设备状态悬浮窗口 -->
     <script defer src="scripts/device-status-widget.js"></script>

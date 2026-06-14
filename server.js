@@ -258,7 +258,7 @@ app.get('/api/files', (req, res) => {
     res.json(files);
 });
 
-// 存储空间状态 
+// 存储空间状态
 app.get('/api/storage-volume', (req, res) => {
     (async () => {
         // 接收函数返回值（核心赋值语句）
@@ -287,6 +287,72 @@ app.get('/api/storage-volume', (req, res) => {
             });
         }
     })();
+});
+
+// ===================== 摄像头管理 API =====================
+
+// 设置摄像头映射
+app.post('/api/camera/set-mapping', (req, res) => {
+    const { side, cameraInfo } = req.body;
+    try {
+        const result = deviceSync.setCameraMapping(side, cameraInfo);
+        res.json({ success: result });
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
+});
+
+// 开始推流
+app.post('/api/camera/start-streaming', (req, res) => {
+    const { side } = req.body;
+    try {
+        const result = deviceSync.startCameraStreaming(side || 'both');
+        res.json(result);
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
+});
+
+// 停止推流
+app.post('/api/camera/stop-streaming', (req, res) => {
+    const { side } = req.body;
+    try {
+        const result = deviceSync.stopCameraStreaming(side || 'both');
+        res.json(result);
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
+});
+
+// 开始录制
+app.post('/api/camera/start-recording', async (req, res) => {
+    const { outputPath, metadata } = req.body;
+    try {
+        const result = await deviceSync.startCameraRecording(outputPath, metadata);
+        res.json(result);
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
+});
+
+// 停止录制
+app.post('/api/camera/stop-recording', async (req, res) => {
+    try {
+        const result = await deviceSync.stopCameraRecording();
+        res.json(result);
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
+});
+
+// 获取摄像头状态
+app.get('/api/camera/status', (req, res) => {
+    try {
+        const status = deviceSync.getCameraStatus();
+        res.json({ success: true, cameras: status });
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
 });
 
 

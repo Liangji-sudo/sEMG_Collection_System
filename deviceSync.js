@@ -8,6 +8,7 @@ const EventEmitter = require('events');
 const realtimeEngine = require('./realtimeEngine');
 const path = require('path');
 const { getPythonCommand } = require('./pythonPath');
+const cameraManager = require('./cameraManager');
 
 // BLE服务脚本切换:
 // - 'ble_server'        真实腕带
@@ -39,6 +40,9 @@ class DeviceSync extends EventEmitter {
         this.lastThroughputCheckTime = null;  // 上次计算吞吐量的时间
         this.lastBytesCount = 0;        // 上次计算时的总字节数
         this.currentThroughput = 0;     // 当前吞吐量（字节/秒）
+
+        // 摄像头管理器引用
+        this.cameraManager = cameraManager;
     }
 
     // 初始化Python进程连接
@@ -176,13 +180,18 @@ class DeviceSync extends EventEmitter {
             lastInterval: this.lastInterval,
             emgData: this.lastValues,
             lastDataTime: this.lastDataTime,
-            dataHistory: this.emgData.map(channel => channel.length)
+            dataHistory: this.emgData.map(channel => channel.length),
+            cameras: this.cameraManager.getCameraStatus()  // 添加摄像头状态
         };
     }
 
     // 关闭连接
     async close() {
-        return new Promise((resolve) => {
+        return new Promise(async (resolve) => {
+            // 关闭摄像头
+            await this.cameraManager.stopAll();
+            console.log('[deviceSync] 摄像头已关闭');
+
             // 关闭mocap_server
             if (this.mocapProcess) {
                 this.mocapProcess.kill();
@@ -250,8 +259,8 @@ class DeviceSync extends EventEmitter {
             // 获取程序当前运行目录（关键：以此目录定位所在磁盘）
             const currentDir = process.cwd();
             // Windows: 取盘符根路径（如 D:\），Linux/macOS: 取根目录 /
-            const diskPath = process.platform === 'win32' 
-                ? path.parse(currentDir).root 
+            const diskPath = process.platform === 'win32'
+                ? path.parse(currentDir).root
                 : '/';
 
             // 获取磁盘分区的容量信息（核心：Node.js v22 原生支持）
@@ -276,6 +285,88 @@ class DeviceSync extends EventEmitter {
             console.error("获取磁盘信息失败：", error);
             return `获取失败：${error.message}`;
         }
+    }
+
+    // ==================== 摄像头相关API ====================
+
+    /**
+     * 设置摄像头映射
+     * @param {string} side - 'left' 或 'right'
+     * @param {object} cameraInfo - {deviceId, label, resolution, fps}
+     */
+    setCameraMapping(side, cameraInfo) {
+        return this.cameraManager.setCameraMapping(side, cameraInfo);
+    }
+
+    /**
+     * 开始视频流推流
+     * @param {string} side - 'left', 'right', 或 'both'
+     */
+    startCameraStreaming(side = 'both') {
+        if (side === 'both') {
+            const leftResult = this.cameraManager.startStreaming('left');
+            const rightResult = this.cameraManager.startStreaming('right');
+            return {
+                success: leftResult.success && rightResult.success,
+                left: leftResult,
+                right: rightResult
+            };
+        }
+        return this.cameraManager.startStreaming(side);
+    }
+
+    /**
+     * 停止视频流推流
+     * @param {string} side - 'left', 'right', 或 'both'
+     */
+    stopCameraStreaming(side = 'both') {
+        if (side === 'both') {
+            const leftResult = this.cameraManager.stopStreaming('left');
+            const rightResult = this.cameraManager.stopStreaming('right');
+            return {
+                success: leftResult.success && rightResult.success,
+                left: leftResult,
+                right: rightResult
+            };
+        }
+        return this.cameraManager.stopStreaming(side);
+    }
+
+    /**
+     * 开始录制视频
+     * @param {string} outputPath - 输出文件路径（不含扩展名）
+     * @param {object} metadata - 元数据
+     */
+    async startCameraRecording(outputPath, metadata = {}) {
+        const leftResult = await this.cameraManager.startRecording('left', outputPath, metadata);
+        const rightResult = await this.cameraManager.startRecording('right', outputPath, metadata);
+
+        return {
+            success: leftResult.success && rightResult.success,
+            left: leftResult,
+            right: rightResult
+        };
+    }
+
+    /**
+     * 停止录制视频
+     */
+    async stopCameraRecording() {
+        const leftResult = await this.cameraManager.stopRecording('left');
+        const rightResult = await this.cameraManager.stopRecording('right');
+
+        return {
+            success: leftResult.success && rightResult.success,
+            left: leftResult,
+            right: rightResult
+        };
+    }
+
+    /**
+     * 获取摄像头状态
+     */
+    getCameraStatus() {
+        return this.cameraManager.getCameraStatus();
     }
 
 
