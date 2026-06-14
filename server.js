@@ -519,7 +519,7 @@ function stopCameraServer() {
 
 // 启动服务器
 async function startServer() {
-    try:
+    try {
 
 
         // 启动realtimeEngine模块

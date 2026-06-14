@@ -134,7 +134,7 @@ class RealtimeEngine extends EventEmitter {
 
     start(port = 8080) {
         return new Promise((resolve, reject) => {
-            try:
+            try {
                 // 延迟连接BLE服务器，等待ble_server启动完成（包括蓝牙适配器预热）
                 this.connectTimeoutTimer = setTimeout(() => {
                     this.ble_server_connect();
