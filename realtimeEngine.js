@@ -298,6 +298,10 @@ class RealtimeEngine extends EventEmitter {
             console.log(`[realtimeEngine] 多轮次模式: ${this.isMultiSession}`);
         }
 
+        // 【新增】重置视频录制标志
+        this.videoRecordingStarted = false;
+        this.collectionBins = null;
+
         // 【Phase 2】保存续采模式元数据
         this.isResume = data.isResume || false;
         this.resumeSegmentIndex = data.resumeSegmentIndex || 1;
@@ -316,6 +320,7 @@ class RealtimeEngine extends EventEmitter {
         // 不依赖异步 broadcast sd_filenames_updated 事件
         if (data.collectionBins) {
             this.streamMode = data.streamMode || 'collection';
+            this.collectionBins = data.collectionBins;  // 【新增】保存collectionBins供视频录制使用
             this.collectionBinFilenames = {
                 dev1: data.collectionBins?.dev1 || null,
                 dev2: data.collectionBins?.dev2 || null
@@ -343,6 +348,27 @@ class RealtimeEngine extends EventEmitter {
     onCollectionResume() { this.collectionPaused = false; }
 
     async onCollectionStop(completed) {
+        // 【新增】停止视频录制
+        if (this.videoRecordingStarted && this.cameraManager) {
+            console.log('[realtimeEngine] 🎥 停止视频录制...');
+
+            // 停止左手摄像头
+            if (this.collectionBins?.dev1) {
+                await this.cameraManager.stopRecording('left').catch(err => {
+                    console.error('[realtimeEngine] 停止左手摄像头录制失败:', err);
+                });
+            }
+
+            // 停止右手摄像头
+            if (this.collectionBins?.dev2) {
+                await this.cameraManager.stopRecording('right').catch(err => {
+                    console.error('[realtimeEngine] 停止右手摄像头录制失败:', err);
+                });
+            }
+
+            this.videoRecordingStarted = false;
+        }
+
         if (this.stageFileOpen && !this.isClosingStageFile) {
             // 显式传 collection_status：
             // completed === true  → "completed"（Stage 正常完成）
@@ -359,6 +385,7 @@ class RealtimeEngine extends EventEmitter {
         // 注意：collectionBinFilenames 在新 collection stream 就绪时会更新
         this.collectionStreamId = null;
         this.collectionBinFilenames = { dev1: null, dev2: null };
+        this.collectionBins = null;  // 【新增】重置collectionBins
         this.collectionDataStartTs = 0;
         // 【修复】不在 stop 时清空 sd_filenames（由 sd_filenames_updated 事件管理）
     }
@@ -475,6 +502,13 @@ class RealtimeEngine extends EventEmitter {
     onPromptEnd(promptName, promptIndex) {}
 
     onPrompt(name, stageName, timestamp) {
+        // 【新增】第一个space按下时，启动视频录制
+        if (name === 'space' && !this.videoRecordingStarted) {
+            console.log('[realtimeEngine] 🎥 检测到space，准备启动视频录制...');
+            this._startVideoRecording(timestamp, stageName);
+            this.videoRecordingStarted = true;
+        }
+
         // 【新增】异常中断冻结状态下跳过 prompt
         if (this.abortFreezeActive) {
             console.log(`[realtimeEngine] 冻结状态：跳过保存 prompt (${name})`);
@@ -547,6 +581,85 @@ class RealtimeEngine extends EventEmitter {
         }).catch(err => {
             console.error('[realtimeEngine] ❌ 保存视频信息失败:', err);
         });
+    }
+
+    // 【新增】启动视频录制（后端ffmpeg录制）
+    async _startVideoRecording(timestamp, stageName) {
+        console.log('[realtimeEngine] 🎥 启动后端视频录制...');
+
+        if (!this.cameraManager) {
+            console.warn('[realtimeEngine] cameraManager未初始化');
+            return;
+        }
+
+        // 获取 collection bins（用于生成视频文件名）
+        const binFileNameLeft = this.collectionBins?.dev1;
+        const binFileNameRight = this.collectionBins?.dev2;
+
+        if (!binFileNameLeft && !binFileNameRight) {
+            console.warn('[realtimeEngine] 未找到collection bins，无法生成视频文件名');
+            return;
+        }
+
+        console.log('[realtimeEngine] Collection bins:', this.collectionBins);
+
+        // 构建输出路径
+        const results = {};
+
+        // 启动左手摄像头录制
+        if (binFileNameLeft) {
+            const outputPath = `storage/${this.currentTaskId}/${binFileNameLeft}`;
+            const metadata = {
+                binFileName: binFileNameLeft,
+                stageName: stageName,
+                timestamp: timestamp,
+                taskId: this.currentTaskId
+            };
+
+            console.log('[realtimeEngine] 启动左手摄像头录制:', outputPath);
+            const result = await this.cameraManager.startRecording('left', outputPath, metadata);
+            results.left = result;
+
+            if (result.success) {
+                console.log('[realtimeEngine] ✅ 左手摄像头录制已启动:', result.fileName);
+            } else {
+                console.error('[realtimeEngine] ❌ 左手摄像头录制失败:', result.error);
+            }
+        }
+
+        // 启动右手摄像头录制
+        if (binFileNameRight) {
+            const outputPath = `storage/${this.currentTaskId}/${binFileNameRight}`;
+            const metadata = {
+                binFileName: binFileNameRight,
+                stageName: stageName,
+                timestamp: timestamp,
+                taskId: this.currentTaskId
+            };
+
+            console.log('[realtimeEngine] 启动右手摄像头录制:', outputPath);
+            const result = await this.cameraManager.startRecording('right', outputPath, metadata);
+            results.right = result;
+
+            if (result.success) {
+                console.log('[realtimeEngine] ✅ 右手摄像头录制已启动:', result.fileName);
+            } else {
+                console.error('[realtimeEngine] ❌ 右手摄像头录制失败:', result.error);
+            }
+        }
+
+        // 保存视频信息到H5
+        if (this.stageFileOpen && !this.isClosingStageFile) {
+            const videoInfo = {
+                video_left: results.left?.fileName || null,
+                video_right: results.right?.fileName || null,
+                video_start_timestamp: timestamp
+            };
+
+            await this.sendStorageCommand('video_recording_started', videoInfo).catch(err => {
+                console.error('[realtimeEngine] 保存视频信息到H5失败:', err);
+            });
+        }
     }
 
     // 【新增】Mocap命令处理

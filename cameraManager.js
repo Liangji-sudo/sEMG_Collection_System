@@ -4,7 +4,7 @@
  * 功能：
  * 1. 枚举和识别USB摄像头设备
  * 2. 管理视频流的开启/关闭
- * 3. 控制视频录制（开始/停止）
+ * 3. 控制视频录制（开始/停止）- 使用 ffmpeg 后端录制
  * 4. 同步录制到H5采集任务
  * 5. 提供摄像头状态信息（分辨率、帧率、推流状态）
  */
@@ -12,6 +12,7 @@
 const EventEmitter = require('events');
 const path = require('path');
 const fs = require('fs').promises;
+const { spawn } = require('child_process');
 
 class CameraManager extends EventEmitter {
     constructor() {
@@ -55,11 +56,18 @@ class CameraManager extends EventEmitter {
             right: null
         };
 
+        // ffmpeg 进程
+        this.ffmpegProcesses = {
+            left: null,
+            right: null
+        };
+
         // 录制参数
         this.recordingConfig = {
-            videoFormat: 'webm',           // 视频格式
+            videoFormat: 'mp4',           // 视频格式改为mp4（更通用）
             videoBitsPerSecond: 2500000,   // 2.5 Mbps
-            mimeType: 'video/webm;codecs=vp8'
+            fps: 30,                       // 帧率
+            resolution: '1280x720'         // 分辨率
         };
 
         console.log('[CameraManager] 模块初始化完成');
@@ -143,10 +151,10 @@ class CameraManager extends EventEmitter {
     }
 
     /**
-     * 开始录制视频
+     * 开始录制视频（使用 ffmpeg 后端录制）
      * @param {string} side - 'left' 或 'right'
      * @param {string} outputPath - 输出文件路径（不含扩展名）
-     * @param {object} metadata - 元数据 {h5FileName, subjectId, sessionIndex, stageName}
+     * @param {object} metadata - 元数据 {h5FileName, subjectId, sessionIndex, stageName, binFileNameLeft, binFileNameRight}
      */
     async startRecording(side, outputPath, metadata = {}) {
         if (!['left', 'right'].includes(side)) {
@@ -161,8 +169,14 @@ class CameraManager extends EventEmitter {
             return { success: false, error: `${side}侧摄像头已在录制中` };
         }
 
-        // 生成完整文件路径
-        const videoFileName = `${path.basename(outputPath)}_${side}.${this.recordingConfig.videoFormat}`;
+        // 获取摄像头设备信息
+        const deviceId = this.cameraStatus[side].deviceId;
+        if (!deviceId) {
+            return { success: false, error: `${side}侧摄像头未配置` };
+        }
+
+        // 生成完整文件路径（使用bin文件名）
+        const videoFileName = `${path.basename(outputPath)}.${this.recordingConfig.videoFormat}`;
         const fullPath = path.join(path.dirname(outputPath), videoFileName);
 
         // 确保输出目录存在
@@ -174,35 +188,103 @@ class CameraManager extends EventEmitter {
             return { success: false, error: '创建输出目录失败' };
         }
 
-        // 更新状态
-        this.cameraStatus[side].recording = true;
-        this.currentRecordingFiles[side] = fullPath;
-        this.recordingSessions[side] = {
-            startTime: Date.now(),
-            outputPath: fullPath,
-            metadata: metadata
-        };
+        // 在 Windows 上，需要使用设备索引而不是 deviceId
+        // 从前端传来的 deviceId 中提取设备索引
+        const deviceIndex = this._getDeviceIndex(side);
+
+        // 构建 ffmpeg 命令
+        const ffmpegArgs = [
+            '-f', 'dshow',                          // Windows 使用 DirectShow
+            '-video_size', this.recordingConfig.resolution,
+            '-framerate', String(this.recordingConfig.fps),
+            '-i', `video=${this.cameraStatus[side].label}`,  // 使用设备名称
+            '-c:v', 'libx264',                      // H.264 编码
+            '-preset', 'ultrafast',                 // 快速编码
+            '-crf', '23',                           // 质量
+            '-pix_fmt', 'yuv420p',                  // 像素格式
+            '-y',                                   // 覆盖输出文件
+            fullPath
+        ];
 
         console.log(`[CameraManager] ${side}侧摄像头开始录制: ${videoFileName}`);
         console.log(`[CameraManager] 完整路径: ${fullPath}`);
+        console.log(`[CameraManager] ffmpeg命令:`, 'ffmpeg', ffmpegArgs.join(' '));
         console.log(`[CameraManager] 元数据:`, metadata);
 
-        this.emit('recording-started', {
-            side,
-            outputPath: fullPath,
-            fileName: videoFileName,
-            metadata
-        });
+        try {
+            // 启动 ffmpeg 进程
+            const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
 
-        return {
-            success: true,
-            outputPath: fullPath,
-            fileName: videoFileName
-        };
+            // 记录进程
+            this.ffmpegProcesses[side] = ffmpegProcess;
+
+            // 监听 ffmpeg 输出（用于调试）
+            ffmpegProcess.stderr.on('data', (data) => {
+                const output = data.toString();
+                // 只记录关键信息
+                if (output.includes('frame=') || output.includes('error') || output.includes('Error')) {
+                    console.log(`[CameraManager] [${side}] ffmpeg:`, output.trim());
+                }
+            });
+
+            // 监听进程退出
+            ffmpegProcess.on('exit', (code, signal) => {
+                console.log(`[CameraManager] [${side}] ffmpeg进程退出, code: ${code}, signal: ${signal}`);
+                if (this.cameraStatus[side].recording) {
+                    // 非正常退出
+                    this.cameraStatus[side].recording = false;
+                    this.ffmpegProcesses[side] = null;
+                    this.emit('recording-error', { side, error: `ffmpeg进程异常退出: ${code}` });
+                }
+            });
+
+            ffmpegProcess.on('error', (error) => {
+                console.error(`[CameraManager] [${side}] ffmpeg进程错误:`, error);
+                this.cameraStatus[side].recording = false;
+                this.ffmpegProcesses[side] = null;
+                this.emit('recording-error', { side, error: error.message });
+            });
+
+            // 更新状态
+            this.cameraStatus[side].recording = true;
+            this.currentRecordingFiles[side] = fullPath;
+            this.recordingSessions[side] = {
+                startTime: Date.now(),
+                outputPath: fullPath,
+                metadata: metadata,
+                ffmpegProcess: ffmpegProcess
+            };
+
+            this.emit('recording-started', {
+                side,
+                outputPath: fullPath,
+                fileName: videoFileName,
+                metadata
+            });
+
+            return {
+                success: true,
+                outputPath: fullPath,
+                fileName: videoFileName
+            };
+
+        } catch (error) {
+            console.error(`[CameraManager] 启动ffmpeg失败:`, error);
+            return { success: false, error: error.message };
+        }
     }
 
     /**
-     * 停止录制视频
+     * 获取设备索引（Windows DirectShow）
+     */
+    _getDeviceIndex(side) {
+        // 简化版本：假设left=0, right=1
+        // 实际应该通过枚举设备来确定
+        return side === 'left' ? 0 : 1;
+    }
+
+    /**
+     * 停止录制视频（停止 ffmpeg 进程）
      * @param {string} side - 'left' 或 'right'
      */
     async stopRecording(side) {
@@ -217,6 +299,37 @@ class CameraManager extends EventEmitter {
         const session = this.recordingSessions[side];
         const duration = Date.now() - session.startTime;
 
+        // 停止 ffmpeg 进程
+        const ffmpegProcess = this.ffmpegProcesses[side];
+        if (ffmpegProcess && !ffmpegProcess.killed) {
+            console.log(`[CameraManager] 正在停止${side}侧ffmpeg进程...`);
+
+            // 发送 'q' 命令让 ffmpeg 优雅退出
+            try {
+                ffmpegProcess.stdin.write('q');
+                ffmpegProcess.stdin.end();
+            } catch (error) {
+                console.warn(`[CameraManager] 无法发送quit命令，尝试强制终止:`, error.message);
+                ffmpegProcess.kill('SIGTERM');
+            }
+
+            // 等待进程退出（最多2秒）
+            await new Promise((resolve) => {
+                const timeout = setTimeout(() => {
+                    if (!ffmpegProcess.killed) {
+                        console.warn(`[CameraManager] ffmpeg进程未响应，强制终止`);
+                        ffmpegProcess.kill('SIGKILL');
+                    }
+                    resolve();
+                }, 2000);
+
+                ffmpegProcess.on('exit', () => {
+                    clearTimeout(timeout);
+                    resolve();
+                });
+            });
+        }
+
         // 更新状态
         this.cameraStatus[side].recording = false;
         const outputPath = this.currentRecordingFiles[side];
@@ -224,6 +337,7 @@ class CameraManager extends EventEmitter {
         // 清除会话
         this.recordingSessions[side] = null;
         this.currentRecordingFiles[side] = null;
+        this.ffmpegProcesses[side] = null;
 
         console.log(`[CameraManager] ${side}侧摄像头停止录制`);
         console.log(`[CameraManager] 录制时长: ${(duration / 1000).toFixed(2)}秒`);
