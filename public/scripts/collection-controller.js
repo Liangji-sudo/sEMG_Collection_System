@@ -1015,6 +1015,17 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             // 【关键修复】重置动画模块状态
             this.resetAnimationModules();
 
+            // ==================== 【新增】停止摄像头预览流，释放摄像头给后端录制 ====================
+            if (window.cameraControl && window.cameraControl.isStreaming) {
+                console.log('[Collection] 停止摄像头预览流，释放摄像头...');
+                try {
+                    await window.cameraControl.stopStreaming('both');
+                    console.log('[Collection] ✅ 摄像头预览流已停止');
+                } catch (error) {
+                    console.warn('[Collection] 停止摄像头预览流失败:', error);
+                }
+            }
+
             // ==================== 【修复】Stream 切换: preview → collection ====================
             // 非测试模式下，在开始 H5 记录前先切换 BLE 流
             let switchResponse = null;  // 保存切换响应，用于传递 collection_bins 到 realtimeEngine
