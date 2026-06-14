@@ -24,6 +24,27 @@ import signal
 import sys
 from datetime import datetime
 from pathlib import Path
+import shutil
+import glob
+
+def find_ffmpeg():
+    """查找 ffmpeg 可执行文件"""
+    # 1. 先尝试系统 PATH
+    ffmpeg_path = shutil.which('ffmpeg')
+    if ffmpeg_path:
+        return ffmpeg_path
+
+    # 2. 查找 Windows WinGet 安装的 ffmpeg
+    if sys.platform == 'win32':
+        user_home = Path.home()
+        winget_pattern = user_home / 'AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg*/ffmpeg-*/bin/ffmpeg.exe'
+        matches = glob.glob(str(winget_pattern))
+        if matches:
+            print(f'[CameraServer] 找到 WinGet 安装的 ffmpeg: {matches[0]}')
+            return matches[0]
+
+    # 3. 未找到
+    return None
 
 class CameraServer:
     def __init__(self):
@@ -35,6 +56,13 @@ class CameraServer:
         }
         self.output_dir = Path('storage/video')
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # 查找 ffmpeg
+        self.ffmpeg_path = find_ffmpeg()
+        if self.ffmpeg_path:
+            print(f'[CameraServer] 使用 ffmpeg: {self.ffmpeg_path}')
+        else:
+            print('[CameraServer] ⚠️  警告: 未找到 ffmpeg，视频录制功能将不可用')
 
         print('[CameraServer] 摄像头服务器初始化完成')
         print(f'[CameraServer] 视频输出目录: {self.output_dir.absolute()}')
@@ -157,8 +185,13 @@ class CameraServer:
         print(f'[CameraServer]   输出: {output_path}')
 
         # 构建 ffmpeg 命令
+        if not self.ffmpeg_path:
+            error_msg = 'ffmpeg 未安装，无法录制视频'
+            print(f'[CameraServer] ❌ {error_msg}')
+            return {'success': False, 'error': error_msg}
+
         ffmpeg_cmd = [
-            'ffmpeg',
+            self.ffmpeg_path,
             '-f', 'dshow',                    # Windows DirectShow
             '-video_size', '1280x720',
             '-framerate', '30',
@@ -274,10 +307,19 @@ class CameraServer:
         """枚举可用的摄像头设备"""
         print('[CameraServer] 枚举摄像头设备...')
 
+        if not self.ffmpeg_path:
+            error_msg = 'ffmpeg 未安装，无法枚举摄像头'
+            print(f'[CameraServer] ❌ {error_msg}')
+            return {
+                'success': False,
+                'error': error_msg,
+                'devices': []
+            }
+
         try:
             # 使用 ffmpeg -list_devices true -f dshow -i dummy
             result = subprocess.run(
-                ['ffmpeg', '-list_devices', 'true', '-f', 'dshow', '-i', 'dummy'],
+                [self.ffmpeg_path, '-list_devices', 'true', '-f', 'dshow', '-i', 'dummy'],
                 capture_output=True,
                 text=True,
                 timeout=10
