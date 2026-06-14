@@ -617,7 +617,7 @@ class RealtimeEngine extends EventEmitter {
 
         // 启动左手摄像头录制
         if (binFileNameLeft) {
-            const outputPath = `storage/${this.currentTaskId}/${binFileNameLeft}`;
+            const outputPath = `storage/video/${binFileNameLeft}`;
             const metadata = {
                 binFileName: binFileNameLeft,
                 stageName: stageName,
@@ -638,7 +638,7 @@ class RealtimeEngine extends EventEmitter {
 
         // 启动右手摄像头录制
         if (binFileNameRight) {
-            const outputPath = `storage/${this.currentTaskId}/${binFileNameRight}`;
+            const outputPath = `storage/video/${binFileNameRight}`;
             const metadata = {
                 binFileName: binFileNameRight,
                 stageName: stageName,
