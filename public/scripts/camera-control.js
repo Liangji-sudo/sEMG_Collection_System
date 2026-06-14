@@ -291,12 +291,12 @@
 
         /**
          * 开始录制视频
-         * @param {string} outputBasePath - 输出文件基础路径（不含扩展名和_left/_right后缀）
+         * @param {object|string} pathOrConfig - 输出文件基础路径，或 {left: binFileName, right: binFileName, taskId}
          * @param {object} metadata - 元数据
          */
-        async startRecording(outputBasePath, metadata = {}) {
+        async startRecording(pathOrConfig, metadata = {}) {
             console.log('[CameraControl] 开始录制视频');
-            console.log('[CameraControl] 输出路径:', outputBasePath);
+            console.log('[CameraControl] 路径配置:', pathOrConfig);
             console.log('[CameraControl] 元数据:', metadata);
 
             if (!this.isStreaming) {
@@ -307,10 +307,30 @@
             this.currentRecordingMetadata = metadata;
             const results = {};
 
+            // 判断是新格式（bin文件名）还是旧格式（路径）
+            const isNewFormat = typeof pathOrConfig === 'object' && pathOrConfig.left !== undefined;
+
             for (const side of ['left', 'right']) {
                 if (!this.streams[side]) {
                     console.warn(`[CameraControl] ${side}侧摄像头未推流，跳过录制`);
                     continue;
+                }
+
+                // 构建输出路径
+                let outputBasePath;
+                if (isNewFormat) {
+                    // 新格式：使用bin文件名
+                    const binFileName = pathOrConfig[side];
+                    if (!binFileName) {
+                        console.warn(`[CameraControl] ${side}侧未提供bin文件名，跳过录制`);
+                        continue;
+                    }
+                    // 例如：storage/discrete_gesture/R001_L_260614_153129_video
+                    outputBasePath = `storage/${pathOrConfig.taskId}/${binFileName}`;
+                    console.log(`[CameraControl] ${side}侧使用bin文件名: ${binFileName}`);
+                } else {
+                    // 旧格式：使用传统路径
+                    outputBasePath = pathOrConfig;
                 }
 
                 try {
@@ -343,7 +363,13 @@
                     this.recorders[side] = recorder;
 
                     console.log(`[CameraControl] ${side}侧录制已开始`);
-                    results[side] = { success: true };
+
+                    // 生成文件名并返回
+                    const videoFileName = `${outputBasePath.split('/').pop()}.webm`;
+                    results[side] = {
+                        success: true,
+                        fileName: videoFileName
+                    };
 
                 } catch (error) {
                     console.error(`[CameraControl] ${side}侧录制启动失败:`, error);

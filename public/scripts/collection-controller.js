@@ -1147,6 +1147,10 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 console.log('  resumeReason:', this._resumeState.interruptReason);
             }
 
+            // 【新增】保存 collectionBins 供视频录制使用
+            this._collectionBins = startPayload.collectionBins || {};
+            console.log('[Collection] 已保存 collectionBins:', this._collectionBins);
+
             this.sendToRealtimeEngine('collection_start', startPayload);
 
             if (this.currentTaskId === 'discrete_gesture') {
@@ -3522,23 +3526,41 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             }
 
             try {
-                // 生成输出文件路径（基于当前H5文件名）
+                // 【修改】使用bin文件名作为视频文件名基础
+                // 从 collectionBins 获取bin文件名（例如：dev1: "R001_L_260614_153129"）
+                const collectionBins = this._collectionBins || {};
+                console.log('[Collection] collectionBins:', collectionBins);
+
+                // dev1对应左手，dev2对应右手
+                const binFileNameLeft = collectionBins.dev1;  // R001_L_260614_153129
+                const binFileNameRight = collectionBins.dev2; // R001_R_260614_153129 (如果有)
+
+                if (!binFileNameLeft && !binFileNameRight) {
+                    console.warn('[Collection] 未找到bin文件名，无法生成视频文件名');
+                    this.showToast('未找到bin文件名，无法录制视频', 'warning');
+                    return;
+                }
+
+                // 使用bin文件名（去掉后缀）作为视频文件名基础
+                // 例如：R001_L_260614_153129 -> R001_L_260614_153129_video
+                const videoBaseNameLeft = binFileNameLeft ? `${binFileNameLeft}_video` : null;
+                const videoBaseNameRight = binFileNameRight ? `${binFileNameRight}_video` : null;
+
+                console.log('[Collection] 视频文件名基础:', {
+                    left: videoBaseNameLeft,
+                    right: videoBaseNameRight
+                });
+
+                // 保存H5文件名（用于后续写入H5属性）
                 const currentStage = this.stages[this.currentStageIndex];
                 const userData = JSON.parse(localStorage.getItem('emg_current_user') || '{}');
                 const userId = userData.id ||
                                this.collectionConfig?.subject?.id ||
                                `S${Date.now().toString().slice(-6)}`;
-
-                // 生成文件名：userId_session{N}_{stageName}_{timestamp}
                 const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
                 const timeStr = new Date().toTimeString().slice(0, 8).replace(/:/g, '');
-                const baseFileName = `${userId}_session${this.currentSessionIndex + 1}_${currentStage?.name || 'stage'}_${dateStr}_${timeStr}`;
-
-                // 保存H5文件名（用于后续写入H5属性）
-                this._currentH5FileName = baseFileName + '.h5';
-
-                // 构建输出路径（不含扩展名和_left/_right后缀）
-                const outputBasePath = `storage/${this.currentTaskId}/${baseFileName}`;
+                const h5BaseFileName = `${userId}_session${this.currentSessionIndex + 1}_${currentStage?.name || 'stage'}_${dateStr}_${timeStr}`;
+                this._currentH5FileName = h5BaseFileName + '.h5';
 
                 // 录制元数据
                 const metadata = {
@@ -3549,14 +3571,20 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                     stageName: currentStage?.name || 'unknown',
                     stageIndex: this.currentStageIndex,
                     recordingSessionId: this._recordingSessionId,
-                    videoStartTimestamp: timestamp
+                    videoStartTimestamp: timestamp,
+                    binFileNameLeft: binFileNameLeft,
+                    binFileNameRight: binFileNameRight
                 };
 
                 // 保存视频启动时间戳
                 this._currentVideoStartTimestamp = timestamp;
 
-                // 启动录制
-                const result = await window.cameraControl.startRecording(outputBasePath, metadata);
+                // 启动录制（传递bin文件名）
+                const result = await window.cameraControl.startRecording({
+                    left: videoBaseNameLeft,
+                    right: videoBaseNameRight,
+                    taskId: this.currentTaskId
+                }, metadata);
 
                 if (result.left?.success || result.right?.success) {
                     console.log('[Collection] ✅ 摄像头录制已启动');
