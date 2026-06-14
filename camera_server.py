@@ -120,14 +120,26 @@ class CameraServer:
         side = data.get('side')  # 'left' or 'right'
         output_filename = data.get('output_filename')  # 例如: R003_L_260614_162119.mp4
 
+        print(f'[CameraServer] >>> start_recording 被调用')
+        print(f'[CameraServer]     side: {side}')
+        print(f'[CameraServer]     output_filename: {output_filename}')
+        print(f'[CameraServer]     当前配置的摄像头: {list(self.cameras.keys())}')
+
         if not side or side not in ['left', 'right']:
-            return {'success': False, 'error': '无效的side参数'}
+            error_msg = '无效的side参数'
+            print(f'[CameraServer] ❌ {error_msg}')
+            return {'success': False, 'error': error_msg}
 
         if self.recording_status[side]:
-            return {'success': False, 'error': f'{side}侧摄像头已在录制中'}
+            error_msg = f'{side}侧摄像头已在录制中'
+            print(f'[CameraServer] ❌ {error_msg}')
+            return {'success': False, 'error': error_msg}
 
         if side not in self.cameras:
-            return {'success': False, 'error': f'{side}侧摄像头未配置'}
+            error_msg = f'{side}侧摄像头未配置'
+            print(f'[CameraServer] ❌ {error_msg}')
+            print(f'[CameraServer]     需要先调用 set_camera 配置摄像头！')
+            return {'success': False, 'error': error_msg}
 
         camera = self.cameras[side]
         device_name = camera['device_name']
