@@ -43,7 +43,7 @@ const PYTHON_ENV = {
 
 // 【新增】Camera Server 进程管理
 let cameraServerProcess = null;
-const CAMERA_SERVER_SCRIPT = path.join(__dirname, 'camera_server.py');
+const CAMERA_SERVER_SCRIPT = 'camera_server';
 
 
 // 中间件配置， 用于给前端获取数据的接口
