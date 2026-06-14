@@ -305,11 +305,16 @@ app.get('/api/storage-volume', (req, res) => {
 // ===================== 摄像头管理 API =====================
 
 // 设置摄像头映射
-app.post('/api/camera/set-mapping', (req, res) => {
+app.post('/api/camera/set-mapping', async (req, res) => {
     const { side, cameraInfo } = req.body;
     try {
-        const result = deviceSync.setCameraMapping(side, cameraInfo);
-        res.json({ success: result });
+        // 【修改】通过 realtimeEngine 转发给 camera_server
+        await realtimeEngine.onCameraSetConfig({
+            side: side,
+            device_name: cameraInfo.label,
+            device_id: cameraInfo.deviceId
+        });
+        res.json({ success: true });
     } catch (err) {
         res.json({ success: false, error: err.message });
     }

@@ -741,7 +741,7 @@ class RealtimeEngine extends EventEmitter {
 
         if (!this.camera_connected) {
             console.warn('[realtimeEngine] camera_server未连接');
-            return;
+            throw new Error('camera_server未连接');
         }
 
         try {
@@ -753,11 +753,15 @@ class RealtimeEngine extends EventEmitter {
 
             if (result.success) {
                 console.log(`[realtimeEngine] ✅ 摄像头配置已设置: ${side}`);
+                this.camerasConfigured = true;  // 标记为已配置
             } else {
                 console.error(`[realtimeEngine] ❌ 设置摄像头配置失败:`, result.error);
             }
+
+            return result;
         } catch (error) {
             console.error('[realtimeEngine] 设置摄像头配置请求失败:', error);
+            throw error;
         }
     }
 
