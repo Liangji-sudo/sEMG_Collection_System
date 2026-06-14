@@ -156,28 +156,25 @@ class CameraManager extends EventEmitter {
      * @param {string} outputPath - 输出文件路径（不含扩展名）
      * @param {object} metadata - 元数据 {h5FileName, subjectId, sessionIndex, stageName, binFileNameLeft, binFileNameRight}
      */
-    async startRecording(side, outputPath, metadata = {}) {
+    async startRecording(side, outputFilename, metadata = {}) {
         if (!['left', 'right'].includes(side)) {
             return { success: false, error: '无效的side参数' };
         }
 
-        if (!this.cameraStatus[side].streaming) {
-            return { success: false, error: `${side}侧摄像头未推流` };
-        }
+        // 注意：这里不再检查 streaming 状态
+        // 因为录制通过 camera_server 的 ffmpeg 完成，不依赖前端推流状态
 
         if (this.cameraStatus[side].recording) {
             return { success: false, error: `${side}侧摄像头已在录制中` };
         }
 
-        // 获取摄像头设备信息
-        const deviceId = this.cameraStatus[side].deviceId;
-        if (!deviceId) {
+        // 检查摄像头是否已配置
+        if (!this.cameras[side]) {
             return { success: false, error: `${side}侧摄像头未配置` };
         }
 
-        // 生成完整文件路径（使用bin文件名）
-        const videoFileName = `${path.basename(outputPath)}.${this.recordingConfig.videoFormat}`;
-        const fullPath = path.join(path.dirname(outputPath), videoFileName);
+        // 构建完整文件路径
+        const fullPath = path.join(PATHS.storage, 'video', outputFilename);
 
         // 确保输出目录存在
         const outputDir = path.dirname(fullPath);

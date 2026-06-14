@@ -3,10 +3,15 @@
  *
  * 功能：
  * 1. 枚举和识别USB摄像头（过滤系统自带摄像头）
- * 2. 管理视频流（MediaStream）
- * 3. 控制视频录制（MediaRecorder）
- * 4. 与后端API同步状态
- * 5. 提供预览功能
+ * 2. 管理视频流预览（MediaStream）
+ * 3. 与后端 camera_server 同步摄像头配置
+ * 4. 提供预览功能
+ * 5. 通过后端 API 控制录制（录制由 camera_server 的 ffmpeg 完成）
+ *
+ * 注意：
+ * - 视频录制完全由后端 camera_server 通过 ffmpeg 完成
+ * - 前端只负责预览和配置同步
+ * - 录制和预览使用独立的摄像头访问方式，避免冲突
  */
 
 (function() {
@@ -29,18 +34,6 @@
             this.streams = {
                 left: null,
                 right: null
-            };
-
-            // MediaRecorder 对象
-            this.recorders = {
-                left: null,
-                right: null
-            };
-
-            // 录制数据缓存
-            this.recordedChunks = {
-                left: [],
-                right: []
             };
 
             // 录制状态
@@ -295,14 +288,12 @@
          * @param {object} metadata - 元数据
          */
         async startRecording(pathOrConfig, metadata = {}) {
-            console.log('[CameraControl] 开始录制视频');
+            console.log('[CameraControl] 开始录制视频（后端录制）');
             console.log('[CameraControl] 路径配置:', pathOrConfig);
             console.log('[CameraControl] 元数据:', metadata);
 
-            if (!this.isStreaming) {
-                console.error('[CameraControl] 摄像头未推流，无法录制');
-                return { success: false, error: '摄像头未推流' };
-            }
+            // 注意：这里不再检查 isStreaming
+            // 因为后端 camera_server 通过 ffmpeg 独立访问摄像头，不依赖前端推流
 
             this.currentRecordingMetadata = metadata;
             const results = {};
@@ -310,14 +301,18 @@
             // 判断是新格式（bin文件名）还是旧格式（路径）
             const isNewFormat = typeof pathOrConfig === 'object' && pathOrConfig.left !== undefined;
 
+            // 构建请求参数
+            const recordings = [];
+
             for (const side of ['left', 'right']) {
-                if (!this.streams[side]) {
-                    console.warn(`[CameraControl] ${side}侧摄像头未推流，跳过录制`);
+                // 检查该侧摄像头是否已配置
+                if (!this.selectedCameras[side]) {
+                    console.warn(`[CameraControl] ${side}侧摄像头未配置，跳过录制`);
                     continue;
                 }
 
-                // 构建输出路径
-                let outputBasePath;
+                // 构建输出文件名
+                let outputFilename;
                 if (isNewFormat) {
                     // 新格式：使用bin文件名
                     const binFileName = pathOrConfig[side];
@@ -325,72 +320,55 @@
                         console.warn(`[CameraControl] ${side}侧未提供bin文件名，跳过录制`);
                         continue;
                     }
-                    // 例如：storage/discrete_gesture/R001_L_260614_153129_video
-                    outputBasePath = `storage/${pathOrConfig.taskId}/${binFileName}`;
-                    console.log(`[CameraControl] ${side}侧使用bin文件名: ${binFileName}`);
+                    // 例如：R001_L_260614_153129.mp4
+                    outputFilename = `${binFileName}.mp4`;
+                    console.log(`[CameraControl] ${side}侧输出文件名: ${outputFilename}`);
                 } else {
-                    // 旧格式：使用传统路径
-                    outputBasePath = pathOrConfig;
+                    // 旧格式：使用传统路径（不应该再使用）
+                    console.warn('[CameraControl] 使用旧格式路径，建议更新代码');
+                    outputFilename = `${pathOrConfig.split('/').pop()}.mp4`;
                 }
 
-                try {
-                    // 创建 MediaRecorder
-                    const options = {
-                        mimeType: 'video/webm;codecs=vp8',
-                        videoBitsPerSecond: 2500000  // 2.5 Mbps
-                    };
-
-                    const recorder = new MediaRecorder(this.streams[side], options);
-
-                    // 重置数据缓存
-                    this.recordedChunks[side] = [];
-
-                    // 数据可用事件
-                    recorder.ondataavailable = (event) => {
-                        if (event.data && event.data.size > 0) {
-                            this.recordedChunks[side].push(event.data);
-                        }
-                    };
-
-                    // 录制停止事件
-                    recorder.onstop = async () => {
-                        console.log(`[CameraControl] ${side}侧录制已停止，正在保存...`);
-                        await this._saveRecording(side, outputBasePath, metadata);
-                    };
-
-                    // 开始录制（每1秒触发一次 dataavailable）
-                    recorder.start(1000);
-                    this.recorders[side] = recorder;
-
-                    console.log(`[CameraControl] ${side}侧录制已开始`);
-
-                    // 生成文件名并返回
-                    const videoFileName = `${outputBasePath.split('/').pop()}.webm`;
-                    results[side] = {
-                        success: true,
-                        fileName: videoFileName
-                    };
-
-                } catch (error) {
-                    console.error(`[CameraControl] ${side}侧录制启动失败:`, error);
-                    results[side] = { success: false, error: error.message };
-                }
+                recordings.push({
+                    side: side,
+                    output_filename: outputFilename
+                });
             }
 
-            // 同步到后端
+            if (recordings.length === 0) {
+                console.error('[CameraControl] 没有可录制的摄像头');
+                return { success: false, error: '没有可录制的摄像头' };
+            }
+
+            // 调用后端 API 启动录制
             try {
                 const response = await fetch('/api/camera/start-recording', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ outputPath: outputBasePath, metadata })
+                    body: JSON.stringify({ recordings, metadata })
                 });
+
                 const backendResult = await response.json();
                 console.log('[CameraControl] 后端录制启动结果:', backendResult);
+
+                // 解析后端返回结果
+                if (backendResult.success) {
+                    for (const recording of recordings) {
+                        results[recording.side] = {
+                            success: true,
+                            fileName: recording.output_filename
+                        };
+                    }
+                    this.isRecording = true;
+                } else {
+                    return { success: false, error: backendResult.error || '后端录制启动失败' };
+                }
+
             } catch (error) {
-                console.error('[CameraControl] 后端同步失败:', error);
+                console.error('[CameraControl] 后端录制启动失败:', error);
+                return { success: false, error: error.message };
             }
 
-            this.isRecording = Object.values(results).some(r => r.success);
             return results;
         }
 
@@ -398,18 +376,14 @@
          * 停止录制视频
          */
         async stopRecording() {
-            console.log('[CameraControl] 停止录制视频');
+            console.log('[CameraControl] 停止录制视频（后端录制）');
 
-            const results = {};
-
-            for (const side of ['left', 'right']) {
-                if (this.recorders[side] && this.recorders[side].state !== 'inactive') {
-                    this.recorders[side].stop();
-                    results[side] = { success: true };
-                }
+            if (!this.isRecording) {
+                console.warn('[CameraControl] 当前没有正在录制的视频');
+                return { success: false, error: '没有正在录制的视频' };
             }
 
-            // 同步到后端
+            // 调用后端 API 停止录制
             try {
                 const response = await fetch('/api/camera/stop-recording', {
                     method: 'POST',
@@ -417,54 +391,14 @@
                 });
                 const backendResult = await response.json();
                 console.log('[CameraControl] 后端录制停止结果:', backendResult);
+
+                this.isRecording = false;
+                this.currentRecordingMetadata = null;
+
+                return backendResult;
             } catch (error) {
-                console.error('[CameraControl] 后端同步失败:', error);
-            }
-
-            this.isRecording = false;
-            return results;
-        }
-
-        /**
-         * 保存录制的视频
-         */
-        async _saveRecording(side, outputBasePath, metadata) {
-            if (this.recordedChunks[side].length === 0) {
-                console.warn(`[CameraControl] ${side}侧无录制数据`);
-                return;
-            }
-
-            try {
-                // 合并所有数据块
-                const blob = new Blob(this.recordedChunks[side], { type: 'video/webm' });
-                console.log(`[CameraControl] ${side}侧录制数据大小: ${(blob.size / 1024 / 1024).toFixed(2)} MB`);
-
-                // 生成文件名
-                const fileName = `${outputBasePath.split(/[/\\]/).pop()}_${side}.webm`;
-
-                // 下载文件（浏览器环境）
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.style.display = 'none';
-                a.href = url;
-                a.download = fileName;
-                document.body.appendChild(a);
-                a.click();
-
-                // 清理
-                setTimeout(() => {
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                }, 100);
-
-                console.log(`[CameraControl] ${side}侧视频已保存: ${fileName}`);
-
-                // 清空缓存
-                this.recordedChunks[side] = [];
-                this.recorders[side] = null;
-
-            } catch (error) {
-                console.error(`[CameraControl] ${side}侧视频保存失败:`, error);
+                console.error('[CameraControl] 后端录制停止失败:', error);
+                return { success: false, error: error.message };
             }
         }
 

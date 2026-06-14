@@ -337,14 +337,33 @@ class DeviceSync extends EventEmitter {
      * @param {string} outputPath - 输出文件路径（不含扩展名）
      * @param {object} metadata - 元数据
      */
-    async startCameraRecording(outputPath, metadata = {}) {
-        const leftResult = await this.cameraManager.startRecording('left', outputPath, metadata);
-        const rightResult = await this.cameraManager.startRecording('right', outputPath, metadata);
+    async startCameraRecording(recordings, metadata = {}) {
+        // recordings 是一个数组，例如：
+        // [{ side: 'left', output_filename: 'R001_L_260614_153129.mp4' }]
+
+        if (!recordings || !Array.isArray(recordings)) {
+            return { success: false, error: '无效的recordings参数' };
+        }
+
+        const results = {};
+
+        for (const recording of recordings) {
+            const { side, output_filename } = recording;
+            if (!side || !output_filename) {
+                results[side] = { success: false, error: '缺少side或output_filename参数' };
+                continue;
+            }
+
+            const result = await this.cameraManager.startRecording(side, output_filename, metadata);
+            results[side] = result;
+        }
+
+        // 检查是否至少有一个成功
+        const hasSuccess = Object.values(results).some(r => r.success);
 
         return {
-            success: leftResult.success && rightResult.success,
-            left: leftResult,
-            right: rightResult
+            success: hasSuccess,
+            ...results
         };
     }
 

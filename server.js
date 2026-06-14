@@ -344,9 +344,9 @@ app.post('/api/camera/stop-streaming', (req, res) => {
 
 // 开始录制
 app.post('/api/camera/start-recording', async (req, res) => {
-    const { outputPath, metadata } = req.body;
+    const { recordings, metadata } = req.body;
     try {
-        const result = await deviceSync.startCameraRecording(outputPath, metadata);
+        const result = await deviceSync.startCameraRecording(recordings, metadata);
         res.json(result);
     } catch (err) {
         res.json({ success: false, error: err.message });
