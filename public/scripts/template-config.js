@@ -118,7 +118,8 @@
                 shuffleIntervalMin: 1.0,       // 【新增】乱序手势间隔最小值（秒）
                 shuffleIntervalMax: 1.0,       // 【新增】乱序手势间隔最大值（秒）
                 scrollSpeed: 2,                // 【新增】整体移动速度（px/帧）
-                orderedShuffleRatio: 0.6       // 乱序中顺序占比（0.6 = 前60%顺序，后40%乱序）
+                orderedShuffleRatio: 0.6,      // 乱序中顺序占比（0.6 = 前60%顺序，后40%乱序）
+                gestureLabelFontSize: 18       // 【新增】手势名称字体大小（px）
             },
             // 连续手势1采集参数（同心圆引导动画）
             continual_gesture_1: {
@@ -1708,6 +1709,13 @@
                                    value="${taskExec.orderedShuffleRatio !== undefined ? taskExec.orderedShuffleRatio : 0.6}" min="0" max="1" step="0.05">
                             <span class="param-unit">比例</span>
                             <span class="param-hint">（0.6 = 前60%按顺序采集，剩余进入乱序。0=全部乱序，1=全部顺序）</span>
+                        </div>
+                        <div class="config-param-item">
+                            <label><i class="fa fa-font"></i> 手势名称字体大小</label>
+                            <input type="number" data-task="${task.id}" data-param="gestureLabelFontSize"
+                                   value="${taskExec.gestureLabelFontSize || 18}" min="12" max="36" step="2">
+                            <span class="param-unit">px</span>
+                            <span class="param-hint">（手势下方中文名称的字体大小）</span>
                         </div>
                     `;
                 } else if (task.id === 'continual_gesture_1' || task.id === 'continual_gesture_2') {

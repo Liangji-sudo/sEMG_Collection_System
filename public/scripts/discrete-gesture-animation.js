@@ -722,11 +722,11 @@
             this.drawEmojiIcon(prompt.icon, x, by + badgeH / 2, color);
 
             // 动作名称（自动换行）
-            ctx.font = '600 18px ui-sans-serif, system-ui';
+            ctx.font = `600 ${this.gestureLabelFontSize || 18}px ui-sans-serif, system-ui`;
             ctx.fillStyle = color;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'top';
-            this.drawWrappedLabel(prompt.label, x, y + this.config.labelOffset, 130, 22);
+            this.drawWrappedLabel(prompt.label, x, y + this.config.labelOffset, 130, (this.gestureLabelFontSize || 18) + 4);
 
             ctx.restore();
         }
@@ -805,11 +805,11 @@
             this.drawEmojiIcon(prompt.icon, centerX, by + badgeH / 2, strokeColor);
 
             // 动作名称（显示在长方形下方，自动换行）
-            ctx.font = '600 18px ui-sans-serif, system-ui';
+            ctx.font = `600 ${this.gestureLabelFontSize || 18}px ui-sans-serif, system-ui`;
             ctx.fillStyle = strokeColor;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'top';
-            this.drawWrappedLabel(prompt.label, centerX, y + this.config.labelOffset, 130, 22);
+            this.drawWrappedLabel(prompt.label, centerX, y + this.config.labelOffset, 130, (this.gestureLabelFontSize || 18) + 4);
 
             // 【新增】在长方形内显示状态文字
             ctx.font = '700 18px ui-sans-serif, system-ui';
@@ -1124,8 +1124,10 @@
             // shuffleInterval: 手势间隔时间（秒），默认1.0
             // shuffleIntervalMin/Max: 间隔时间随机范围（秒）
             // sustainedDuration: 持续性手势的持续时间（秒），默认2.0
+            // gestureLabelFontSize: 手势名称字体大小（px），默认18
             const scrollSpeed = executionParams?.scrollSpeed || 2;
             this.sustainedDuration = executionParams?.sustainedDuration || 2.0;
+            this.gestureLabelFontSize = executionParams?.gestureLabelFontSize || 18;  // 【新增】
 
             // 【新增】保存随机范围参数，用于动态计算每个手势的间隔
             this.shuffleIntervalMin = executionParams?.shuffleIntervalMin;
