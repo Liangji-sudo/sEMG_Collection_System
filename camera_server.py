@@ -177,11 +177,17 @@ class CameraServer:
         camera = self.cameras[side]
         device_name = camera['device_name']
 
+        # 清理设备名称：去掉硬件ID后缀（例如 "USB Camera (4c4a:4a55)" -> "USB Camera"）
+        import re
+        clean_device_name = re.sub(r'\s*\([0-9a-fA-F:]+\)\s*$', '', device_name).strip()
+
         # 构建输出路径
         output_path = self.output_dir / output_filename
 
         print(f'[CameraServer] 开始录制: {side}')
         print(f'[CameraServer]   设备: {device_name}')
+        if clean_device_name != device_name:
+            print(f'[CameraServer]   清理后: {clean_device_name}')
         print(f'[CameraServer]   输出: {output_path}')
 
         # 构建 ffmpeg 命令
@@ -195,7 +201,7 @@ class CameraServer:
             '-f', 'dshow',                    # Windows DirectShow
             '-video_size', '1280x720',
             '-framerate', '30',
-            '-i', f'video={device_name}',
+            '-i', f'video={clean_device_name}',  # 使用清理后的设备名称
             '-c:v', 'libx264',                # H.264 编码
             '-preset', 'ultrafast',           # 快速编码
             '-crf', '23',                     # 质量
