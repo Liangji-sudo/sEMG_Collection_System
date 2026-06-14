@@ -32,10 +32,9 @@ const realtimeEngine = require('./realtimeEngine');
 // 引入数据存储模块
 const dataStorage = require('./dataStorage');
 
-// 【新增】引入摄像头管理模块
-const CameraManager = require('./cameraManager');
-const cameraManager = new CameraManager();
-console.log('[CameraManager] 模块加载完成');
+// 【新增】引入摄像头管理模块（已经是实例）
+const cameraManager = require('./cameraManager');
+console.log('[server.js] cameraManager模块已加载');
 
 
 // 中间件配置， 用于给前端获取数据的接口
