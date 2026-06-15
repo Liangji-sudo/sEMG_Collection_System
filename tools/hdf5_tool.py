@@ -803,6 +803,7 @@ class StatisticsPanel(QFrame):
             ('stream_mode', '流模式'), ('stream_format_version', '流格式版本'),
             ('bin_pair_source', 'Bin来源'), ('collection_stream_id', '采集流ID'),
             ('stream_switch_delay_ms', '切换延迟(ms)'),
+            ('video_left', '左手视频'), ('video_right', '右手视频'),
         ]),
         ('采集 / Segment 信息', [
             ('collection_status', '采集状态'),
