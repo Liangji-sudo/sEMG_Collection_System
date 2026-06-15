@@ -318,6 +318,10 @@ class RealtimeEngine extends EventEmitter {
 
         // 【新增】重置视频录制标志
         this.videoRecordingStarted = false;
+        this.videoTimingLeft = null;
+        this.videoTimingRight = null;
+        this.videoPathLeft = null;
+        this.videoPathRight = null;
         this.collectionBins = null;
 
         // 【Phase 2】保存续采模式元数据
@@ -392,6 +396,10 @@ class RealtimeEngine extends EventEmitter {
                             console.log('[realtimeEngine] ⏱️ 左手时间戳:', JSON.stringify(saveResult.timing));
                             this.videoTimingLeft = saveResult.timing;
                         }
+                        // 保存视频文件名（供 closeStageFile 写入 H5）
+                        if (saveResult.output_path) {
+                            this.videoPathLeft = saveResult.output_path;
+                        }
                     } else {
                         console.error('[realtimeEngine] ❌ 保存左手 AVI 失败:', saveResult.error);
                         this.videoFileNames.left = null;
@@ -413,6 +421,10 @@ class RealtimeEngine extends EventEmitter {
                         if (saveResult.timing) {
                             console.log('[realtimeEngine] ⏱️ 右手时间戳:', JSON.stringify(saveResult.timing));
                             this.videoTimingRight = saveResult.timing;
+                        }
+                        // 保存视频文件名（供 closeStageFile 写入 H5）
+                        if (saveResult.output_path) {
+                            this.videoPathRight = saveResult.output_path;
                         }
                     } else {
                         console.error('[realtimeEngine] ❌ 保存右手 AVI 失败:', saveResult.error);
@@ -437,7 +449,9 @@ class RealtimeEngine extends EventEmitter {
                 video_timing: {
                     left: this.videoTimingLeft || null,
                     right: this.videoTimingRight || null
-                }
+                },
+                video_left: this.videoPathLeft || null,
+                video_right: this.videoPathRight || null
             });
         }
         this.isCollecting = false;

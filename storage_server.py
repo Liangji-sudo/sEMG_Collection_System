@@ -1222,6 +1222,15 @@ class HDF5StorageServer:
                     video_grp.create_dataset("last_frame_unix", data=np.array(lasts, dtype=np.float64))
                     video_grp.create_dataset("duration", data=np.array(durs, dtype=np.float64))
 
+                # ==================== 视频文件名（AVI 与 H5 的对应该关系） ====================
+                for side_key, attr_key in [("left", "video_left"), ("right", "video_right")]:
+                    video_path = params.get(attr_key)
+                    if video_path:
+                        # 只存储文件名（不含路径），因为 AVI 文件始终在 storage/video/ 下
+                        video_name = os.path.basename(str(video_path))
+                        self.f.attrs[attr_key] = video_name
+                        debug_log(f"   {attr_key}: {video_name}")
+
                 # ==================== Phase 3: frame/time range 与 segment/bin 元数据 ====================
                 self._write_segment_metadata(params)
 
