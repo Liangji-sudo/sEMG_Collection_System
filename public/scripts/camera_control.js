@@ -369,6 +369,24 @@
     }
 
     /**
+     * 按需拍照 — 获取一帧最新画面（不走推送流）
+     * 后端优先返回 CameraCapture 缓存的实时帧，否则运行一次性 ffmpeg 抓帧（~1-2s）
+     */
+    async function captureSnapshot(side) {
+        console.log(`[CameraControl] 📸 ${side}侧 拍照...`);
+        try {
+            const result = await sendCommand('capture_snapshot', { side }, 12000);
+            if (result.success) {
+                CamState.previewFrames[side] = result.frame;
+            }
+            return result;
+        } catch (err) {
+            console.error(`[CameraControl] ${side}拍照失败:`, err);
+            return { success: false, error: err.message };
+        }
+    }
+
+    /**
      * 订阅预览帧（如果摄像头已打开但未自动订阅）
      */
     function subscribePreview(side) {
@@ -484,6 +502,7 @@
         closeCamera,
         subscribePreview,
         unsubscribePreview,
+        captureSnapshot,
 
         // 状态
         getPreviewFrame,

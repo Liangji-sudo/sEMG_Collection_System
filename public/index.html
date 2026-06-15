@@ -6150,24 +6150,36 @@
     </div>
 
 
-    <!-- 摄像头预览弹窗（实时推流） -->
+    <!-- 摄像头预览弹窗（按需拍照） -->
     <div id="cameraPreviewModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.8); z-index: 10000; justify-content: center; align-items: center;">
         <div style="background: white; border-radius: 12px; padding: 20px; width: 90%; max-width: 1200px; max-height: 90vh; overflow: auto;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                 <h3 style="margin: 0; font-size: 18px; color: #1f2937;">
-                    <i class="fas fa-camera"></i> 摄像头预览（实时推流）
+                    <i class="fas fa-camera"></i> 摄像头预览（按需拍照）
                 </h3>
                 <button id="closeCameraPreviewBtn" style="background: #ef4444; color: white; border: none; border-radius: 6px; padding: 6px 12px; cursor: pointer;">
                     <i class="fas fa-times"></i> 关闭
                 </button>
             </div>
+            <!-- 拍照按钮工具栏 -->
+            <div id="snapshotBtnContainer" style="display: flex; gap: 8px; margin-bottom: 12px; justify-content: center;">
+                <button onclick="window.takeSnapshot('left')" style="background: #3b82f6; color: white; border: none; border-radius: 6px; padding: 8px 20px; cursor: pointer; font-size: 14px;">
+                    📷 左手拍照
+                </button>
+                <button onclick="window.takeSnapshot('right')" style="background: #3b82f6; color: white; border: none; border-radius: 6px; padding: 8px 20px; cursor: pointer; font-size: 14px;">
+                    📷 右手拍照
+                </button>
+                <button onclick="window.takeSnapshot('left'); window.takeSnapshot('right')" style="background: #8b5cf6; color: white; border: none; border-radius: 6px; padding: 8px 20px; cursor: pointer; font-size: 14px;">
+                    📸 同时拍照
+                </button>
+            </div>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
                 <div>
-                    <h4 style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">左手摄像头</h4>
+                    <h4 style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">左手摄像头 <span id="leftPreviewStatus" style="color: #10b981; font-size: 12px;"></span></h4>
                     <img id="leftCameraPreview" style="width: 100%; max-height: 400px; border-radius: 8px; background: #000; object-fit: contain;" alt="左手摄像头预览">
                 </div>
                 <div>
-                    <h4 style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">右手摄像头</h4>
+                    <h4 style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">右手摄像头 <span id="rightPreviewStatus" style="color: #10b981; font-size: 12px;"></span></h4>
                     <img id="rightCameraPreview" style="width: 100%; max-height: 400px; border-radius: 8px; background: #000; object-fit: contain;" alt="右手摄像头预览">
                 </div>
             </div>

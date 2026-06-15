@@ -75,6 +75,7 @@ class CameraCapture:
         self.fps_last_time = time.time()
         self.current_fps = 0
         self.frame_recorder = None  # FrameRecorder instance (set when recording)
+        self._stdout_fd = None      # raw pipe fd for unbuffered reads
 
     def start(self):
         """启动 MJPEG 采集"""
@@ -86,6 +87,9 @@ class CameraCapture:
 
         cmd = [
             self.ffmpeg_path,
+            '-fflags', 'nobuffer',       # 禁用输入端缓冲
+            '-flags', 'low_delay',       # 低延迟模式
+            '-rtbufsize', '256K',        # 限制 dshow 实时缓冲大小
             '-f', 'dshow',
             '-video_size', '1280x720',
             '-framerate', '30',
@@ -93,18 +97,22 @@ class CameraCapture:
             '-vcodec', 'mjpeg',
             '-q:v', '8',
             '-f', 'image2pipe',
+            '-flush_packets', '1',       # 每帧即时flush输出
             'pipe:1'
         ]
 
-        print(f'[CameraCapture] [{self.side}] 启动MJPEG采集: {clean_name}')
+        print(f'[CameraCapture] [{self.side}] 启动MJPEG采集: {clean_name} (low_delay模式)')
 
         try:
             self.process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                bufsize=0,  # 禁用Python层缓冲
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
             )
+            # 获取原始 FD 用于无缓冲读取（绕过 BufferedReader）
+            self._stdout_fd = self.process.stdout.fileno()
 
             self.running = True
             self.reader_thread = threading.Thread(target=self._read_frames, daemon=True)
@@ -124,11 +132,13 @@ class CameraCapture:
             return False
 
     def _read_frames(self):
-        """读取 MJPEG 帧（在单独线程中运行）"""
+        """读取 MJPEG 帧（在单独线程中运行，使用无缓冲 os.read）"""
         buf = b''
+        fd = self._stdout_fd
         while self.running and self.process and self.process.poll() is None:
             try:
-                data = self.process.stdout.read(4096)
+                # 使用 os.read 无缓冲直接读管道，避免 Python BufferedReader 延迟
+                data = os.read(fd, 65536) if fd else self.process.stdout.read(4096)
                 if not data:
                     time.sleep(0.001)
                     continue
@@ -151,6 +161,9 @@ class CameraCapture:
 
                     # Base64 编码
                     b64 = base64.b64encode(frame).decode()
+
+                    # 缓存最新帧（供 snapshots / get_preview_frame 按需取用）
+                    self.latest_frame_b64 = b64
 
                     # 写入录制器（如果正在录制）
                     # 先捕获引用避免 TOCTOU 竞态
@@ -491,11 +504,27 @@ class CameraServer:
 
     async def _broadcast_loop(self):
         """从队列取帧，广播给订阅的前端客户端"""
+        broadcast_count = 0
+        last_log_time = time.time()
         while True:
             try:
                 frame_data = await self.frame_queue.get()
                 side = frame_data['side']
                 frame_b64 = frame_data['frame']
+                frame_ts = frame_data.get('timestamp', 0)
+
+                # 帧时间戳日志（前10帧 + 之后每30帧）
+                broadcast_count += 1
+                now = time.time()
+                if broadcast_count <= 10 or broadcast_count % 30 == 0:
+                    queue_lag = now - frame_ts if frame_ts else 0
+                    fps = broadcast_count / (now - last_log_time) if (now - last_log_time) > 0 else 0
+                    print(f'[CameraServer] 📤 广播帧#{broadcast_count} {side} | '
+                          f'队列积压={queue_lag*1000:.0f}ms | 大小={len(frame_b64)/1024:.1f}KB | '
+                          f'平均fps={fps:.1f}')
+                    if broadcast_count % 30 == 0:
+                        broadcast_count = 0
+                        last_log_time = now
 
                 dead = set()
                 # 复制订阅者集合避免迭代时修改
@@ -625,6 +654,8 @@ class CameraServer:
             return self._cmd_mark_recording_start(data)
         elif command == 'stop_and_save':
             return await self._cmd_stop_and_save(data)
+        elif command == 'capture_snapshot':
+            return self._cmd_get_preview_frame(data)  # 复用同一个实现（cache + oneshot回退）
         elif command == 'get_preview_frame':
             return self._cmd_get_preview_frame(data)
         elif command == 'get_status':
@@ -951,25 +982,91 @@ class CameraServer:
 
         return result
 
+    def _capture_one_shot(self, side):
+        """一次性抓取单帧（用于按需拍照模式）
+
+        运行独立 ffmpeg 进程捕获一帧后立即退出，无需预先打开 CameraCapture。
+        耗时约 1-2 秒（ffmpeg 启动 + 摄像头初始化）。
+        """
+        if side not in self.cameras:
+            return None, f'{side}侧摄像头未配置'
+        if not self.ffmpeg_path:
+            return None, 'ffmpeg未安装'
+
+        device_name = self.cameras[side]['device_name']
+        clean_name = re.sub(r'\s*\([0-9a-fA-F:]+\)\s*$', '', device_name).strip()
+
+        cmd = [
+            self.ffmpeg_path,
+            '-f', 'dshow',
+            '-video_size', '1280x720',
+            '-framerate', '30',
+            '-i', f'video={clean_name}',
+            '-vframes', '1',         # 只抓一帧就退出
+            '-vcodec', 'mjpeg',
+            '-q:v', '8',
+            '-f', 'image2pipe',
+            'pipe:1'
+        ]
+
+        print(f'[CameraServer] 📸 {side}侧 单帧拍照: {clean_name}')
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+            )
+            if proc.stdout and len(proc.stdout) > 0:
+                # 提取第一个 JPEG (可能有多帧或垃圾数据)
+                start = proc.stdout.find(b'\xff\xd8')
+                end = proc.stdout.find(b'\xff\xd9', start + 2) if start != -1 else -1
+                if start != -1 and end != -1:
+                    frame = proc.stdout[start:end + 2]
+                    b64 = base64.b64encode(frame).decode()
+                    print(f'[CameraServer] 📸 {side}侧 拍照成功 ({len(frame)} bytes, {len(b64)/1024:.1f}KB b64)')
+                    return b64, None
+                else:
+                    return None, f'未能从{side}摄像头数据中提取有效JPEG帧'
+            else:
+                stderr_tail = proc.stderr[-300:].decode('utf-8', errors='ignore') if proc.stderr else '(无输出)'
+                return None, f'{side}摄像头抓帧失败: {stderr_tail[:200]}'
+        except subprocess.TimeoutExpired:
+            return None, f'{side}摄像头抓帧超时(10s)'
+        except Exception as e:
+            return None, f'{side}摄像头抓帧异常: {e}'
+
     def _cmd_get_preview_frame(self, data):
-        """获取单帧预览（手动请求，主要用于HTTP API降级模式）"""
+        """获取单帧预览（按需拍照模式）
+
+        优先从正在运行的 CameraCapture 取缓存帧（即时），
+        如果没有则用一次性 ffmpeg 抓帧（~1-2秒）。
+        """
         side = data.get('side')
 
         if not side or side not in ['left', 'right']:
             return {'success': False, 'error': '无效的side参数'}
 
-        # MJPEG采集的最新帧（base64）
+        # 优先使用 MJPEG 采集的最新缓存帧（即时，零延迟）
         if side in self.captures and self.captures[side].latest_frame_b64:
+            print(f'[CameraServer] 📸 {side}侧 返回缓存帧 ({(len(self.captures[side].latest_frame_b64)/1024):.1f}KB)')
             return {
                 'success': True,
                 'side': side,
-                'frame': self.captures[side].latest_frame_b64
+                'frame': self.captures[side].latest_frame_b64,
+                'source': 'cache'
             }
 
-        return {
-            'success': False,
-            'error': f'{side}侧无可用预览帧'
-        }
+        # 回退：一次性 ffmpeg 抓帧
+        b64, error = self._capture_one_shot(side)
+        if b64:
+            return {
+                'success': True,
+                'side': side,
+                'frame': b64,
+                'source': 'oneshot'
+            }
+        return {'success': False, 'error': error or f'{side}侧无可用预览帧'}
 
     def _cmd_get_status(self):
         """获取服务器状态"""

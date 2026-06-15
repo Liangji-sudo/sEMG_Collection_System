@@ -69,8 +69,22 @@
     function setupCallbacks() {
         if (!window.CameraControl) return;
 
+        // 帧接收时间统计（调试用）
+        let _lastFrameTime = 0;
+        let _frameLogCount = 0;
+
         // 预览帧回调
         window.CameraControl.onPreviewFrame = function(side, frameBase64) {
+            const now = performance.now();
+            const delta = _lastFrameTime ? (now - _lastFrameTime).toFixed(0) : 0;
+            _lastFrameTime = now;
+            _frameLogCount++;
+
+            // 前10帧 + 之后每30帧打印一次时间戳
+            if (_frameLogCount <= 10 || _frameLogCount % 30 === 0) {
+                const sizeKB = (frameBase64.length / 1024).toFixed(1);
+                console.log(`[CameraUI] 📷 帧#${_frameLogCount} ${side} | 间隔=${delta}ms | 大小=${sizeKB}KB | time=${now.toFixed(0)}`);
+            }
             updatePreviewImage(side, frameBase64);
         };
 
@@ -627,7 +641,12 @@
         }
     }
 
-    // ==================== 预览弹窗 ====================
+    // ==================== 预览弹窗（按需拍照模式） ====================
+
+    let _previewRefreshTimer = null;   // HTTP 降级自动刷新定时器
+    let _previewFrameCount = 0;        // 帧计数
+    let _previewFpsTimer = null;       // FPS 计算定时器
+    let _previewSide = null;           // 当前预览的 side
 
     async function openCameraPreview(side) {
         console.log('[CameraUI] 打开摄像头预览:', side);
@@ -636,17 +655,79 @@
         if (!modal) return;
 
         modal.style.display = 'flex';
+        _previewFrameCount = 0;
+        _previewSide = side;
 
-        // 确保已订阅预览
+        // 设置预览标题
+        const title = document.getElementById('cameraPreviewTitle');
+        if (title) title.textContent = `摄像头预览 - ${side === 'left' ? '左手' : '右手'}`;
+
+        // 显示按需拍照按钮，隐藏实时流相关
+        updatePreviewStatus(side, '点击「拍照」获取画面');
+        showSnapshotButtons(true);
+
+        // 自动拍第一张（如果摄像头已打开且有缓存帧）
+        autoTakeFirstSnapshot(side);
+    }
+
+    function showSnapshotButtons(show) {
+        const btnContainer = document.getElementById('snapshotBtnContainer');
+        if (btnContainer) {
+            btnContainer.style.display = show ? 'flex' : 'none';
+        }
+    }
+
+    async function autoTakeFirstSnapshot(side) {
+        // 如果摄像头已打开，后端 CameraCapture 应该已经有缓存帧了
         if (window.CameraControl && window.CameraControl.isConnected()) {
-            window.CameraControl.subscribePreview(side);
+            const cached = window.CameraControl.getPreviewFrame(side);
+            if (cached) {
+                updatePreviewImage(side, cached);
+                updatePreviewStatus(side, '已自动加载预览');
+                return;
+            }
+            // 没有缓存帧，自动拍一张
+            await takeSnapshot(side);
         } else {
-            // HTTP降级：手动获取一帧
+            // HTTP 降级
+            await refreshPreviewFrameHTTP(side);
+        }
+    }
+
+    /** 按需拍照：通过 WebSocket 或 HTTP 获取一帧 */
+    async function takeSnapshot(side) {
+        if (!side) side = _previewSide || 'left';
+
+        updatePreviewStatus(side, '拍照中...');
+
+        if (window.CameraControl && window.CameraControl.isConnected()) {
+            const result = await window.CameraControl.captureSnapshot(side);
+            if (result.success && result.frame) {
+                updatePreviewImage(side, result.frame);
+                const source = result.source === 'cache' ? '实时缓存' : '摄像头抓帧';
+                updatePreviewStatus(side, `${source} · ${(result.frame.length/1024).toFixed(1)}KB`);
+                console.log(`[CameraUI] 📸 ${side}侧 拍照成功 (${result.source})`);
+            } else {
+                updatePreviewStatus(side, `拍照失败: ${result.error || '未知'}`);
+                console.error(`[CameraUI] ${side}拍照失败:`, result.error);
+            }
+        } else {
             await refreshPreviewFrameHTTP(side);
         }
     }
 
     function closeCameraPreview() {
+        // 停止 HTTP 自动刷新
+        if (_previewRefreshTimer) {
+            clearInterval(_previewRefreshTimer);
+            _previewRefreshTimer = null;
+        }
+        if (_previewFpsTimer) {
+            clearInterval(_previewFpsTimer);
+            _previewFpsTimer = null;
+        }
+        _previewSide = null;
+
         const modal = document.getElementById('cameraPreviewModal');
         if (modal) {
             modal.style.display = 'none';
@@ -664,18 +745,28 @@
         if (leftImg) leftImg.src = '';
         if (rightImg) rightImg.src = '';
 
+        // 清空状态文字
+        ['left', 'right'].forEach(s => updatePreviewStatus(s, ''));
+
         console.log('[CameraUI] 预览窗口已关闭');
+    }
+
+    function updatePreviewStatus(side, text) {
+        const el = document.getElementById(`${side}PreviewStatus`);
+        if (el) el.textContent = text;
     }
 
     function updatePreviewImage(side, frameBase64) {
         const imgElement = document.getElementById(`${side}CameraPreview`);
         if (imgElement && frameBase64) {
             imgElement.src = `data:image/jpeg;base64,${frameBase64}`;
+            _previewFrameCount++;
         }
     }
 
     async function refreshPreviewFrameHTTP(side) {
         // HTTP降级：手动请求预览帧
+        updatePreviewStatus(side, '拍照中 (HTTP)...');
         try {
             const response = await fetch('/api/camera/get-preview-frame', {
                 method: 'POST',
@@ -685,14 +776,19 @@
             const result = await response.json();
             if (result.success && result.frame) {
                 updatePreviewImage(side, result.frame);
+                updatePreviewStatus(side, `HTTP拍照 · ${(result.frame.length/1024).toFixed(1)}KB`);
+            } else {
+                updatePreviewStatus(side, `拍照失败: ${result.error || '未知'}`);
             }
         } catch (err) {
+            updatePreviewStatus(side, '拍照失败: 网络错误');
             console.error(`[CameraUI] HTTP预览帧获取失败:`, err);
         }
     }
 
-    // 暴露到全局供HTML onclick使用（降级模式）
+    // 暴露到全局供HTML onclick使用
     window.refreshPreviewFrame = refreshPreviewFrameHTTP;
+    window.takeSnapshot = takeSnapshot;  // 供 HTML 按钮调用
 
     // ==================== 状态显示 ====================
 
