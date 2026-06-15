@@ -13,6 +13,7 @@
     const STORAGE_KEY_PANEL = 'emg_animation_panel_position';
     const STORAGE_KEY_GIF = 'emg_gif_panel_position';
     const STORAGE_KEY_GIF_SIZE = 'emg_gif_panel_size';
+    const STORAGE_KEY_CAMERA_THUMB = 'emg_camera_thumb_position';
 
     const GIF_CONTENT_RATIO = 140 / 180;  // 默认内容区高度 / 默认宽度
     const GIF_MIN_WIDTH = 120;
@@ -38,6 +39,7 @@
 
             this._panel = document.getElementById('gestureAnimationPanel');
             this._gif = document.getElementById('gestureGifContainer');
+            this._thumb = document.getElementById('cameraThumbContainer');
 
             if (this._panel) {
                 this._setupDraggable(this._panel, '[data-drag-handle="animation"]', STORAGE_KEY_PANEL);
@@ -46,6 +48,9 @@
                 this._restoreGifSize();          // 先恢复尺寸，后续位置恢复可以正确 clamp
                 this._setupDraggable(this._gif, '.gesture-gif-header', STORAGE_KEY_GIF);
                 this._setupGifResize();
+            }
+            if (this._thumb) {
+                this._setupDraggable(this._thumb, '[data-drag-handle="cameraThumb"]', STORAGE_KEY_CAMERA_THUMB);
             }
 
             window.addEventListener('resize', this._onResize);
@@ -198,8 +203,9 @@
 
                 el.style.left = left + 'px';
                 el.style.top = top + 'px';
-                if (storageKey === STORAGE_KEY_GIF) {
+                if (storageKey === STORAGE_KEY_GIF || storageKey === STORAGE_KEY_CAMERA_THUMB) {
                     el.style.bottom = 'auto';
+                    el.style.right = 'auto';
                 }
 
                 return true;
@@ -368,6 +374,14 @@
                 el.style.left = '20px';
                 el.style.top = top + 'px';
                 el.style.bottom = 'auto';
+            } else if (storageKey === STORAGE_KEY_CAMERA_THUMB) {
+                // 右下角，距底边 70px，距右边 20px
+                const left = Math.max(0, containerRect.width - elRect.width - 20);
+                const top = Math.max(0, containerRect.height - elRect.height - 70);
+                el.style.left = left + 'px';
+                el.style.top = top + 'px';
+                el.style.bottom = 'auto';
+                el.style.right = 'auto';
             } else {
                 el.style.left = '0px';
                 el.style.top = '0px';
@@ -382,7 +396,8 @@
 
             const items = [
                 { el: this._panel, key: STORAGE_KEY_PANEL },
-                { el: this._gif, key: STORAGE_KEY_GIF }
+                { el: this._gif, key: STORAGE_KEY_GIF },
+                { el: this._thumb, key: STORAGE_KEY_CAMERA_THUMB }
             ];
 
             items.forEach(({ el, key }) => {
@@ -432,7 +447,7 @@
         }
 
         resetPositions() {
-            [STORAGE_KEY_PANEL, STORAGE_KEY_GIF, STORAGE_KEY_GIF_SIZE].forEach(key => {
+            [STORAGE_KEY_PANEL, STORAGE_KEY_GIF, STORAGE_KEY_GIF_SIZE, STORAGE_KEY_CAMERA_THUMB].forEach(key => {
                 try { localStorage.removeItem(key); } catch (e) {}
             });
 
@@ -448,6 +463,12 @@
                 this._gif.style.width = '';
                 this._gif.style.setProperty('--gif-content-height', '140px');
             }
+            if (this._thumb) {
+                this._thumb.style.left = '';
+                this._thumb.style.top = '';
+                this._thumb.style.bottom = '';
+                this._thumb.style.right = '';
+            }
 
             // 仅对当前可见的元素立即恢复默认位置；
             // 隐藏元素由下次 showAnimationPanel() / 首次拖拽时处理
@@ -462,6 +483,10 @@
                 this._saveGifSize();  // 保存默认尺寸 ratio
                 this._setDefaultPosition(this._gif, STORAGE_KEY_GIF);
                 this._clampToContainer(this._gif);
+            }
+            if (this._thumb && this._thumb.classList.contains('active')) {
+                this._setDefaultPosition(this._thumb, STORAGE_KEY_CAMERA_THUMB);
+                this._clampToContainer(this._thumb);
             }
             this._triggerResize();
 
