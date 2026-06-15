@@ -200,39 +200,80 @@
         const rightDeviceId = rightSelect?.value;
 
         if (!leftDeviceId && !rightDeviceId) {
-            alert('请至少选择一个摄像头');
+            showToast('请至少选择一个摄像头', 'warning');
             return;
         }
 
-        if (!window.cameraControl) {
-            console.error('[CameraUI] cameraControl未初始化');
-            return;
-        }
-
-        // 设置摄像头映射
+        // 配置左手摄像头
         if (leftDeviceId) {
-            const success = await window.cameraControl.setCameraMapping('left', leftDeviceId);
-            if (!success) {
-                console.error('[CameraUI] 左手摄像头映射失败');
+            const leftDeviceName = leftSelect.options[leftSelect.selectedIndex].text;
+
+            try {
+                const response = await fetch('/api/camera/set-camera', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        side: 'left',
+                        device_name: leftDeviceName,
+                        device_id: leftDeviceId
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    updateCameraStatus('left', 'HLS录制中', true);
+                    console.log('[CameraUI] ✅ 左手摄像头配置成功');
+                } else {
+                    console.error('[CameraUI] 左手摄像头配置失败:', result.error);
+                    showToast('左手摄像头配置失败', 'error');
+                    return;
+                }
+            } catch (error) {
+                console.error('[CameraUI] 左手摄像头配置请求失败:', error);
+                showToast('左手摄像头配置失败', 'error');
                 return;
             }
-            updateCameraStatus('left', '已配置', false);
         }
 
+        // 配置右手摄像头
         if (rightDeviceId) {
-            const success = await window.cameraControl.setCameraMapping('right', rightDeviceId);
-            if (!success) {
-                console.error('[CameraUI] 右手摄像头映射失败');
+            const rightDeviceName = rightSelect.options[rightSelect.selectedIndex].text;
+
+            try {
+                const response = await fetch('/api/camera/set-camera', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        side: 'right',
+                        device_name: rightDeviceName,
+                        device_id: rightDeviceId
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    updateCameraStatus('right', 'HLS录制中', true);
+                    console.log('[CameraUI] ✅ 右手摄像头配置成功');
+                } else {
+                    console.error('[CameraUI] 右手摄像头配置失败:', result.error);
+                    showToast('右手摄像头配置失败', 'error');
+                    return;
+                }
+            } catch (error) {
+                console.error('[CameraUI] 右手摄像头配置请求失败:', error);
+                showToast('右手摄像头配置失败', 'error');
                 return;
             }
-            updateCameraStatus('right', '已配置', false);
         }
+
+        isCameraStreaming = true;
+        updateCameraStreamButton(true);
+        showToast('摄像头HLS录制已启动 🎬', 'success');
 
         // 关闭配置弹窗
         closeCameraConfig();
-
-        // 启动推流
-        await startCameraStreaming();
     }
 
     /**

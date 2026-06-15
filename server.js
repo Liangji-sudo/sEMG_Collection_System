@@ -390,6 +390,22 @@ app.get('/api/camera/list', async (req, res) => {
     }
 });
 
+// 设置摄像头配置
+app.post('/api/camera/set-camera', async (req, res) => {
+    try {
+        const { side, device_name, device_id } = req.body;
+        const result = await realtimeEngine.sendCameraCommand('set_camera', {
+            side: side,
+            device_name: device_name,
+            device_id: device_id
+        });
+        res.json(result);
+    } catch (error) {
+        console.error('[server.js] 配置摄像头失败:', error);
+        res.json({ success: false, error: error.message });
+    }
+});
+
 // 获取摄像头状态
 app.get('/api/camera/status', (req, res) => {
     try {
