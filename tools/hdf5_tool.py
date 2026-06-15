@@ -1016,6 +1016,16 @@ class StatisticsPanel(QFrame):
                 else:
                     self.labels['sd_bin_dev2'].setText('-')
 
+                # 读取视频文件名
+                for key in ['video_left', 'video_right']:
+                    val = f.attrs.get(key, None)
+                    if val:
+                        if isinstance(val, bytes):
+                            val = val.decode('utf-8')
+                        self.labels[key].setText(str(val))
+                    else:
+                        self.labels[key].setText('-')
+
                 # 读取BLE设备名称
                 ble_device_dev1 = f.attrs.get('ble_device_dev1', None)
                 if ble_device_dev1:
