@@ -784,6 +784,8 @@ class RealtimeEngine extends EventEmitter {
                     console.error('[realtimeEngine] ❌ 左手HLS录制启动失败:', startResult.error);
                 } else {
                     console.log('[realtimeEngine] ✅ 左手HLS录制已启动');
+                    // 等待第一个HLS分片生成（hls_time=1s，等1.5s确保至少一个分片）
+                    await new Promise(resolve => setTimeout(resolve, 1500));
                 }
 
                 // 步骤2：标记录制起始分段
@@ -826,6 +828,8 @@ class RealtimeEngine extends EventEmitter {
                     console.error('[realtimeEngine] ❌ 右手HLS录制启动失败:', startResult.error);
                 } else {
                     console.log('[realtimeEngine] ✅ 右手HLS录制已启动');
+                    // 等待第一个HLS分片生成
+                    await new Promise(resolve => setTimeout(resolve, 1500));
                 }
 
                 // 步骤2：标记录制起始分段

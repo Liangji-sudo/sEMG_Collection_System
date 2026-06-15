@@ -243,7 +243,7 @@ class HLSRecorder:
 
         self.process = None
         self.running = False
-        self.current_segment = 0
+        self.current_segment = -1  # -1 确保第一个分片(segment_00000)能被追踪到
         self.mark_segment = None
         self.monitor_thread = None
 
@@ -466,6 +466,7 @@ class CameraServer:
         self.cameras = {}           # {side: {device_name, device_id}}
         self.captures = {}          # {side: CameraCapture}   MJPEG实时采集
         self.recorders = {}         # {side: HLSRecorder}     HLS录制
+        self.camera_opened = {'left': False, 'right': False}  # 追踪摄像头是否曾被打开
 
         self.output_dir = Path('storage/video')
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -479,6 +480,10 @@ class CameraServer:
         # 预览订阅者: {side: set(websocket)}
         self.preview_subscribers = {'left': set(), 'right': set()}
         self.subscribers_lock = threading.Lock()
+
+        # 所有连接的客户端（用于广播状态）
+        self.all_clients = set()
+        self.clients_lock = threading.Lock()
 
         # 查找 ffmpeg
         self.ffmpeg_path = find_ffmpeg()
@@ -558,6 +563,33 @@ class CameraServer:
                             with self.subscribers_lock:
                                 self.preview_subscribers[side] -= dead
 
+    # ==================== 状态广播 ====================
+
+    async def _broadcast_status_to_all(self, status_msg):
+        """向所有连接的客户端广播状态消息"""
+        dead = set()
+        with self.clients_lock:
+            clients = list(self.all_clients)
+        for ws in clients:
+            try:
+                await ws.send(json.dumps(status_msg))
+            except:
+                dead.add(ws)
+        if dead:
+            with self.clients_lock:
+                self.all_clients -= dead
+
+    async def _push_recording_status(self):
+        """推送当前录制状态给所有客户端"""
+        recording_sides = [s for s in ['left', 'right'] if s in self.recorders and self.recorders[s].running]
+        opened_sides = [s for s in ['left', 'right'] if self.camera_opened[s]]
+        await self._broadcast_status_to_all({
+            'type': 'recording_status',
+            'recording': len(recording_sides) > 0,
+            'recording_sides': recording_sides,
+            'preview_available': opened_sides
+        })
+
     # ==================== WebSocket 客户端处理 ====================
 
     async def handle_client(self, websocket):
@@ -565,8 +597,13 @@ class CameraServer:
         client_addr = websocket.remote_address
         print(f'[CameraServer] 客户端已连接: {client_addr}')
 
+        # 注册客户端
+        with self.clients_lock:
+            self.all_clients.add(websocket)
+
         # 发送初始状态
         await self._send_status(websocket)
+        await self._push_recording_status()
 
         try:
             async for message in websocket:
@@ -604,6 +641,8 @@ class CameraServer:
         with self.subscribers_lock:
             for side in ['left', 'right']:
                 self.preview_subscribers[side].discard(websocket)
+        with self.clients_lock:
+            self.all_clients.discard(websocket)
         print(f'[CameraServer] 客户端已清理: {client_addr}')
 
     async def _dispatch(self, command, data, websocket):
@@ -621,7 +660,7 @@ class CameraServer:
         elif command == 'unsubscribe_preview':
             return self._cmd_unsubscribe_preview(data, websocket)
         elif command == 'start_continuous_recording':
-            return self._cmd_start_continuous_recording(data)
+            return await self._cmd_start_continuous_recording(data)
         elif command == 'mark_recording_start':
             return self._cmd_mark_recording_start(data)
         elif command == 'stop_and_save':
@@ -784,6 +823,7 @@ class CameraServer:
 
         if success:
             self.captures[side] = capture
+            self.camera_opened[side] = True  # 记录已打开状态
             # 自动订阅该客户端的预览
             with self.subscribers_lock:
                 self.preview_subscribers[side].add(websocket)
@@ -806,6 +846,8 @@ class CameraServer:
             self.captures[side].stop()
             del self.captures[side]
             print(f'[CameraServer] [{side}] 摄像头已关闭')
+
+        self.camera_opened[side] = False
 
         # 清理预览订阅
         with self.subscribers_lock:
@@ -838,7 +880,7 @@ class CameraServer:
 
         return {'success': True, 'subscribed': False}
 
-    def _cmd_start_continuous_recording(self, data):
+    async def _cmd_start_continuous_recording(self, data):
         """启动HLS持续录制（由realtimeEngine在采集开始时调用）"""
         side = data.get('side')
 
@@ -863,6 +905,8 @@ class CameraServer:
 
         if success:
             self.recorders[side] = recorder
+            # 推送录制状态给所有前端客户端
+            await self._push_recording_status()
             return {'success': True, 'side': side, 'message': f'{side}侧HLS录制已启动'}
         else:
             return {'success': False, 'error': f'{side}侧HLS录制启动失败'}
@@ -921,16 +965,20 @@ class CameraServer:
                 'error': '保存MP4失败'
             }
 
-        # 录制完成后，如果摄像头已配置且有订阅者，自动恢复MJPEG预览
-        if side in self.cameras and self.ffmpeg_path:
-            subscribers = list(self.preview_subscribers.get(side, set()))
-            if subscribers:
-                print(f'[CameraServer] [{side}] 录制完成，恢复MJPEG预览...')
-                await asyncio.sleep(0.3)
-                camera = self.cameras[side]
-                capture = CameraCapture(side, camera['device_name'], self.ffmpeg_path, self.frame_queue)
-                if capture.start():
-                    self.captures[side] = capture
+        # 推送录制结束状态
+        await self._push_recording_status()
+
+        # 录制完成后，如果摄像头之前被打开过，自动恢复MJPEG预览
+        if side in self.cameras and self.ffmpeg_path and self.camera_opened.get(side):
+            print(f'[CameraServer] [{side}] 录制完成，恢复MJPEG预览...')
+            await asyncio.sleep(0.5)  # 等待摄像头完全释放
+            camera = self.cameras[side]
+            capture = CameraCapture(side, camera['device_name'], self.ffmpeg_path, self.frame_queue)
+            if capture.start():
+                self.captures[side] = capture
+                print(f'[CameraServer] [{side}] ✅ MJPEG预览已恢复')
+            else:
+                print(f'[CameraServer] [{side}] ⚠️ MJPEG预览恢复失败')
 
         return result
 

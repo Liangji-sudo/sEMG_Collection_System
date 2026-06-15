@@ -49,6 +49,7 @@
         onScanResult: null,
         onError: null,
         onCameraStateChange: null,
+        onRecordingStatus: null,  // 录制状态变化回调
     };
 
     // ================= WebSocket 连接 =================
@@ -170,6 +171,14 @@
                 CamState.previewFrames[side] = msg.frame;
                 if (CamState.onPreviewFrame) {
                     CamState.onPreviewFrame(side, msg.frame);
+                }
+                return;
+            }
+
+            // 录制状态推送
+            if (msg.type === 'recording_status') {
+                if (CamState.onRecordingStatus) {
+                    CamState.onRecordingStatus(msg);
                 }
                 return;
             }
@@ -488,6 +497,7 @@
         set onStatusChange(cb) { CamState.onStatusChange = cb; },
         set onError(cb) { CamState.onError = cb; },
         set onCameraStateChange(cb) { CamState.onCameraStateChange = cb; },
+        set onRecordingStatus(cb) { CamState.onRecordingStatus = cb; },
 
         // 状态对象（只读）
         get state() { return { ...CamState }; }

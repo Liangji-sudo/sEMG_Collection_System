@@ -85,11 +85,35 @@
                 console.log('[CameraUI] Camera Server 已连接');
             } else {
                 console.log('[CameraUI] Camera Server 断开');
-                // 更新UI状态
                 updateCameraStatus('left', '未连接', false);
                 updateCameraStatus('right', '未连接', false);
                 isCameraStreaming = false;
                 updateCameraStreamButton(false);
+            }
+        };
+
+        // 录制状态变化（camera_server主动推送）
+        window.CameraControl.onRecordingStatus = function(status) {
+            console.log('[CameraUI] 录制状态更新:', status);
+            if (status.recording) {
+                // 正在录制中 → 显示"写盘中"，禁用预览
+                status.recording_sides.forEach(side => {
+                    updateCameraStatus(side, '写盘中', false);
+                });
+                // 不在录制的side保持"预览中"
+                ['left', 'right'].forEach(side => {
+                    if (!status.recording_sides.includes(side) && window.CameraControl) {
+                        const camState = window.CameraControl.getCameraState(side);
+                        if (camState && camState.opened) {
+                            updateCameraStatus(side, '预览中', true);
+                        }
+                    }
+                });
+            } else {
+                // 录制已停止 → 恢复"预览中"
+                status.preview_available.forEach(side => {
+                    updateCameraStatus(side, '预览中', true);
+                });
             }
         };
     }
