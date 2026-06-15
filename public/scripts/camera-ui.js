@@ -438,6 +438,33 @@
 
     // ==================== 应用配置并打开摄像头 ====================
 
+    /**
+     * 检查相机/BLE side 匹配约束：
+     * - 如果只连接了一侧 BLE 腕带，相机只能开对应侧
+     * - 如果两侧都连了或都没连，不限制
+     * @returns {string|null} 错误消息，null 表示通过
+     */
+    function checkCameraBleSideMatch(targetCameraSide) {
+        // 获取 BLE 连接状态
+        let bleLeft = false, bleRight = false;
+        if (window.BleControl && window.BleControl.devices) {
+            bleLeft = !!(window.BleControl.devices[1] && window.BleControl.devices[1].connected);
+            bleRight = !!(window.BleControl.devices[2] && window.BleControl.devices[2].connected);
+        }
+
+        // 两侧都连了或都没连 → 不限制
+        if (bleLeft === bleRight) return null;
+
+        // 只有一侧 BLE 连接 → 相机必须匹配
+        const bleSide = bleLeft ? '左手(设备1)' : '右手(设备2)';
+        const expectedCamSide = bleLeft ? 'left' : 'right';
+
+        if (targetCameraSide !== expectedCamSide) {
+            return `蓝牙腕带只连接了${bleSide}，只能打开${bleLeft ? '左手' : '右手'}摄像头`;
+        }
+        return null;
+    }
+
     async function applyCameraConfig() {
         console.log('[CameraUI] 应用摄像头配置并打开...');
 
@@ -450,6 +477,16 @@
         if (!leftDeviceId && !rightDeviceId) {
             showToast('请至少选择一个摄像头', 'warning');
             return;
+        }
+
+        // === side 匹配检查 ===
+        if (leftDeviceId) {
+            const err = checkCameraBleSideMatch('left');
+            if (err) { showToast(err, 'warning'); return; }
+        }
+        if (rightDeviceId) {
+            const err = checkCameraBleSideMatch('right');
+            if (err) { showToast(err, 'warning'); return; }
         }
 
         const useDirectWS = window.CameraControl && window.CameraControl.isConnected();

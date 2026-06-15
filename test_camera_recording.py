@@ -8,8 +8,8 @@ test_camera_recording.py - 独立测试 camera_server 的录制功能
 4. 监听键盘：按空格键 → 开始录制 → 自动停止并保存 AVI
 5. 检查输出文件大小和时长
 
-当前架构: 直接 AVI + MJPEG 录制（start_continuous_recording + stop_and_save）
-录制参数: 640x480, 15fps, MJPEG q:v 12, AVI 容器
+当前架构: FrameRecorder — 从 MJPEG 预览管道保存帧（start_continuous_recording + stop_and_save）
+录制参数: 预览 1280x720@30fps → AVI封装缩放至 640x480@15fps, MJPEG q:v 12
 
 用法：
   1. 先启动 camera_server:  python camera_server.py
@@ -180,29 +180,29 @@ class CameraTester:
 
     async def start_recording(self, side, duration=RECORD_DURATION):
         """
-        模拟 realtimeEngine 的完整录制流程（当前架构）：
+        模拟 realtimeEngine 的完整录制流程（当前 FrameRecorder 架构）：
 
         1. start_continuous_recording(side, output_filename)
-           → camera_server 停止 MJPEG 预览，启动 ffmpeg 直接 AVI 录制
-           → 录制参数: 640x480, 15fps, MJPEG q:v 12, AVI 容器
+           → camera_server 创建 FrameRecorder，挂载到 MJPEG 管道
+           → 录制参数: 帧从 1280x720 管道保存 → 停止时缩放为 640x480@15fps AVI
 
         2. 等待 duration 秒 → 模拟采集过程
 
         3. stop_and_save(side)
-           → camera_server 终止 ffmpeg，提取时间戳（ffprobe）
+           → camera_server 解挂 FrameRecorder，ffmpeg MJPEG→AVI 封装
            → 返回: output_path, file_size, timing (含 first/last_frame_unix)
         """
         print(f'\n{"=" * 60}')
         print(f'🎬 开始录制流程 ({side}侧, 目标 {duration} 秒)')
-        print(f'   架构: 直接 AVI + MJPEG (640x480, 15fps, q:v 12)')
+        print(f'   架构: FrameRecorder (MJPEG管道→帧保存→AVI封装)')
         print(f'{"=" * 60}')
         self.recording = True
 
-        # ---- 步骤1: 启动直接AVI录制 ----
+        # ---- 步骤1: 启动帧录制（FrameRecorder 挂载到 MJPEG 管道） ----
         timestamp = time.strftime('%y%m%d_%H%M%S')
         output_filename = f'test_recording_{side}_{timestamp}.avi'
 
-        print(f'\n[步骤 1/2] 启动直接AVI录制...')
+        print(f'\n[步骤 1/2] 启动帧录制...')
         print(f'  输出文件: {output_filename}')
         r1 = await self.send_command('start_continuous_recording', {
             'side': side,
@@ -212,7 +212,7 @@ class CameraTester:
             print(f'  ❌ 录制启动失败: {r1.get("error")}')
             self.recording = False
             return False
-        print('  ✅ 直接AVI录制已启动 (ffmpeg dshow → MJPEG → AVI)')
+        print('  ✅ 帧录制已启动 (FrameRecorder 挂载到 MJPEG 管道)')
 
         # ---- 步骤2: 录制指定时长 ----
         print(f'\n[录制中] 等待 {duration} 秒（模拟采集过程）...')
@@ -356,7 +356,7 @@ async def main():
     print('=' * 60)
     print('  Camera Server 录制测试脚本')
     print('  模拟: realtimeEngine 录制流程')
-    print(f'  架构: 直接 AVI + MJPEG (640x480, 15fps, q:v 12)')
+    print(f'  架构: FrameRecorder (MJPEG管道→帧保存→AVI封装 640x480@15fps)')
     print(f'  默认录制: {RECORD_DURATION}s')
     print('=' * 60)
 

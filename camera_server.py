@@ -3,8 +3,8 @@ camera_server.py - USB摄像头管理服务器
 
 功能：
 1. 枚举USB摄像头设备（通过ffmpeg dshow）
-2. 实时MJPEG预览推流（WebSocket推送帧给前端）
-3. HLS录制（采集时通过realtimeEngine触发）
+2. 实时MJPEG预览推流（WebSocket推送帧给前端，1280x720@30fps）
+3. 帧录制（FrameRecorder：从MJPEG管道直接保存帧，预览不中断）
 4. 支持多客户端同时连接（前端预览 + realtimeEngine录制控制）
 
 WebSocket端口: 8768
@@ -158,8 +158,13 @@ class CameraCapture:
                     if recorder:
                         try:
                             recorder.write_frame(frame)
-                        except Exception:
-                            pass
+                        except OSError as e:
+                            # 磁盘满或写入错误，记录一次后禁用录制器避免日志风暴
+                            print(f'[CameraCapture] [{self.side}] ⚠️ 写入帧失败 (磁盘满?): {e}')
+                            self.frame_recorder = None
+                        except Exception as e:
+                            print(f'[CameraCapture] [{self.side}] ⚠️ 写入帧异常: {e}')
+                            self.frame_recorder = None
 
                     # 线程安全地放入 asyncio 队列
                     try:
@@ -239,10 +244,15 @@ class CameraCapture:
         }
 
 
-# ==================== HLS 录制器（采集时使用） ====================
+# ==================== 帧录制器（采集时使用，复用MJPEG管道） ====================
 
 class FrameRecorder:
-    """帧录制器 — 从 MJPEG 预览管道直接保存帧，无需单独的 ffmpeg 进程"""
+    """帧录制器 — 从 MJPEG 预览管道直接保存帧，无需单独的 ffmpeg 进程
+
+    核心思路：预览用 1280x720@30fps（保证摄像头兼容性），
+    录制时直接从同一管道保存 MJPEG 帧 → 停止时 ffmpeg 缩放封装为 640x480@15fps AVI。
+    预览在录制期间持续可用，不存在 dshow 设备独占冲突。
+    """
 
     def __init__(self, side, ffmpeg_path, output_dir):
         self.side = side
@@ -263,7 +273,13 @@ class FrameRecorder:
             print(f'[FrameRecorder] [{self.side}] 已在录制中')
             return True
 
-        self.output_path = self.output_dir / output_filename
+        # 路径遍历防护：拒绝包含 ../ 或绝对路径的文件名
+        safe_name = os.path.basename(output_filename)
+        if safe_name != output_filename or '..' in output_filename:
+            print(f'[FrameRecorder] [{self.side}] ⚠️ 拒绝可疑文件名: {output_filename}')
+            return False
+
+        self.output_path = self.output_dir / safe_name
         self.raw_path = self.output_path.with_suffix('.mjpeg')
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -370,7 +386,16 @@ class FrameRecorder:
             'last_frame_unix': self.recording_stopped_at,
         }
         try:
-            ffprobe_path = self.ffmpeg_path.replace('ffmpeg.exe', 'ffprobe.exe')
+            # Cross-platform ffprobe path derivation
+            if sys.platform == 'win32':
+                ffprobe_path = self.ffmpeg_path.replace('ffmpeg.exe', 'ffprobe.exe')
+            else:
+                ffprobe_path = self.ffmpeg_path.replace('ffmpeg', 'ffprobe')
+            # Fallback: try shutil.which if replacement didn't find it
+            if not os.path.exists(ffprobe_path):
+                alt = shutil.which('ffprobe')
+                if alt:
+                    ffprobe_path = alt
             # 获取视频时长
             result = subprocess.run(
                 [ffprobe_path,
@@ -419,9 +444,6 @@ class FrameRecorder:
 
         return timing
 
-    def get_preview_frame_b64(self):
-        """兼容旧接口 — 预览帧由 CameraCapture 直接推送，无需从这里获取"""
-        return None
 
 
 # ==================== Camera Server 主类 ====================
@@ -466,7 +488,6 @@ class CameraServer:
     async def start_broadcast_task(self):
         """启动帧广播后台任务"""
         asyncio.create_task(self._broadcast_loop())
-        asyncio.create_task(self._hls_preview_broadcast_loop())
 
     async def _broadcast_loop(self):
         """从队列取帧，广播给订阅的前端客户端"""
@@ -501,15 +522,6 @@ class CameraServer:
                 break
             except Exception as e:
                 print(f'[CameraServer] 广播帧出错: {e}')
-
-    async def _hls_preview_broadcast_loop(self):
-        """录制期间预览由主MJPEG管道继续推送，无需额外处理
-
-        旧架构需要此方法是因为录制时会停止MJPEG预览。
-        新架构（FrameRecorder）复用MJPEG管道，预览永不中断。
-        """
-        while True:
-            await asyncio.sleep(60)  # idle loop, kept for compatibility
 
     # ==================== 状态广播 ====================
 
@@ -624,9 +636,8 @@ class CameraServer:
             # 兼容旧接口
             side = data.get('side')
             if side and side in self.recorders:
-                recorder = self.recorders[side]
                 timestamp = datetime.now().strftime('%y%m%d_%H%M%S')
-                output_filename = f'recording_{side}_{timestamp}.mp4'
+                output_filename = f'recording_{side}_{timestamp}.avi'
                 return await self._do_stop_and_save(side, output_filename)
             return {'success': True, 'message': '未在录制中'}
         else:
@@ -761,9 +772,9 @@ class CameraServer:
             self.captures[side].stop()
             await asyncio.sleep(0.3)
 
-        # 如果正在HLS录制，不能打开MJPEG（摄像头只能被一个进程占用）
+        # 如果正在帧录制，不能打开新的MJPEG（摄像头只能被一个进程占用）
         if side in self.recorders and self.recorders[side].recording:
-            return {'success': False, 'error': f'{side}侧正在HLS录制中，不能同时打开预览'}
+            return {'success': False, 'error': f'{side}侧正在录制中，不能同时重新打开摄像头'}
 
         camera = self.cameras[side]
         capture = CameraCapture(side, camera['device_name'], self.ffmpeg_path, self.frame_queue)
@@ -869,26 +880,28 @@ class CameraServer:
             return {'success': False, 'error': f'{side}侧录制启动失败'}
 
     def _cmd_mark_recording_start(self, data):
-        """标记录制起始点（按空格键时由realtimeEngine调用）"""
+        """标记录制起始点（兼容旧接口）
+
+        FrameRecorder架构下，录制在 start_continuous_recording 时已开始，
+        帧持续从MJPEG管道写入，无需单独标记起始点。
+        """
         side = data.get('side')
 
         if not side or side not in ['left', 'right']:
             return {'success': False, 'error': '无效的side参数'}
 
         if side not in self.recorders:
-            return {'success': False, 'error': f'{side}侧HLS录制未启动'}
+            return {'success': False, 'error': f'{side}侧录制未启动'}
 
-        recorder = self.recorders[side]
-        mark_segment = recorder.mark_start()
-
+        # FrameRecorder 架构无需 mark_start，录制在 start 时已开始
         return {
             'success': True,
             'side': side,
-            'mark_segment': mark_segment
+            'message': '录制已在运行中（FrameRecorder持续保存帧）'
         }
 
     async def _cmd_stop_and_save(self, data):
-        """停止HLS录制并保存MP4"""
+        """停止帧录制并保存AVI"""
         side = data.get('side')
         output_filename = data.get('output_filename')
 
@@ -939,29 +952,19 @@ class CameraServer:
         return result
 
     def _cmd_get_preview_frame(self, data):
-        """获取单帧预览（手动请求）"""
+        """获取单帧预览（手动请求，主要用于HTTP API降级模式）"""
         side = data.get('side')
 
         if not side or side not in ['left', 'right']:
             return {'success': False, 'error': '无效的side参数'}
 
-        # 如果有MJPEG采集，返回最新帧
+        # MJPEG采集的最新帧（base64）
         if side in self.captures and self.captures[side].latest_frame_b64:
             return {
                 'success': True,
                 'side': side,
                 'frame': self.captures[side].latest_frame_b64
             }
-
-        # 如果有HLS录制，从分段提取
-        if side in self.recorders and self.recorders[side].recording:
-            frame_b64 = self.recorders[side].get_preview_frame_b64()
-            if frame_b64:
-                return {
-                    'success': True,
-                    'side': side,
-                    'frame': frame_b64
-                }
 
         return {
             'success': False,
@@ -1003,12 +1006,7 @@ class CameraServer:
         """清理资源"""
         print('[CameraServer] 正在清理资源...')
 
-        # 停止所有MJPEG采集
-        for side, capture in list(self.captures.items()):
-            capture.stop()
-        self.captures.clear()
-
-        # 停止所有帧录制
+        # 先停止所有帧录制（detach from captures before clearing captures）
         for side, recorder in list(self.recorders.items()):
             if recorder.recording:
                 try:
@@ -1019,6 +1017,11 @@ class CameraServer:
                 except:
                     pass
         self.recorders.clear()
+
+        # 再停止所有MJPEG采集
+        for side, capture in list(self.captures.items()):
+            capture.stop()
+        self.captures.clear()
 
         print('[CameraServer] 清理完成')
 

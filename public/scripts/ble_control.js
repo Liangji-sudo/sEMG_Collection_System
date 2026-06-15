@@ -772,15 +772,45 @@ async function decodeData(buffer) {
             });
         }
         
+        /**
+         * 检查 BLE/相机 side 匹配约束：
+         * - 如果只打开了一侧摄像头，BLE 只能连接对应侧
+         * - 如果两侧都开了或都没开，不限制
+         * @returns {string|null} 错误消息，null 表示通过
+         */
+        function checkBleCameraSideMatch(targetBleSide) {
+            // 获取相机打开状态
+            let camLeft = false, camRight = false;
+            if (window.CameraControl) {
+                const camState = window.CameraControl.getCameraState();
+                camLeft = !!(camState.left && camState.left.opened);
+                camRight = !!(camState.right && camState.right.opened);
+            }
+
+            // 两侧都开了或都没开 → 不限制
+            if (camLeft === camRight) return null;
+
+            // 只有一侧相机打开 → BLE 必须匹配
+            const camSide = camLeft ? '左手' : '右手';
+            const expectedBleSide = camLeft ? 1 : 2;
+
+            if (targetBleSide !== expectedBleSide) {
+                return `只打开了${camSide}摄像头，只能连接${camLeft ? '左手(设备1)' : '右手(设备2)'}腕带`;
+            }
+            return null;
+        }
+
         // 绑定连接按钮
         const connect1Btn = document.getElementById('connect1Btn');
         const connect2Btn = document.getElementById('connect2Btn');
-        
+
         if (connect1Btn) {
             connect1Btn.addEventListener('click', () => {
                 if (BleState.devices[1].connected) {
                     BleControl.disconnectDevice(1);
                 } else {
+                    const err = checkBleCameraSideMatch(1);
+                    if (err) { showToast(err, 'warning'); return; }
                     const mac = document.getElementById('device1Select')?.value;
                     if (mac) {
                         BleControl.connectDevice(1, mac);
@@ -790,12 +820,14 @@ async function decodeData(buffer) {
                 }
             });
         }
-        
+
         if (connect2Btn) {
             connect2Btn.addEventListener('click', () => {
                 if (BleState.devices[2].connected) {
                     BleControl.disconnectDevice(2);
                 } else {
+                    const err = checkBleCameraSideMatch(2);
+                    if (err) { showToast(err, 'warning'); return; }
                     const mac = document.getElementById('device2Select')?.value;
                     if (mac) {
                         BleControl.connectDevice(2, mac);

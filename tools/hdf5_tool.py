@@ -1469,8 +1469,80 @@ class ViewerTab(QWidget):
 
                 if isinstance(obj, h5py.Dataset):
                     self.show_data_preview(obj, path)
+                elif isinstance(obj, h5py.Group) and (path == 'video_timing' or path.endswith('/video_timing')):
+                    self._show_video_timing_group(f)
         except Exception as e:
             print(f"读取错误: {e}")
+
+    def _show_video_timing_group(self, f):
+        """显示 video_timing group 的汇总视图"""
+        try:
+            vt = f['video_timing']
+            sides_raw = vt['sides'][()]
+            firsts = vt['first_frame_unix'][()]
+            lasts = vt['last_frame_unix'][()]
+            durs = vt['duration'][()]
+
+            # 确保都是1D数组
+            sides = [s.decode('utf-8') if isinstance(s, bytes) else str(s)
+                     for s in np.atleast_1d(sides_raw)]
+            firsts = np.atleast_1d(firsts)
+            lasts = np.atleast_1d(lasts)
+            durs = np.atleast_1d(durs)
+
+            n = len(sides)
+            self.data_table.clear()
+            self.data_table.setRowCount(n)
+            self.data_table.setColumnCount(5)
+            self.data_table.setHorizontalHeaderLabels([
+                '摄像头', '视频首帧 Unix', '首帧时间', '视频末帧 Unix', '末帧时间'
+            ])
+
+            text_lines = [
+                '【video_timing - 视频帧时间戳汇总】',
+                '═' * 80,
+                '  对应 H5 数据中 EMG/IMU 时间戳，用于视频帧与生理数据的时间对齐。',
+                ''
+            ]
+
+            for i in range(n):
+                side = sides[i]
+                first = float(firsts[i])
+                last = float(lasts[i])
+                dur = float(durs[i])
+
+                try:
+                    first_str = datetime.fromtimestamp(first).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                except (ValueError, OSError):
+                    first_str = 'N/A'
+                try:
+                    last_str = datetime.fromtimestamp(last).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                except (ValueError, OSError):
+                    last_str = 'N/A'
+
+                self.data_table.setItem(i, 0, self._make_cell(side, Qt.AlignCenter))
+                self.data_table.setItem(i, 1, self._make_cell(f'{first:.3f}', Qt.AlignRight))
+                self.data_table.setItem(i, 2, self._make_cell(first_str, Qt.AlignLeft))
+                self.data_table.setItem(i, 3, self._make_cell(f'{last:.3f}', Qt.AlignRight))
+                self.data_table.setItem(i, 4, self._make_cell(last_str, Qt.AlignLeft))
+
+                text_lines.append(f'  📹 {side}侧摄像头:')
+                text_lines.append(f'     首帧 Unix: {first:.3f}  →  {first_str}')
+                text_lines.append(f'     末帧 Unix: {last:.3f}  →  {last_str}')
+                text_lines.append(f'     视频时长:  {dur:.3f}s ({dur/60:.2f}min)')
+                text_lines.append('')
+
+            self.data_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            self.text_view.setText('\n'.join(text_lines))
+
+        except Exception as e:
+            self.text_view.setText(f"video_timing 读取错误: {e}")
+
+    def _make_cell(self, text, align=Qt.AlignLeft):
+        """创建表格单元格"""
+        item = QTableWidgetItem(text)
+        item.setTextAlignment(align | Qt.AlignVCenter)
+        return item
 
     def show_attributes(self, obj):
         """显示属性"""
@@ -1509,6 +1581,8 @@ class ViewerTab(QWidget):
                     data_type = 'imu'
             elif 'prompts' in path.lower():
                 data_type = 'prompts'
+            elif 'video_timing' in path.lower():
+                data_type = 'video_timing'
 
             # 根据数据类型选择显示方式
             if data_type == 'emg':
@@ -1517,6 +1591,8 @@ class ViewerTab(QWidget):
                 self.show_imu_data(data, dtype, path)
             elif data_type == 'prompts':
                 self.show_prompt_data(data, path)
+            elif data_type == 'video_timing':
+                self.show_video_timing_data(data, dtype, path)
             else:
                 # 普通数组
                 self.update_table_view(data, is_emg)
@@ -1864,6 +1940,57 @@ class ViewerTab(QWidget):
             item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             self.data_table.setItem(i, 1, item)
             text_lines.append(f'{i:4d}: {val_str}')
+
+        self.data_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.text_view.setText('\n'.join(text_lines))
+
+    def show_video_timing_data(self, data, dtype, path):
+        """显示 video_timing 数据集（标量或小数组）"""
+        ds_name = path.split('/')[-1]
+        text_lines = [
+            f'【video_timing / {ds_name}】',
+            '═' * 60
+        ]
+
+        # 拉平数据用于表格显示
+        flat = np.atleast_1d(np.asarray(data)).flatten()
+
+        self.data_table.clear()
+        self.data_table.setRowCount(len(flat))
+        self.data_table.setColumnCount(2)
+        self.data_table.setHorizontalHeaderLabels(['索引', ds_name])
+
+        for i, val in enumerate(flat):
+            item_idx = QTableWidgetItem(str(i))
+            item_idx.setTextAlignment(Qt.AlignCenter)
+            self.data_table.setItem(i, 0, item_idx)
+
+            if isinstance(val, bytes):
+                val_str = val.decode('utf-8', errors='replace')
+            elif isinstance(val, np.floating):
+                val_str = f'{val:.9f}'
+            elif isinstance(val, (np.integer, int)):
+                val_str = str(val)
+            else:
+                val_str = str(val)
+
+            item_val = QTableWidgetItem(val_str)
+            item_val.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            self.data_table.setItem(i, 1, item_val)
+
+            # 时间戳格式化显示
+            if 'unix' in ds_name.lower() and isinstance(val, (int, float, np.floating, np.integer)):
+                try:
+                    ts = float(val)
+                    dt_str = datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                    text_lines.append(f'  [{i}] {val_str}  →  {dt_str}')
+                except (ValueError, OSError):
+                    text_lines.append(f'  [{i}] {val_str}')
+            else:
+                text_lines.append(f'  [{i}] {val_str}')
+
+        if 'duration' in ds_name.lower():
+            text_lines.append(f'\n  ⏱ 视频时长: {flat[0]:.3f}s ({flat[0]/60:.2f}min)')
 
         self.data_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.text_view.setText('\n'.join(text_lines))

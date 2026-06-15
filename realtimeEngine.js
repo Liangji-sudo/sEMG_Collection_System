@@ -126,13 +126,6 @@ class RealtimeEngine extends EventEmitter {
         this.pendingAbortFreeze = null;       // { interruptedAt, progress }
     }
 
-    /**
-     * 【废弃】设置摄像头管理器（现在使用独立的camera_server）
-     */
-    setCameraManager(cameraManager) {
-        console.log('[realtimeEngine] setCameraManager已废弃，使用camera_server代替');
-    }
-
     start(port = 8080) {
         return new Promise((resolve, reject) => {
             try {
@@ -650,131 +643,14 @@ class RealtimeEngine extends EventEmitter {
         });
     }
 
-    // 【新增】启动视频录制（后端ffmpeg录制）
-    async _startVideoRecording(timestamp, stageName) {
-        console.log('[realtimeEngine] 🎥 启动后端视频录制...');
-
-        if (!this.camera_connected) {
-            console.error('[realtimeEngine] ❌ camera_server未连接，无法启动视频录制');
-            return;
-        }
-
-        // 获取 collection bins（用于生成视频文件名）
-        const binFileNameLeft = this.collectionBins?.dev1;
-        const binFileNameRight = this.collectionBins?.dev2;
-
-        if (!binFileNameLeft && !binFileNameRight) {
-            console.warn('[realtimeEngine] 未找到collection bins，无法生成视频文件名');
-            return;
-        }
-
-        console.log('[realtimeEngine] Collection bins:', this.collectionBins);
-
-        // 【新增】自动枚举并配置摄像头（如果尚未配置）
-        if (!this.camerasConfigured) {
-            console.log('[realtimeEngine] 摄像头尚未配置，开始自动枚举...');
-            try {
-                const listResult = await this.sendCameraCommand('list_cameras', {});
-                if (listResult.success && listResult.devices && listResult.devices.length > 0) {
-                    console.log(`[realtimeEngine] 找到 ${listResult.devices.length} 个摄像头`);
-
-                    // 自动配置第一个摄像头为左侧
-                    const firstCamera = listResult.devices[0];
-                    console.log(`[realtimeEngine] 自动配置左侧摄像头: ${firstCamera.name}`);
-
-                    const setResult = await this.sendCameraCommand('set_camera', {
-                        side: 'left',
-                        device_name: firstCamera.name,
-                        device_id: firstCamera.id
-                    });
-
-                    if (setResult.success) {
-                        console.log('[realtimeEngine] ✅ 左侧摄像头配置成功');
-                        this.camerasConfigured = true;
-                    } else {
-                        console.error('[realtimeEngine] ❌ 摄像头配置失败:', setResult.error);
-                        return;
-                    }
-                } else {
-                    console.error('[realtimeEngine] ❌ 未找到可用摄像头');
-                    return;
-                }
-            } catch (error) {
-                console.error('[realtimeEngine] ❌ 摄像头枚举/配置失败:', error.message);
-                return;
-            }
-        }
-
-        // 构建输出路径
-        const results = {};
-
-        // 启动左手摄像头录制
-        if (binFileNameLeft) {
-            const outputFilename = `${binFileNameLeft}.mp4`;
-
-            console.log('[realtimeEngine] 启动左手摄像头录制:', outputFilename);
-
-            try {
-                const result = await this.sendCameraCommand('start_recording', {
-                    side: 'left',
-                    output_filename: outputFilename
-                });
-
-                results.left = result;
-
-                if (result.success) {
-                    console.log('[realtimeEngine] ✅ 左手摄像头录制已启动:', result.filename);
-                } else {
-                    console.error('[realtimeEngine] ❌ 左手摄像头录制失败:', result.error);
-                }
-            } catch (error) {
-                console.error('[realtimeEngine] ❌ 左手摄像头录制请求失败:', error.message);
-            }
-        }
-
-        // 启动右手摄像头录制
-        if (binFileNameRight) {
-            const outputFilename = `${binFileNameRight}.mp4`;
-
-            console.log('[realtimeEngine] 启动右手摄像头录制:', outputFilename);
-
-            try {
-                const result = await this.sendCameraCommand('start_recording', {
-                    side: 'right',
-                    output_filename: outputFilename
-                });
-
-                results.right = result;
-
-                if (result.success) {
-                    console.log('[realtimeEngine] ✅ 右手摄像头录制已启动:', result.filename);
-                } else {
-                    console.error('[realtimeEngine] ❌ 右手摄像头录制失败:', result.error);
-                }
-            } catch (error) {
-                console.error('[realtimeEngine] ❌ 右手摄像头录制请求失败:', error.message);
-            }
-        }
-
-        // 保存视频信息到H5
-        if (this.stageFileOpen && !this.isClosingStageFile) {
-            const videoInfo = {
-                video_left: results.left?.filename || null,
-                video_right: results.right?.filename || null,
-                video_start_timestamp: timestamp
-            };
-
-            await this.sendStorageCommand('video_recording_started', videoInfo).catch(err => {
-                console.error('[realtimeEngine] 保存视频信息到H5失败:', err);
-            });
-        }
-    }
-
     /**
      * 启动摄像头录制（采集开始时自动调用）
      *
      * 当前架构（FrameRecorder）：
-     * 不停止MJPEG预览，直接从预览管道保存帧
+     * 不停止MJPEG预览，直接从预览管道保存帧。
+     *
+     * 智能 side 映射：单摄像头时，自动将 bin 映射到可用摄像头。
+     * 例如：摄像头在 left，但只有 dev2 有 bin → left 摄像头录制 dev2 数据。
      */
     async _markVideoRecordingStart(timestamp, stageName) {
         console.log('[realtimeEngine] 🎥 启动摄像头录制...');
@@ -798,45 +674,79 @@ class RealtimeEngine extends EventEmitter {
         // 初始化 videoFileNames
         this.videoFileNames = this.videoFileNames || {};
 
-        // 左手摄像头：启动帧录制
+        // === 查询 camera_server 哪些摄像头可用（MJPEG 预览已在运行） ===
+        let availableSides = [];
+        try {
+            const status = await this.sendCameraCommand('get_status', {});
+            for (const side of ['left', 'right']) {
+                if (status.captures && status.captures[side] && status.captures[side].running) {
+                    availableSides.push(side);
+                }
+            }
+            console.log(`[realtimeEngine] 可用摄像头: ${availableSides.length > 0 ? availableSides.join(', ') : '无'}`);
+        } catch (e) {
+            console.warn('[realtimeEngine] 无法获取摄像头状态，假定两侧都可用:', e.message);
+            availableSides = ['left', 'right'];
+        }
+
+        if (availableSides.length === 0) {
+            console.error('[realtimeEngine] ❌ 没有可用的摄像头（请先在UI中打开摄像头）');
+            return;
+        }
+
+        // === 智能映射：bin → 可用摄像头 ===
+        // 优先保持 side 匹配；单摄像头时自动 fallback
+        const mapBinToCamera = (preferredSide) => {
+            if (availableSides.includes(preferredSide)) return preferredSide;
+            // Fallback: 使用第一个可用摄像头
+            const fallback = availableSides[0];
+            console.log(`[realtimeEngine] ⚠️ ${preferredSide}侧摄像头不可用，改用 ${fallback} 侧摄像头`);
+            return fallback;
+        };
+
+        // 左手 bin → 摄像头
         if (binFileNameLeft) {
+            const cameraSide = mapBinToCamera('left');
             const videoFileName = `${binFileNameLeft}.avi`;
-            console.log('[realtimeEngine] 左手摄像头: 启动录制: ' + videoFileName);
+            console.log(`[realtimeEngine] ${cameraSide}侧摄像头 ← 左手bin: ${videoFileName}`);
 
             try {
                 const startResult = await this.sendCameraCommand('start_continuous_recording', {
-                    side: 'left',
+                    side: cameraSide,
                     output_filename: videoFileName
                 });
                 if (startResult.success) {
-                    console.log('[realtimeEngine] ✅ 左手录制已启动');
-                    this.videoFileNames.left = videoFileName;
+                    console.log(`[realtimeEngine] ✅ ${cameraSide}侧录制已启动`);
+                    this.videoFileNames[cameraSide] = videoFileName;
+                    // 标记该摄像头已被使用（避免同一摄像头被两个 bin 重复使用）
+                    availableSides = availableSides.filter(s => s !== cameraSide);
                 } else {
-                    console.error('[realtimeEngine] ❌ 左手录制启动失败:', startResult.error);
+                    console.error(`[realtimeEngine] ❌ ${cameraSide}侧录制启动失败:`, startResult.error);
                 }
             } catch (error) {
-                console.error('[realtimeEngine] 左手摄像头录制请求失败:', error);
+                console.error(`[realtimeEngine] ${cameraSide}侧录制请求失败:`, error);
             }
         }
 
-        // 右手摄像头：启动帧录制
+        // 右手 bin → 摄像头
         if (binFileNameRight) {
+            const cameraSide = mapBinToCamera('right');
             const videoFileName = `${binFileNameRight}.avi`;
-            console.log('[realtimeEngine] 右手摄像头: 启动录制: ' + videoFileName);
+            console.log(`[realtimeEngine] ${cameraSide}侧摄像头 ← 右手bin: ${videoFileName}`);
 
             try {
                 const startResult = await this.sendCameraCommand('start_continuous_recording', {
-                    side: 'right',
+                    side: cameraSide,
                     output_filename: videoFileName
                 });
                 if (startResult.success) {
-                    console.log('[realtimeEngine] ✅ 右手录制已启动');
-                    this.videoFileNames.right = videoFileName;
+                    console.log(`[realtimeEngine] ✅ ${cameraSide}侧录制已启动`);
+                    this.videoFileNames[cameraSide] = videoFileName;
                 } else {
-                    console.error('[realtimeEngine] ❌ 右手录制启动失败:', startResult.error);
+                    console.error(`[realtimeEngine] ❌ ${cameraSide}侧录制启动失败:`, startResult.error);
                 }
             } catch (error) {
-                console.error('[realtimeEngine] 右手摄像头录制请求失败:', error);
+                console.error(`[realtimeEngine] ${cameraSide}侧录制请求失败:`, error);
             }
         }
     }
