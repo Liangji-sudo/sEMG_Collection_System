@@ -363,6 +363,22 @@ app.post('/api/camera/stop-recording', async (req, res) => {
     }
 });
 
+// 获取预览帧（静态图片）
+app.post('/api/camera/get-preview-frame', async (req, res) => {
+    try {
+        const { side } = req.body;
+
+        const result = await realtimeEngine.sendCameraCommand('get_preview_frame', {
+            side: side
+        });
+
+        res.json(result);
+    } catch (error) {
+        console.error('[server.js] 获取预览帧失败:', error);
+        res.json({ success: false, error: error.message });
+    }
+});
+
 // 获取摄像头状态
 app.get('/api/camera/status', (req, res) => {
     try {

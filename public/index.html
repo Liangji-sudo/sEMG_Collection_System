@@ -6155,7 +6155,7 @@
         <div style="background: white; border-radius: 12px; padding: 20px; width: 90%; max-width: 1200px; max-height: 90vh; overflow: auto;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                 <h3 style="margin: 0; font-size: 18px; color: #1f2937;">
-                    <i class="fas fa-camera"></i> 摄像头预览
+                    <i class="fas fa-camera"></i> 摄像头预览（静态帧）
                 </h3>
                 <button id="closeCameraPreviewBtn" style="background: #ef4444; color: white; border: none; border-radius: 6px; padding: 6px 12px; cursor: pointer;">
                     <i class="fas fa-times"></i> 关闭
@@ -6163,12 +6163,22 @@
             </div>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
                 <div>
-                    <h4 style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">左手摄像头</h4>
-                    <video id="leftCameraPreview" autoplay playsinline style="width: 100%; border-radius: 8px; background: #000;"></video>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <h4 style="margin: 0; font-size: 14px; color: #6b7280;">左手摄像头</h4>
+                        <button onclick="window.refreshPreviewFrame('left')" style="background: #3b82f6; color: white; border: none; border-radius: 4px; padding: 4px 8px; cursor: pointer; font-size: 12px;">
+                            <i class="fas fa-sync-alt"></i> 刷新
+                        </button>
+                    </div>
+                    <img id="leftCameraPreview" style="width: 100%; max-height: 400px; border-radius: 8px; background: #000; object-fit: contain;" alt="左手摄像头预览">
                 </div>
                 <div>
-                    <h4 style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">右手摄像头</h4>
-                    <video id="rightCameraPreview" autoplay playsinline style="width: 100%; border-radius: 8px; background: #000;"></video>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <h4 style="margin: 0; font-size: 14px; color: #6b7280;">右手摄像头</h4>
+                        <button onclick="window.refreshPreviewFrame('right')" style="background: #3b82f6; color: white; border: none; border-radius: 4px; padding: 4px 8px; cursor: pointer; font-size: 12px;">
+                            <i class="fas fa-sync-alt"></i> 刷新
+                        </button>
+                    </div>
+                    <img id="rightCameraPreview" style="width: 100%; max-height: 400px; border-radius: 8px; background: #000; object-fit: contain;" alt="右手摄像头预览">
                 </div>
             </div>
         </div>

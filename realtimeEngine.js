@@ -373,31 +373,38 @@ class RealtimeEngine extends EventEmitter {
     onCollectionResume() { this.collectionPaused = false; }
 
     async onCollectionStop(completed) {
-        // 【新增】停止视频录制
+        // 【修改】停止视频录制并保存 MP4
         if (this.videoRecordingStarted && this.camera_connected) {
-            console.log('[realtimeEngine] 🎥 停止视频录制...');
+            console.log('[realtimeEngine] 🎥 停止视频录制并保存 MP4...');
 
-            // 停止左手摄像头
-            if (this.collectionBins?.dev1) {
+            // 停止左手摄像头并保存
+            if (this.videoFileNames?.left) {
                 try {
-                    await this.sendCameraCommand('stop_recording', { side: 'left' });
-                    console.log('[realtimeEngine] ✅ 左手摄像头录制已停止');
+                    await this.sendCameraCommand('stop_and_save', {
+                        side: 'left',
+                        output_filename: this.videoFileNames.left
+                    });
+                    console.log('[realtimeEngine] ✅ 左手摄像头 MP4 已保存:', this.videoFileNames.left);
                 } catch (err) {
-                    console.error('[realtimeEngine] 停止左手摄像头录制失败:', err);
+                    console.error('[realtimeEngine] 保存左手 MP4 失败:', err);
                 }
             }
 
-            // 停止右手摄像头
-            if (this.collectionBins?.dev2) {
+            // 停止右手摄像头并保存
+            if (this.videoFileNames?.right) {
                 try {
-                    await this.sendCameraCommand('stop_recording', { side: 'right' });
-                    console.log('[realtimeEngine] ✅ 右手摄像头录制已停止');
+                    await this.sendCameraCommand('stop_and_save', {
+                        side: 'right',
+                        output_filename: this.videoFileNames.right
+                    });
+                    console.log('[realtimeEngine] ✅ 右手摄像头 MP4 已保存:', this.videoFileNames.right);
                 } catch (err) {
-                    console.error('[realtimeEngine] 停止右手摄像头录制失败:', err);
+                    console.error('[realtimeEngine] 保存右手 MP4 失败:', err);
                 }
             }
 
             this.videoRecordingStarted = false;
+            this.videoFileNames = null;
         }
 
         if (this.stageFileOpen && !this.isClosingStageFile) {
@@ -731,6 +738,95 @@ class RealtimeEngine extends EventEmitter {
             await this.sendStorageCommand('video_recording_started', videoInfo).catch(err => {
                 console.error('[realtimeEngine] 保存视频信息到H5失败:', err);
             });
+        }
+    }
+
+    /**
+     * 标记HLS录制起始点（按空格键时调用）
+     */
+    async _markVideoRecordingStart(timestamp, stageName) {
+        console.log('[realtimeEngine] 🎥 标记HLS录制起始点（按空格键）...');
+
+        if (!this.camera_connected) {
+            console.error('[realtimeEngine] ❌ camera_server未连接，无法标记录制起始');
+            return;
+        }
+
+        // 获取 collection bins（用于生成视频文件名）
+        const binFileNameLeft = this.collectionBins?.dev1;
+        const binFileNameRight = this.collectionBins?.dev2;
+
+        if (!binFileNameLeft && !binFileNameRight) {
+            console.warn('[realtimeEngine] 未找到collection bins，无法标记录制');
+            return;
+        }
+
+        console.log('[realtimeEngine] Collection bins:', this.collectionBins);
+
+        // 初始化 videoFileNames
+        this.videoFileNames = this.videoFileNames || {};
+
+        // 标记左手摄像头录制起始
+        if (binFileNameLeft) {
+            const videoFileName = `${binFileNameLeft}.mp4`;
+            console.log('[realtimeEngine] 标记左手摄像头录制起始: ' + videoFileName);
+
+            try {
+                const result = await this.sendCameraCommand('mark_recording_start', {
+                    side: 'left'
+                });
+
+                if (result.success) {
+                    console.log('[realtimeEngine] ✅ 左手摄像头录制起始已标记，分段:', result.mark_segment);
+
+                    // 保存视频文件名，用于后续停止时保存
+                    this.videoFileNames.left = videoFileName;
+
+                    // 通知 storage_server 记录视频信息
+                    this._saveVideoInfoToH5({
+                        video_left: videoFileName,
+                        video_right: null,
+                        video_start_timestamp: timestamp,
+                        h5_file_name: this.currentH5FileName || null
+                    });
+                } else {
+                    console.error('[realtimeEngine] ❌ 标记左手摄像头录制起始失败:', result.error);
+                }
+            } catch (error) {
+                console.error('[realtimeEngine] 标记左手摄像头录制起始请求失败:', error);
+            }
+        }
+
+        // 标记右手摄像头录制起始
+        if (binFileNameRight) {
+            const videoFileName = `${binFileNameRight}.mp4`;
+            console.log('[realtimeEngine] 标记右手摄像头录制起始: ' + videoFileName);
+
+            try {
+                const result = await this.sendCameraCommand('mark_recording_start', {
+                    side: 'right'
+                });
+
+                if (result.success) {
+                    console.log('[realtimeEngine] ✅ 右手摄像头录制起始已标记，分段:', result.mark_segment);
+
+                    this.videoFileNames.right = videoFileName;
+
+                    // 如果左手没有配置，这里通知 storage_server
+                    if (!binFileNameLeft) {
+                        this._saveVideoInfoToH5({
+                            video_left: null,
+                            video_right: videoFileName,
+                            video_start_timestamp: timestamp,
+                            h5_file_name: this.currentH5FileName || null
+                        });
+                    }
+                } else {
+                    console.error('[realtimeEngine] ❌ 标记右手摄像头录制起始失败:', result.error);
+                }
+            } catch (error) {
+                console.error('[realtimeEngine] 标记右手摄像头录制起始请求失败:', error);
+            }
         }
     }
 

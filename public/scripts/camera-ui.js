@@ -364,35 +364,63 @@
     }
 
     /**
-     * 打开摄像头预览弹窗
+     * 打开摄像头预览弹窗（静态帧预览）
      * @param {string} side - 'left' 或 'right' 或 null（显示全部）
      */
-    function openCameraPreview(side = null) {
-        console.log('[CameraUI] 打开摄像头预览:', side || 'both');
-
-        if (!isCameraStreaming) {
-            showToast('摄像头未推流', 'warning');
-            return;
-        }
+    async function openCameraPreview(side = null) {
+        console.log('[CameraUI] 打开摄像头预览（静态帧）:', side || 'both');
 
         const modal = document.getElementById('cameraPreviewModal');
         if (!modal) return;
 
-        // 绑定视频流到video元素
-        const leftVideo = document.getElementById('leftCameraPreview');
-        const rightVideo = document.getElementById('rightCameraPreview');
-
-        if (leftVideo && window.cameraControl && (side === null || side === 'left')) {
-            window.cameraControl.attachStreamToVideo('left', leftVideo);
-        }
-
-        if (rightVideo && window.cameraControl && (side === null || side === 'right')) {
-            window.cameraControl.attachStreamToVideo('right', rightVideo);
-        }
-
         // 显示弹窗
         modal.style.display = 'flex';
+
+        // 【修改】使用静态帧预览，不再使用视频流
+        if (side === null || side === 'left') {
+            await refreshPreviewFrame('left');
+        }
+
+        if (side === null || side === 'right') {
+            await refreshPreviewFrame('right');
+        }
     }
+
+    /**
+     * 刷新预览帧
+     * @param {string} side - 'left' 或 'right'
+     */
+    async function refreshPreviewFrame(side) {
+        console.log(`[CameraUI] 刷新${side}侧预览帧...`);
+
+        try {
+            const response = await fetch('/api/camera/get-preview-frame', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ side: side })
+            });
+
+            const result = await response.json();
+
+            if (result.success && result.frame) {
+                // 显示 base64 图像
+                const imgElement = document.getElementById(`${side}CameraPreview`);
+                if (imgElement) {
+                    imgElement.src = `data:image/jpeg;base64,${result.frame}`;
+                    console.log(`[CameraUI] ✅ ${side}侧预览帧已更新`);
+                }
+            } else {
+                console.error(`[CameraUI] 获取${side}侧预览帧失败:`, result.error);
+                showToast(`获取${side}侧预览失败`, 'error');
+            }
+        } catch (error) {
+            console.error(`[CameraUI] 刷新${side}侧预览帧失败:`, error);
+            showToast(`刷新${side}侧预览失败`, 'error');
+        }
+    }
+
+    // 将 refreshPreviewFrame 暴露到全局，供 HTML 按钮调用
+    window.refreshPreviewFrame = refreshPreviewFrame;
 
     /**
      * 关闭摄像头预览弹窗
@@ -403,35 +431,18 @@
             modal.style.display = 'none';
         }
 
-        // 停止video播放并释放摄像头流
-        const leftVideo = document.getElementById('leftCameraPreview');
-        const rightVideo = document.getElementById('rightCameraPreview');
+        // 【修改】静态帧预览不需要释放流，只需清空图片
+        const leftImg = document.getElementById('leftCameraPreview');
+        const rightImg = document.getElementById('rightCameraPreview');
 
-        if (leftVideo && leftVideo.srcObject) {
-            // 停止所有轨道以释放摄像头
-            leftVideo.srcObject.getTracks().forEach(track => {
-                track.stop();
-                console.log('[CameraUI] 左侧摄像头轨道已停止');
-            });
-            leftVideo.srcObject = null;
+        if (leftImg) {
+            leftImg.src = '';
         }
-        if (rightVideo && rightVideo.srcObject) {
-            // 停止所有轨道以释放摄像头
-            rightVideo.srcObject.getTracks().forEach(track => {
-                track.stop();
-                console.log('[CameraUI] 右侧摄像头轨道已停止');
-            });
-            rightVideo.srcObject = null;
+        if (rightImg) {
+            rightImg.src = '';
         }
 
-        // 更新 cameraControl 的流状态
-        if (window.cameraControl) {
-            // 清空流对象
-            window.cameraControl.streams.left = null;
-            window.cameraControl.streams.right = null;
-            window.cameraControl.isStreaming = false;
-            console.log('[CameraUI] 摄像头流已释放');
-        }
+        console.log('[CameraUI] 预览窗口已关闭');
     }
 
     /**

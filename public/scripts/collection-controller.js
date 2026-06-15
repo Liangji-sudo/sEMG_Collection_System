@@ -1119,16 +1119,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this._currentVideoStartTimestamp = null;
             this._currentH5FileName = null;
 
-            // 【新增】采集开始时立即启动摄像头录制（不等空格键）
-            // 这样可以确保空格时间戳与视频帧精确对应，无启动延迟
-            if (!isTestMode && window.cameraControl) {
-                console.log('[Collection] 🎥 采集开始，立即启动摄像头录制...');
-                const videoStartTime = Date.now() / 1000; // 转为秒
-                await this._startCameraRecording(videoStartTime);
-                this._cameraRecordingStarted = true;
-                this._currentVideoStartTimestamp = videoStartTime;
-                console.log('[Collection] ✅ 摄像头录制已启动，开始时间:', videoStartTime);
-            }
+            // 【注释】HLS 录制已在配置摄像头时启动，不需要在采集开始时再启动
+            // 按空格键时会标记录制起始分段
 
             // 构建 collection_start payload
             const startPayload = {
