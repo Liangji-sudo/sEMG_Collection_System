@@ -544,11 +544,26 @@
             console.log('[CameraUI] 关闭结果:', results);
         }
 
+        // 清空所有预览帧，避免残留上一次的画面
+        clearPreviewImages();
+
         isCameraStreaming = false;
         updateCameraStreamButton(false);
         updateCameraStatus('left', '已配置', false);
         updateCameraStatus('right', '已配置', false);
         showToast('摄像头已关闭', 'info');
+    }
+
+    function clearPreviewImages() {
+        // 清空 DOM 中的预览图
+        ['left', 'right'].forEach(side => {
+            const img = document.getElementById(`${side}CameraPreview`);
+            if (img) img.src = '';
+        });
+        // 清空 CameraControl 中缓存的帧
+        if (window.CameraControl) {
+            window.CameraControl.clearPreviewFrames();
+        }
     }
 
     // ==================== 预览弹窗 ====================

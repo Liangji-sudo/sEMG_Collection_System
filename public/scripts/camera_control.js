@@ -452,6 +452,15 @@
         init();
     }
 
+    /**
+     * 清空所有缓存的预览帧
+     */
+    function clearPreviewFrames() {
+        CamState.previewFrames.left = null;
+        CamState.previewFrames.right = null;
+        console.log('[CameraControl] 预览帧缓存已清空');
+    }
+
     // ================= 暴露全局 API =================
     window.CameraControl = {
         // 连接管理
@@ -471,6 +480,7 @@
         getPreviewFrame,
         getCameraState,
         getScannedDevices: () => CamState.scannedDevices,
+        clearPreviewFrames,
 
         // 回调
         set onPreviewFrame(cb) { CamState.onPreviewFrame = cb; },
