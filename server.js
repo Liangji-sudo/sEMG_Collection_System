@@ -302,84 +302,11 @@ app.get('/api/storage-volume', (req, res) => {
     })();
 });
 
-// ===================== 摄像头管理 API =====================
+// ===================== 摄像头管理 API（降级/兼容路由） =====================
+// 注意：前端现在通过 camera_control.js 直连 camera_server WebSocket (:8768)
+// 以下 HTTP 路由仅作为降级方案保留
 
-// 设置摄像头映射
-app.post('/api/camera/set-mapping', async (req, res) => {
-    const { side, cameraInfo } = req.body;
-    try {
-        // 【修改】通过 realtimeEngine 转发给 camera_server
-        await realtimeEngine.onCameraSetConfig({
-            side: side,
-            device_name: cameraInfo.label,
-            device_id: cameraInfo.deviceId
-        });
-        res.json({ success: true });
-    } catch (err) {
-        res.json({ success: false, error: err.message });
-    }
-});
-
-// 开始推流
-app.post('/api/camera/start-streaming', (req, res) => {
-    const { side } = req.body;
-    try {
-        const result = deviceSync.startCameraStreaming(side || 'both');
-        res.json(result);
-    } catch (err) {
-        res.json({ success: false, error: err.message });
-    }
-});
-
-// 停止推流
-app.post('/api/camera/stop-streaming', (req, res) => {
-    const { side } = req.body;
-    try {
-        const result = deviceSync.stopCameraStreaming(side || 'both');
-        res.json(result);
-    } catch (err) {
-        res.json({ success: false, error: err.message });
-    }
-});
-
-// 开始录制
-app.post('/api/camera/start-recording', async (req, res) => {
-    const { recordings, metadata } = req.body;
-    try {
-        const result = await deviceSync.startCameraRecording(recordings, metadata);
-        res.json(result);
-    } catch (err) {
-        res.json({ success: false, error: err.message });
-    }
-});
-
-// 停止录制
-app.post('/api/camera/stop-recording', async (req, res) => {
-    try {
-        const result = await deviceSync.stopCameraRecording();
-        res.json(result);
-    } catch (err) {
-        res.json({ success: false, error: err.message });
-    }
-});
-
-// 获取预览帧（静态图片）
-app.post('/api/camera/get-preview-frame', async (req, res) => {
-    try {
-        const { side } = req.body;
-
-        const result = await realtimeEngine.sendCameraCommand('get_preview_frame', {
-            side: side
-        });
-
-        res.json(result);
-    } catch (error) {
-        console.error('[server.js] 获取预览帧失败:', error);
-        res.json({ success: false, error: error.message });
-    }
-});
-
-// 枚举摄像头设备
+// 枚举摄像头设备（降级）
 app.get('/api/camera/list', async (req, res) => {
     try {
         const result = await realtimeEngine.sendCameraCommand('list_cameras', {});
@@ -390,7 +317,7 @@ app.get('/api/camera/list', async (req, res) => {
     }
 });
 
-// 设置摄像头配置
+// 设置摄像头配置（降级）
 app.post('/api/camera/set-camera', async (req, res) => {
     try {
         const { side, device_name, device_id } = req.body;
@@ -406,11 +333,25 @@ app.post('/api/camera/set-camera', async (req, res) => {
     }
 });
 
-// 获取摄像头状态
-app.get('/api/camera/status', (req, res) => {
+// 获取预览帧（降级，前端优先使用WebSocket推送）
+app.post('/api/camera/get-preview-frame', async (req, res) => {
     try {
-        const status = deviceSync.getCameraStatus();
-        res.json({ success: true, cameras: status });
+        const { side } = req.body;
+        const result = await realtimeEngine.sendCameraCommand('get_preview_frame', {
+            side: side
+        });
+        res.json(result);
+    } catch (error) {
+        console.error('[server.js] 获取预览帧失败:', error);
+        res.json({ success: false, error: error.message });
+    }
+});
+
+// 获取摄像头状态（降级）
+app.get('/api/camera/status', async (req, res) => {
+    try {
+        const result = await realtimeEngine.sendCameraCommand('get_status', {});
+        res.json(result);
     } catch (err) {
         res.json({ success: false, error: err.message });
     }

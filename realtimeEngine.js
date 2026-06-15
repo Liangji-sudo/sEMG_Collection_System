@@ -743,6 +743,10 @@ class RealtimeEngine extends EventEmitter {
 
     /**
      * 标记HLS录制起始点（按空格键时调用）
+     *
+     * 新流程：
+     * 1. 先启动HLS持续录制（自动停止MJPEG预览，释放摄像头）
+     * 2. 再标记录制起始分段
      */
     async _markVideoRecordingStart(timestamp, stageName) {
         console.log('[realtimeEngine] 🎥 标记HLS录制起始点（按空格键）...');
@@ -766,12 +770,23 @@ class RealtimeEngine extends EventEmitter {
         // 初始化 videoFileNames
         this.videoFileNames = this.videoFileNames || {};
 
-        // 标记左手摄像头录制起始
+        // 左手摄像头：先启动HLS录制，再标记起始点
         if (binFileNameLeft) {
             const videoFileName = `${binFileNameLeft}.mp4`;
-            console.log('[realtimeEngine] 标记左手摄像头录制起始: ' + videoFileName);
+            console.log('[realtimeEngine] 左手摄像头: 启动HLS + 标记起始: ' + videoFileName);
 
             try {
+                // 步骤1：启动HLS持续录制（camera_server会自动停止MJPEG预览）
+                const startResult = await this.sendCameraCommand('start_continuous_recording', {
+                    side: 'left'
+                });
+                if (!startResult.success) {
+                    console.error('[realtimeEngine] ❌ 左手HLS录制启动失败:', startResult.error);
+                } else {
+                    console.log('[realtimeEngine] ✅ 左手HLS录制已启动');
+                }
+
+                // 步骤2：标记录制起始分段
                 const result = await this.sendCameraCommand('mark_recording_start', {
                     side: 'left'
                 });
@@ -797,12 +812,23 @@ class RealtimeEngine extends EventEmitter {
             }
         }
 
-        // 标记右手摄像头录制起始
+        // 右手摄像头：先启动HLS录制，再标记起始点
         if (binFileNameRight) {
             const videoFileName = `${binFileNameRight}.mp4`;
-            console.log('[realtimeEngine] 标记右手摄像头录制起始: ' + videoFileName);
+            console.log('[realtimeEngine] 右手摄像头: 启动HLS + 标记起始: ' + videoFileName);
 
             try {
+                // 步骤1：启动HLS持续录制
+                const startResult = await this.sendCameraCommand('start_continuous_recording', {
+                    side: 'right'
+                });
+                if (!startResult.success) {
+                    console.error('[realtimeEngine] ❌ 右手HLS录制启动失败:', startResult.error);
+                } else {
+                    console.log('[realtimeEngine] ✅ 右手HLS录制已启动');
+                }
+
+                // 步骤2：标记录制起始分段
                 const result = await this.sendCameraCommand('mark_recording_start', {
                     side: 'right'
                 });
@@ -1260,7 +1286,7 @@ class RealtimeEngine extends EventEmitter {
     }
 
     /**
-     * 发送命令到Camera服务器
+     * 发送命令到Camera服务器（带 request_id 匹配）
      */
     async sendCameraCommand(command, data = {}) {
         return new Promise((resolve, reject) => {
@@ -1269,24 +1295,26 @@ class RealtimeEngine extends EventEmitter {
                 return;
             }
 
-            const payload = { command, ...data };
+            const requestId = `rt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            const payload = { command, request_id: requestId, ...data };
 
             // 设置超时
             const timeout = setTimeout(() => {
+                this.camera_client.removeEventListener('message', messageHandler);
                 reject(new Error('Camera命令超时'));
-            }, 10000);
+            }, 15000);
 
-            // 发送命令并等待响应
+            // 发送命令并等待匹配 request_id 的响应
             const messageHandler = (event) => {
                 try {
                     const response = JSON.parse(event.data);
+                    // 只匹配带相同 request_id 的响应（忽略预览帧等推送消息）
+                    if (response.request_id !== requestId) return;
                     clearTimeout(timeout);
                     this.camera_client.removeEventListener('message', messageHandler);
                     resolve(response);
                 } catch (error) {
-                    clearTimeout(timeout);
-                    this.camera_client.removeEventListener('message', messageHandler);
-                    reject(error);
+                    // 非JSON消息，忽略
                 }
             };
 

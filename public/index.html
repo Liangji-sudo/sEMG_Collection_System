@@ -5560,7 +5560,7 @@
                     </div>
                     <div class="status-sub" id="cameraStreamInfo">点击按钮配置摄像头</div>
                     <button class="config-btn load-btn" id="cameraStreamBtn" style="width: 100%; margin-top: 8px;">
-                        <i class="fas fa-video"></i> <span id="cameraStreamBtnText">启动推流</span>
+                        <i class="fas fa-video"></i> <span id="cameraStreamBtnText">打开摄像头</span>
                     </button>
                 </div>
 
@@ -6150,12 +6150,12 @@
     </div>
 
 
-    <!-- 摄像头预览弹窗 -->
+    <!-- 摄像头预览弹窗（实时推流） -->
     <div id="cameraPreviewModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.8); z-index: 10000; justify-content: center; align-items: center;">
         <div style="background: white; border-radius: 12px; padding: 20px; width: 90%; max-width: 1200px; max-height: 90vh; overflow: auto;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                 <h3 style="margin: 0; font-size: 18px; color: #1f2937;">
-                    <i class="fas fa-camera"></i> 摄像头预览（静态帧）
+                    <i class="fas fa-camera"></i> 摄像头预览（实时推流）
                 </h3>
                 <button id="closeCameraPreviewBtn" style="background: #ef4444; color: white; border: none; border-radius: 6px; padding: 6px 12px; cursor: pointer;">
                     <i class="fas fa-times"></i> 关闭
@@ -6163,21 +6163,11 @@
             </div>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
                 <div>
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                        <h4 style="margin: 0; font-size: 14px; color: #6b7280;">左手摄像头</h4>
-                        <button onclick="window.refreshPreviewFrame('left')" style="background: #3b82f6; color: white; border: none; border-radius: 4px; padding: 4px 8px; cursor: pointer; font-size: 12px;">
-                            <i class="fas fa-sync-alt"></i> 刷新
-                        </button>
-                    </div>
+                    <h4 style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">左手摄像头</h4>
                     <img id="leftCameraPreview" style="width: 100%; max-height: 400px; border-radius: 8px; background: #000; object-fit: contain;" alt="左手摄像头预览">
                 </div>
                 <div>
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                        <h4 style="margin: 0; font-size: 14px; color: #6b7280;">右手摄像头</h4>
-                        <button onclick="window.refreshPreviewFrame('right')" style="background: #3b82f6; color: white; border: none; border-radius: 4px; padding: 4px 8px; cursor: pointer; font-size: 12px;">
-                            <i class="fas fa-sync-alt"></i> 刷新
-                        </button>
-                    </div>
+                    <h4 style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">右手摄像头</h4>
                     <img id="rightCameraPreview" style="width: 100%; max-height: 400px; border-radius: 8px; background: #000; object-fit: contain;" alt="右手摄像头预览">
                 </div>
             </div>
@@ -6219,7 +6209,7 @@
                     <i class="fas fa-sync-alt"></i> 刷新列表
                 </button>
                 <button id="applyCameraConfigBtn" style="background: #3b82f6; color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer; font-size: 13px;">
-                    <i class="fas fa-check"></i> 应用配置
+                    <i class="fas fa-play"></i> 打开摄像头
                 </button>
             </div>
         </div>
@@ -6230,9 +6220,9 @@
     <!-- #1 蓝牙ble设备扫描，连接，断开 控制逻辑 -->
     <script defer src="scripts/ble_control.js"></script>
 
-    <!-- 摄像头控制模块 -->
-    <script defer src="scripts/camera-control-simple.js?v=1781422854"></script>
-    <script defer src="scripts/camera-ui.js?v=1781422157"></script>
+    <!-- 摄像头控制模块（WebSocket直连 camera_server） -->
+    <script defer src="scripts/camera_control.js?v=20260615"></script>
+    <script defer src="scripts/camera-ui.js?v=20260615"></script>
 
     <!-- 设备状态悬浮窗口 -->
     <script defer src="scripts/device-status-widget.js"></script>
