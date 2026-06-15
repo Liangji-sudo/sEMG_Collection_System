@@ -74,6 +74,7 @@ class CameraCapture:
         self.fps_frame_count = 0
         self.fps_last_time = time.time()
         self.current_fps = 0
+        self.frame_recorder = None  # FrameRecorder instance (set when recording)
 
     def start(self):
         """启动 MJPEG 采集"""
@@ -150,6 +151,15 @@ class CameraCapture:
 
                     # Base64 编码
                     b64 = base64.b64encode(frame).decode()
+
+                    # 写入录制器（如果正在录制）
+                    # 先捕获引用避免 TOCTOU 竞态
+                    recorder = self.frame_recorder
+                    if recorder:
+                        try:
+                            recorder.write_frame(frame)
+                        except Exception:
+                            pass
 
                     # 线程安全地放入 asyncio 队列
                     try:
@@ -231,264 +241,187 @@ class CameraCapture:
 
 # ==================== HLS 录制器（采集时使用） ====================
 
-class HLSRecorder:
-    """HLS 持续录制器 - 采集时以 HLS 分段录制，按标记保存精确片段"""
+class FrameRecorder:
+    """帧录制器 — 从 MJPEG 预览管道直接保存帧，无需单独的 ffmpeg 进程"""
 
-    def __init__(self, side, device_name, ffmpeg_path, temp_dir):
+    def __init__(self, side, ffmpeg_path, output_dir):
         self.side = side
-        self.device_name = device_name
         self.ffmpeg_path = ffmpeg_path
-        self.temp_dir = temp_dir / side
-        self.temp_dir.mkdir(parents=True, exist_ok=True)
+        self.output_dir = output_dir
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.raw_file = None
+        self.raw_path = None
+        self.output_path = None
+        self.recording = False
+        self.recording_started_at = None
+        self.recording_stopped_at = None
+        self.frame_count = 0
 
-        self.process = None
-        self.running = False
-        self.current_segment = -1  # -1 确保第一个分片(segment_00000)能被追踪到
-        self.mark_segment = None
-        self.monitor_thread = None
-
-    def start(self):
-        """启动 HLS 录制"""
-        if self.running:
-            print(f'[HLSRecorder] [{self.side}] 已在运行中')
+    def start(self, output_filename):
+        """开始录制 — 打开原始 MJPEG 文件"""
+        if self.recording:
+            print(f'[FrameRecorder] [{self.side}] 已在录制中')
             return True
 
-        # 清理旧临时文件
-        for f in self.temp_dir.glob('*.ts'):
-            f.unlink()
-        for f in self.temp_dir.glob('*.m3u8'):
-            f.unlink()
-
-        clean_device_name = re.sub(r'\s*\([0-9a-fA-F:]+\)\s*$', '', self.device_name).strip()
-
-        m3u8_path = self.temp_dir / 'stream.m3u8'
-        segment_pattern = str(self.temp_dir / 'segment_%05d.ts')
-
-        ffmpeg_cmd = [
-            self.ffmpeg_path,
-            '-f', 'dshow',
-            '-video_size', '1280x720',
-            '-framerate', '30',
-            '-i', f'video={clean_device_name}',
-            '-c:v', 'libx264',
-            '-preset', 'ultrafast',
-            '-tune', 'zerolatency',
-            '-g', '30',
-            '-f', 'hls',
-            '-hls_time', '1',
-            '-hls_list_size', '0',
-            '-hls_flags', 'append_list',
-            '-hls_segment_filename', segment_pattern,
-            str(m3u8_path)
-        ]
-
-        print(f'[HLSRecorder] [{self.side}] 启动HLS录制: {clean_device_name}')
+        self.output_path = self.output_dir / output_filename
+        self.raw_path = self.output_path.with_suffix('.mjpeg')
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            self.process = subprocess.Popen(
-                ffmpeg_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-            )
+            self.raw_file = open(self.raw_path, 'wb')
+        except Exception as e:
+            print(f'[FrameRecorder] [{self.side}] \u274C 无法创建文件: {e}')
+            return False
 
-            self.running = True
-            print(f'[HLSRecorder] [{self.side}] ✅ HLS录制已启动, PID: {self.process.pid}')
+        self.recording = True
+        self.recording_started_at = time.time()
+        self.frame_count = 0
+        print(f'[FrameRecorder] [{self.side}] \u25B6 开始录制: {self.output_path}')
+        print(f'[FrameRecorder] [{self.side}]   原始MJPEG: {self.raw_path}')
+        return True
 
-            self.monitor_thread = threading.Thread(target=self._monitor_segments, daemon=True)
-            self.monitor_thread.start()
+    def write_frame(self, frame_bytes):
+        """写入一帧 MJPEG 数据（由 CameraCapture._read_frames 线程调用）"""
+        if self.recording and self.raw_file:
+            try:
+                self.raw_file.write(frame_bytes)
+                self.frame_count += 1
+            except Exception as e:
+                print(f'[FrameRecorder] [{self.side}] 写入帧失败: {e}')
 
-            return True
+    def stop_and_save(self):
+        """停止录制，将 MJPEG → AVI 转换"""
+        if not self.recording:
+            return {'success': False, 'error': '录制器未在运行'}
+
+        self.recording = False
+        self.recording_stopped_at = time.time()
+
+        if self.raw_file:
+            self.raw_file.close()
+            self.raw_file = None
+
+        if not self.raw_path or not self.raw_path.exists():
+            return {'success': False, 'error': f'MJPEG文件未生成: {self.raw_path}'}
+
+        raw_size = os.path.getsize(self.raw_path)
+        print(f'[FrameRecorder] [{self.side}] raw MJPEG: {self.raw_path} '
+              f'({raw_size} bytes, {self.frame_count} frames, '
+              f'{self.recording_stopped_at - self.recording_started_at:.1f}s elapsed)')
+
+        # 用 ffmpeg 将 MJPEG 流缩放并封装为 AVI
+        # 预览用 1280x720@30fps（保证摄像头兼容性），录制缩放到 640x480@15fps（控制文件大小）
+        try:
+            result = subprocess.run([
+                self.ffmpeg_path,
+                '-f', 'mjpeg',
+                '-i', str(self.raw_path),
+                '-vf', 'scale=640:480',
+                '-r', '15',
+                '-c:v', 'mjpeg',
+                '-q:v', '12',
+                '-y',
+                str(self.output_path)
+            ], capture_output=True, text=True, timeout=60,
+               creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
+
+            if not self.output_path.exists():
+                stderr_tail = result.stderr[-500:] if result.stderr else '(none)'
+                print(f'[FrameRecorder] [{self.side}] \u274C ffmpeg 封装失败')
+                print(f'[FrameRecorder] [{self.side}]   stderr: {stderr_tail}')
+                return {'success': False, 'error': f'AVI封装失败: {stderr_tail[:200]}'}
+
+            avi_size = os.path.getsize(self.output_path)
+            print(f'[FrameRecorder] [{self.side}] \u2705 AVI已封装: {self.output_path} '
+                  f'({avi_size} bytes, {avi_size/(1024*1024):.1f} MB)')
+
+            # 清理原始 MJPEG 文件
+            try:
+                os.remove(str(self.raw_path))
+                print(f'[FrameRecorder] [{self.side}]   已清理 raw MJPEG')
+            except Exception as e:
+                print(f'[FrameRecorder] [{self.side}]   清理 raw MJPEG 失败: {e}')
+
+            # 提取时间戳
+            timing = self._extract_timing(self.output_path)
+
+            return {
+                'success': True,
+                'path': str(self.output_path),
+                'size': avi_size,
+                'frame_count': self.frame_count,
+                'timing': timing
+            }
 
         except Exception as e:
-            print(f'[HLSRecorder] [{self.side}] ❌ 启动失败: {e}')
+            print(f'[FrameRecorder] [{self.side}] \u274C 封装异常: {e}')
             import traceback
             traceback.print_exc()
-            return False
+            return {'success': False, 'error': str(e)}
 
-    def _monitor_segments(self):
-        """监控生成的分段"""
-        while self.running and self.process and self.process.poll() is None:
-            try:
-                m3u8_path = self.temp_dir / 'stream.m3u8'
-                if m3u8_path.exists():
-                    with open(m3u8_path, 'r') as f:
-                        content = f.read()
-                        segments = re.findall(r'segment_(\d+)\.ts', content)
-                        if segments:
-                            latest = max([int(s) for s in segments])
-                            if latest > self.current_segment:
-                                self.current_segment = latest
-                time.sleep(0.5)
-            except Exception as e:
-                print(f'[HLSRecorder] [{self.side}] 监控分段出错: {e}')
-                time.sleep(1)
-
-    def mark_start(self):
-        """标记录制起始点"""
-        self.mark_segment = self.current_segment
-        print(f'[HLSRecorder] [{self.side}] 🎬 标记录制起始: 分段 {self.mark_segment}')
-        return self.mark_segment
-
-    def stop_and_save(self, output_path):
-        """停止录制并保存标记片段到MP4"""
-        if not self.running:
-            return False
-
-        end_segment_before = self.current_segment
-        print(f'[HLSRecorder] [{self.side}] 停止前: mark={self.mark_segment}, current_segment={end_segment_before}')
-
-        # 停止监控线程
-        self.running = False
-
-        # 停止 ffmpeg
+    def _extract_timing(self, avi_path):
+        """用 ffprobe 提取视频时间戳"""
+        timing = {
+            'recording_started_at': self.recording_started_at,
+            'recording_stopped_at': self.recording_stopped_at,
+            'duration': 0,
+            'first_pts': 0,
+            'first_frame_unix': self.recording_started_at,
+            'last_frame_unix': self.recording_stopped_at,
+        }
         try:
-            if self.process:
-                # 发送 'q' 让 ffmpeg 优雅退出，写完最后的分片
-                self.process.stdin.write(b'q')
-                self.process.stdin.flush()
-                self.process.wait(timeout=8)
-                print(f'[HLSRecorder] [{self.side}] ffmpeg 已退出, exitcode={self.process.returncode}')
-        except subprocess.TimeoutExpired:
-            print(f'[HLSRecorder] [{self.side}] ffmpeg 超时，强制终止')
-            if self.process:
-                self.process.kill()
-                self.process.wait(timeout=3)
-        except Exception as e:
-            print(f'[HLSRecorder] [{self.side}] 停止ffmpeg出错: {e}')
-            if self.process:
-                self.process.kill()
-
-        # 等待文件系统刷新
-        time.sleep(0.5)
-
-        # 扫描实际存在的所有分段文件（不依赖 current_segment）
-        all_segments = []
-        for f in self.temp_dir.glob('segment_*.ts'):
-            m = re.search(r'segment_(\d+)\.ts', f.name)
-            if m:
-                all_segments.append(int(m.group(1)))
-
-        if all_segments:
-            all_segments.sort()
-            actual_start = all_segments[0]
-            actual_end = all_segments[-1]
-            print(f'[HLSRecorder] [{self.side}] 实际分段: {actual_start}~{actual_end} (共{len(all_segments)}个)')
-            print(f'[HLSRecorder] [{self.side}] 文件列表: {all_segments}')
-        else:
-            print(f'[HLSRecorder] [{self.side}] ❌ 未找到任何分段文件！')
-            print(f'[HLSRecorder] [{self.side}] 目录内容: {list(self.temp_dir.iterdir())}')
-            return False
-
-        # 用实际分段范围进行合并
-        if self.mark_segment is not None and self.mark_segment >= actual_start:
-            start_seg = self.mark_segment
-        else:
-            # 如果 mark 还没更新（current_segment=-1 的情况），从最早的分段开始
-            print(f'[HLSRecorder] [{self.side}] ⚠️ mark_segment={self.mark_segment} 无效，使用最早分段 {actual_start}')
-            start_seg = actual_start
-
-        end_seg = actual_end
-        print(f'[HLSRecorder] [{self.side}] 合并范围: {start_seg} -> {end_seg}')
-
-        segment_files = []
-        for i in range(start_seg, end_seg + 1):
-            seg_path = self.temp_dir / f'segment_{i:05d}.ts'
-            if seg_path.exists():
-                segment_files.append(seg_path)
-
-        if not segment_files:
-            print(f'[HLSRecorder] [{self.side}] ❌ 没有找到分段文件')
-            return False
-
-        print(f'[HLSRecorder] [{self.side}] 找到 {len(segment_files)} 个分段待合并')
-
-        concat_file = self.temp_dir / 'concat.txt'
-        with open(concat_file, 'w') as f:
-            for seg in segment_files:
-                f.write(f"file '{seg.absolute()}'\n")
-
-        merge_cmd = [
-            self.ffmpeg_path,
-            '-f', 'concat',
-            '-safe', '0',
-            '-i', str(concat_file),
-            '-c', 'copy',
-            '-y',
-            str(output_path)
-        ]
-
-        try:
+            ffprobe_path = self.ffmpeg_path.replace('ffmpeg.exe', 'ffprobe.exe')
+            # 获取视频时长
             result = subprocess.run(
-                merge_cmd,
-                capture_output=True,
-                timeout=30,
+                [ffprobe_path,
+                 '-v', 'error', '-show_entries', 'format=duration',
+                 '-of', 'default=noprint_wrappers=1:nokey=1',
+                 str(avi_path)],
+                capture_output=True, text=True, timeout=10,
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
             )
+            if result.returncode == 0 and result.stdout.strip():
+                duration = float(result.stdout.strip())
+                timing['duration'] = round(duration, 3)
 
-            if result.returncode == 0:
-                file_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
-                print(f'[HLSRecorder] [{self.side}] ✅ MP4已保存: {output_path} ({file_size} bytes)')
-                self._cleanup_temp_files()
-                return True
-            else:
-                print(f'[HLSRecorder] [{self.side}] ❌ 合并失败:')
-                print(result.stderr.decode('utf-8', errors='ignore'))
-                self._cleanup_temp_files()
-                return False
+            # 获取第一帧 PTS
+            result2 = subprocess.run(
+                [ffprobe_path,
+                 '-v', 'error', '-show_entries', 'packet=pts_time',
+                 '-of', 'default=noprint_wrappers=1:nokey=1',
+                 '-read_intervals', '%+#1',
+                 str(avi_path)],
+                capture_output=True, text=True, timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+            )
+            if result2.returncode == 0 and result2.stdout.strip():
+                first_pts = float(result2.stdout.strip().split('\n')[0])
+                timing['first_pts'] = round(first_pts, 3)
+
+            # 计算实际帧对应的 Unix 时间戳
+            if self.recording_started_at:
+                timing['first_frame_unix'] = round(
+                    self.recording_started_at + timing['first_pts'], 3)
+                timing['last_frame_unix'] = round(
+                    self.recording_started_at + timing['first_pts'] + timing['duration'], 3)
 
         except Exception as e:
-            print(f'[HLSRecorder] [{self.side}] ❌ 合并出错: {e}')
-            self._cleanup_temp_files()
-            return False
+            print(f'[FrameRecorder] [{self.side}] ffprobe 时间戳提取失败: {e}')
 
-    def _cleanup_temp_files(self):
-        """清理临时文件"""
+        # 写出 .timing.json
+        timing_path = avi_path.with_suffix(avi_path.suffix + '.timing.json')
         try:
-            for f in self.temp_dir.glob('*.ts'):
-                f.unlink()
-            for f in self.temp_dir.glob('*.m3u8'):
-                f.unlink()
-            for f in self.temp_dir.glob('*.txt'):
-                f.unlink()
-            print(f'[HLSRecorder] [{self.side}] 临时文件已清理')
+            with open(timing_path, 'w', encoding='utf-8') as f:
+                json.dump(timing, f, indent=2, ensure_ascii=False)
+            timing['sidecar'] = str(timing_path)
         except Exception as e:
-            print(f'[HLSRecorder] [{self.side}] 清理临时文件出错: {e}')
+            print(f'[FrameRecorder] [{self.side}] 写入时间戳文件失败: {e}')
+
+        return timing
 
     def get_preview_frame_b64(self):
-        """从HLS分段提取预览帧（base64编码）"""
-        try:
-            # 找最新分段
-            latest_seg = self.temp_dir / f'segment_{self.current_segment:05d}.ts'
-            if not latest_seg.exists():
-                latest_seg = self.temp_dir / f'segment_{max(0, self.current_segment - 1):05d}.ts'
-            if not latest_seg.exists():
-                return None
-
-            cmd = [
-                self.ffmpeg_path,
-                '-i', str(latest_seg),
-                '-vframes', '1',
-                '-f', 'image2pipe',
-                '-vcodec', 'mjpeg',
-                'pipe:1'
-            ]
-
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                timeout=5,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-            )
-
-            if result.returncode == 0 and result.stdout:
-                return base64.b64encode(result.stdout).decode()
-            return None
-
-        except Exception as e:
-            print(f'[HLSRecorder] [{self.side}] 提取预览帧失败: {e}')
-            return None
+        """兼容旧接口 — 预览帧由 CameraCapture 直接推送，无需从这里获取"""
+        return None
 
 
 # ==================== Camera Server 主类 ====================
@@ -497,7 +430,7 @@ class CameraServer:
     def __init__(self):
         self.cameras = {}           # {side: {device_name, device_id}}
         self.captures = {}          # {side: CameraCapture}   MJPEG实时采集
-        self.recorders = {}         # {side: HLSRecorder}     HLS录制
+        self.recorders = {}         # {side: FrameRecorder}   帧录制（复用MJPEG管道）
         self.camera_opened = {'left': False, 'right': False}  # 追踪摄像头是否曾被打开
 
         self.output_dir = Path('storage/video')
@@ -526,7 +459,7 @@ class CameraServer:
 
         print('[CameraServer] 摄像头服务器初始化完成')
         print(f'[CameraServer] 视频输出目录: {self.output_dir.absolute()}')
-        print('[CameraServer] 模式: MJPEG实时预览 + HLS录制')
+        print('[CameraServer] 模式: MJPEG实时预览 + 帧录制 (预览不中断)')
 
     # ==================== 帧广播任务 ====================
 
@@ -570,30 +503,13 @@ class CameraServer:
                 print(f'[CameraServer] 广播帧出错: {e}')
 
     async def _hls_preview_broadcast_loop(self):
-        """录制期间从HLS分段提取预览帧（每500ms）"""
+        """录制期间预览由主MJPEG管道继续推送，无需额外处理
+
+        旧架构需要此方法是因为录制时会停止MJPEG预览。
+        新架构（FrameRecorder）复用MJPEG管道，预览永不中断。
+        """
         while True:
-            await asyncio.sleep(0.5)
-            for side in ['left', 'right']:
-                if side in self.recorders and self.recorders[side].running:
-                    subscribers = list(self.preview_subscribers.get(side, set()))
-                    if not subscribers:
-                        continue
-                    recorder = self.recorders[side]
-                    frame_b64 = recorder.get_preview_frame_b64()
-                    if frame_b64:
-                        dead = set()
-                        for ws in subscribers:
-                            try:
-                                await ws.send(json.dumps({
-                                    'type': 'preview_frame',
-                                    'side': side,
-                                    'frame': frame_b64
-                                }))
-                            except:
-                                dead.add(ws)
-                        if dead:
-                            with self.subscribers_lock:
-                                self.preview_subscribers[side] -= dead
+            await asyncio.sleep(60)  # idle loop, kept for compatibility
 
     # ==================== 状态广播 ====================
 
@@ -613,7 +529,7 @@ class CameraServer:
 
     async def _push_recording_status(self):
         """推送当前录制状态给所有客户端"""
-        recording_sides = [s for s in ['left', 'right'] if s in self.recorders and self.recorders[s].running]
+        recording_sides = [s for s in ['left', 'right'] if s in self.recorders and self.recorders[s].recording]
         opened_sides = [s for s in ['left', 'right'] if self.camera_opened[s]]
         await self._broadcast_status_to_all({
             'type': 'recording_status',
@@ -846,7 +762,7 @@ class CameraServer:
             await asyncio.sleep(0.3)
 
         # 如果正在HLS录制，不能打开MJPEG（摄像头只能被一个进程占用）
-        if side in self.recorders and self.recorders[side].running:
+        if side in self.recorders and self.recorders[side].recording:
             return {'success': False, 'error': f'{side}侧正在HLS录制中，不能同时打开预览'}
 
         camera = self.cameras[side]
@@ -913,7 +829,11 @@ class CameraServer:
         return {'success': True, 'subscribed': False}
 
     async def _cmd_start_continuous_recording(self, data):
-        """启动HLS持续录制（由realtimeEngine在采集开始时调用）"""
+        """启动帧录制（由realtimeEngine在采集开始时调用）
+
+        与旧架构不同：不停止MJPEG预览，直接从预览管道保存帧。
+        预览在录制期间持续可用，且不存在dshow设备释放问题。
+        """
         side = data.get('side')
 
         if not side or side not in ['left', 'right']:
@@ -925,23 +845,28 @@ class CameraServer:
         if not self.ffmpeg_path:
             return {'success': False, 'error': 'ffmpeg未安装'}
 
-        # 先停止MJPEG采集（释放摄像头给HLS）
-        if side in self.captures and self.captures[side].running:
-            print(f'[CameraServer] [{side}] 停止MJPEG预览，切换到HLS录制...')
-            self.captures[side].stop()
-            del self.captures[side]
+        # 确保MJPEG预览在运行（不会停止它）
+        if side not in self.captures or not self.captures[side].running:
+            return {'success': False, 'error': f'{side}侧MJPEG预览未启动，请先open_camera'}
 
-        camera = self.cameras[side]
-        recorder = HLSRecorder(side, camera['device_name'], self.ffmpeg_path, self.temp_dir)
-        success = recorder.start()
+        output_filename = data.get('output_filename')
+        if not output_filename:
+            return {'success': False, 'error': '缺少 output_filename 参数'}
+
+        # 创建帧录制器（复用MJPEG管道，不创建新的ffmpeg进程）
+        recorder = FrameRecorder(side, self.ffmpeg_path, self.output_dir)
+        success = recorder.start(output_filename)
 
         if success:
             self.recorders[side] = recorder
-            # 推送录制状态给所有前端客户端
+            # 将录制器挂到 CameraCapture 上，_read_frames 线程会开始写帧
+            self.captures[side].frame_recorder = recorder
+            # 推送录制状态
             await self._push_recording_status()
-            return {'success': True, 'side': side, 'message': f'{side}侧HLS录制已启动'}
+            print(f'[CameraServer] [{side}] 帧录制已启动（MJPEG预览不中断）')
+            return {'success': True, 'side': side, 'message': f'{side}侧录制已启动'}
         else:
-            return {'success': False, 'error': f'{side}侧HLS录制启动失败'}
+            return {'success': False, 'error': f'{side}侧录制启动失败'}
 
     def _cmd_mark_recording_start(self, data):
         """标记录制起始点（按空格键时由realtimeEngine调用）"""
@@ -973,46 +898,43 @@ class CameraServer:
         return await self._do_stop_and_save(side, output_filename)
 
     async def _do_stop_and_save(self, side, output_filename):
-        """执行停止和保存逻辑"""
+        """执行停止录制和封装（不阻塞事件循环）"""
         if side not in self.recorders:
-            return {'success': False, 'error': f'{side}侧HLS录制未启动'}
+            return {'success': False, 'error': f'{side}侧录制未启动'}
 
-        output_path = self.output_dir / output_filename
         recorder = self.recorders[side]
 
-        # stop_and_save 包含 time.sleep 和 subprocess.run，放到 executor 避免阻塞事件循环
-        loop = asyncio.get_running_loop()
-        success = await loop.run_in_executor(None, recorder.stop_and_save, output_path)
+        # 解除 CameraCapture 对录制器的引用（停止写帧）
+        if side in self.captures:
+            self.captures[side].frame_recorder = None
 
-        if success:
+        # stop_and_save 包含 subprocess.run（ffmpeg封装），放到 executor 避免阻塞
+        loop = asyncio.get_running_loop()
+        save_result = await loop.run_in_executor(None, recorder.stop_and_save)
+
+        if save_result and save_result.get('success'):
             del self.recorders[side]
             result = {
                 'success': True,
                 'side': side,
-                'output_path': str(output_path),
-                'filename': output_filename
+                'output_path': save_result.get('path', ''),
+                'filename': output_filename,
+                'file_size': save_result.get('size', 0),
+                'timing': save_result.get('timing', {})
             }
         else:
+            error_detail = (save_result or {}).get('error', '录制保存失败(无详细错误)')
             del self.recorders[side]
             result = {
                 'success': False,
-                'error': '保存MP4失败'
+                'error': f'录制保存失败: {error_detail}'
             }
 
         # 推送录制结束状态
         await self._push_recording_status()
 
-        # 录制完成后，如果摄像头之前被打开过，自动恢复MJPEG预览
-        if side in self.cameras and self.ffmpeg_path and self.camera_opened.get(side):
-            print(f'[CameraServer] [{side}] 录制完成，恢复MJPEG预览...')
-            await asyncio.sleep(0.5)  # 等待摄像头完全释放
-            camera = self.cameras[side]
-            capture = CameraCapture(side, camera['device_name'], self.ffmpeg_path, self.frame_queue)
-            if capture.start():
-                self.captures[side] = capture
-                print(f'[CameraServer] [{side}] ✅ MJPEG预览已恢复')
-            else:
-                print(f'[CameraServer] [{side}] ⚠️ MJPEG预览恢复失败')
+        # MJPEG 预览一直未停止，无需恢复
+        print(f'[CameraServer] [{side}] 录制结束，MJPEG预览持续运行中')
 
         return result
 
@@ -1032,7 +954,7 @@ class CameraServer:
             }
 
         # 如果有HLS录制，从分段提取
-        if side in self.recorders and self.recorders[side].running:
+        if side in self.recorders and self.recorders[side].recording:
             frame_b64 = self.recorders[side].get_preview_frame_b64()
             if frame_b64:
                 return {
@@ -1056,7 +978,7 @@ class CameraServer:
                 for side, cap in self.captures.items()
             },
             'recording': {
-                side: rec.running if rec else False
+                side: rec.recording if rec else False
                 for side, rec in self.recorders.items()
             },
             'preview_subscribers': {
@@ -1086,12 +1008,14 @@ class CameraServer:
             capture.stop()
         self.captures.clear()
 
-        # 停止所有HLS录制
+        # 停止所有帧录制
         for side, recorder in list(self.recorders.items()):
-            if recorder.running:
+            if recorder.recording:
                 try:
-                    recorder.process.kill()
-                    recorder.running = False
+                    # 解除 CameraCapture 的录制器引用
+                    if side in self.captures:
+                        self.captures[side].frame_recorder = None
+                    recorder.stop_and_save()
                 except:
                     pass
         self.recorders.clear()

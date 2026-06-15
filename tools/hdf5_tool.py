@@ -1450,7 +1450,11 @@ class ViewerTab(QWidget):
                 self.populate_tree(item, tree_item, item_path)
             elif isinstance(item, h5py.Dataset):
                 tree_item.setText(1, "Dataset")
-                tree_item.setText(2, str(item.shape))
+                if item.shape == ():  # 标量 dataset：直接显示值
+                    val = item[()]
+                    tree_item.setText(2, f"{val:.6g}" if isinstance(val, (int, float)) else str(val))
+                else:
+                    tree_item.setText(2, str(item.shape))
 
     def on_tree_item_clicked(self, item, column):
         """树形项目点击事件"""
@@ -1871,7 +1875,19 @@ class ViewerTab(QWidget):
 
         self.data_table.clear()
 
-        if data.ndim == 1:
+        if data.ndim == 0:
+            # 标量 dataset
+            val = data[()]
+            self.data_table.setColumnCount(1)
+            self.data_table.setHorizontalHeaderLabels(["Value"])
+            self.data_table.setRowCount(1)
+            if isinstance(val, (np.floating, float)):
+                text = f"{val:.{precision}f}"
+            else:
+                text = str(val)
+            self.data_table.setItem(0, 0, QTableWidgetItem(text))
+
+        elif data.ndim == 1:
             self.data_table.setColumnCount(1)
             self.data_table.setHorizontalHeaderLabels(["Value"])
             rows = min(len(data), max_rows)
@@ -1916,7 +1932,15 @@ class ViewerTab(QWidget):
         lines = []
         lines.append(f"Shape: {data.shape}")
         lines.append(f"Dtype: {data.dtype}")
-        if np.issubdtype(data.dtype, np.number):
+
+        if data.ndim == 0:
+            # 标量 dataset
+            val = data[()]
+            if isinstance(val, (float, np.floating)):
+                lines.append(f"Value: {val:.{precision}f}")
+            else:
+                lines.append(f"Value: {val}")
+        elif np.issubdtype(data.dtype, np.number):
             lines.append(f"Min: {np.min(data):.{precision}f}")
             lines.append(f"Max: {np.max(data):.{precision}f}")
             lines.append(f"Mean: {np.mean(data):.{precision}f}")
@@ -1926,7 +1950,9 @@ class ViewerTab(QWidget):
         lines.append("-" * 50)
 
         preview_data = data[:min(20, len(data))]
-        if data.ndim == 2:
+        if data.ndim == 0:
+            lines.append(str(preview_data))
+        elif data.ndim == 2:
             for i, row in enumerate(preview_data):
                 row_str = ", ".join([f"{v:.{precision}f}" if isinstance(v, (float, np.floating)) else str(v) for v in row[:10]])
                 if len(row) > 10:

@@ -1200,6 +1200,28 @@ class HDF5StorageServer:
                     self.f.attrs["preview_bin_finalized"] = "true"
                     debug_log(f"   preview_bin_finalized: true")
 
+                # ==================== 视频时间戳（MP4帧与H5数据的时间对应） ====================
+                # 结构与 prompts 一致：每一行对应一个摄像头
+                video_timing = params.get("video_timing", {}) or {}
+                sides, firsts, lasts, durs = [], [], [], []
+                for side in ["left", "right"]:
+                    timing = video_timing.get(side)
+                    if timing and isinstance(timing, dict):
+                        sides.append(side)
+                        firsts.append(float(timing.get("first_frame_unix", 0)))
+                        lasts.append(float(timing.get("last_frame_unix", 0)))
+                        durs.append(float(timing.get("duration", 0)))
+                        debug_log(f"   video_timing/{side}: first_frame={timing.get('first_frame_unix')}, "
+                                  f"last_frame={timing.get('last_frame_unix')}, duration={timing.get('duration')}")
+
+                if sides:
+                    video_grp = self.f.create_group("video_timing")
+                    dt_str = h5py.string_dtype()
+                    video_grp.create_dataset("sides", data=np.array(sides, dtype=dt_str))
+                    video_grp.create_dataset("first_frame_unix", data=np.array(firsts, dtype=np.float64))
+                    video_grp.create_dataset("last_frame_unix", data=np.array(lasts, dtype=np.float64))
+                    video_grp.create_dataset("duration", data=np.array(durs, dtype=np.float64))
+
                 # ==================== Phase 3: frame/time range 与 segment/bin 元数据 ====================
                 self._write_segment_metadata(params)
 
