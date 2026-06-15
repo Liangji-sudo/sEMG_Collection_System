@@ -336,32 +336,61 @@ class HLSRecorder:
         if not self.running:
             return False
 
-        end_segment = self.current_segment
-        print(f'[HLSRecorder] [{self.side}] 停止录制: 起始={self.mark_segment}, 结束={end_segment}')
+        end_segment_before = self.current_segment
+        print(f'[HLSRecorder] [{self.side}] 停止前: mark={self.mark_segment}, current_segment={end_segment_before}')
 
+        # 停止监控线程
+        self.running = False
+
+        # 停止 ffmpeg
         try:
             if self.process:
+                # 发送 'q' 让 ffmpeg 优雅退出，写完最后的分片
                 self.process.stdin.write(b'q')
                 self.process.stdin.flush()
-                self.process.wait(timeout=5)
+                self.process.wait(timeout=8)
+                print(f'[HLSRecorder] [{self.side}] ffmpeg 已退出, exitcode={self.process.returncode}')
+        except subprocess.TimeoutExpired:
+            print(f'[HLSRecorder] [{self.side}] ffmpeg 超时，强制终止')
+            if self.process:
+                self.process.kill()
+                self.process.wait(timeout=3)
         except Exception as e:
             print(f'[HLSRecorder] [{self.side}] 停止ffmpeg出错: {e}')
             if self.process:
                 self.process.kill()
 
-        self.running = False
+        # 等待文件系统刷新
+        time.sleep(0.5)
 
-        if self.mark_segment is not None:
-            success = self._merge_segments(self.mark_segment, end_segment, output_path)
-            self._cleanup_temp_files()
-            return success
+        # 扫描实际存在的所有分段文件（不依赖 current_segment）
+        all_segments = []
+        for f in self.temp_dir.glob('segment_*.ts'):
+            m = re.search(r'segment_(\d+)\.ts', f.name)
+            if m:
+                all_segments.append(int(m.group(1)))
+
+        if all_segments:
+            all_segments.sort()
+            actual_start = all_segments[0]
+            actual_end = all_segments[-1]
+            print(f'[HLSRecorder] [{self.side}] 实际分段: {actual_start}~{actual_end} (共{len(all_segments)}个)')
+            print(f'[HLSRecorder] [{self.side}] 文件列表: {all_segments}')
         else:
-            print(f'[HLSRecorder] [{self.side}] ⚠️ 未标记起始点，无法保存')
+            print(f'[HLSRecorder] [{self.side}] ❌ 未找到任何分段文件！')
+            print(f'[HLSRecorder] [{self.side}] 目录内容: {list(self.temp_dir.iterdir())}')
             return False
 
-    def _merge_segments(self, start_seg, end_seg, output_path):
-        """合并分段为MP4"""
-        print(f'[HLSRecorder] [{self.side}] 合并分段 {start_seg} -> {end_seg}')
+        # 用实际分段范围进行合并
+        if self.mark_segment is not None and self.mark_segment >= actual_start:
+            start_seg = self.mark_segment
+        else:
+            # 如果 mark 还没更新（current_segment=-1 的情况），从最早的分段开始
+            print(f'[HLSRecorder] [{self.side}] ⚠️ mark_segment={self.mark_segment} 无效，使用最早分段 {actual_start}')
+            start_seg = actual_start
+
+        end_seg = actual_end
+        print(f'[HLSRecorder] [{self.side}] 合并范围: {start_seg} -> {end_seg}')
 
         segment_files = []
         for i in range(start_seg, end_seg + 1):
@@ -373,7 +402,7 @@ class HLSRecorder:
             print(f'[HLSRecorder] [{self.side}] ❌ 没有找到分段文件')
             return False
 
-        print(f'[HLSRecorder] [{self.side}] 找到 {len(segment_files)} 个分段')
+        print(f'[HLSRecorder] [{self.side}] 找到 {len(segment_files)} 个分段待合并')
 
         concat_file = self.temp_dir / 'concat.txt'
         with open(concat_file, 'w') as f:
@@ -401,14 +430,17 @@ class HLSRecorder:
             if result.returncode == 0:
                 file_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
                 print(f'[HLSRecorder] [{self.side}] ✅ MP4已保存: {output_path} ({file_size} bytes)')
+                self._cleanup_temp_files()
                 return True
             else:
                 print(f'[HLSRecorder] [{self.side}] ❌ 合并失败:')
                 print(result.stderr.decode('utf-8', errors='ignore'))
+                self._cleanup_temp_files()
                 return False
 
         except Exception as e:
             print(f'[HLSRecorder] [{self.side}] ❌ 合并出错: {e}')
+            self._cleanup_temp_files()
             return False
 
     def _cleanup_temp_files(self):
@@ -948,7 +980,9 @@ class CameraServer:
         output_path = self.output_dir / output_filename
         recorder = self.recorders[side]
 
-        success = recorder.stop_and_save(output_path)
+        # stop_and_save 包含 time.sleep 和 subprocess.run，放到 executor 避免阻塞事件循环
+        loop = asyncio.get_running_loop()
+        success = await loop.run_in_executor(None, recorder.stop_and_save, output_path)
 
         if success:
             del self.recorders[side]
