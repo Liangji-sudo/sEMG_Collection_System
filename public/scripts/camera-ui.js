@@ -523,6 +523,7 @@
                     const openResult = await window.CameraControl.openCamera('left');
                     if (openResult.success) {
                         updateCameraStatus('left', '预览中', true);
+                        startCameraThumbTimer();
                         console.log('[CameraUI] ✅ 左手摄像头已打开（WS）');
                     } else {
                         showToast('左手摄像头打开失败: ' + openResult.error, 'error');
@@ -565,6 +566,7 @@
                     const openResult = await window.CameraControl.openCamera('right');
                     if (openResult.success) {
                         updateCameraStatus('right', '预览中', true);
+                        startCameraThumbTimer();
                         console.log('[CameraUI] ✅ 右手摄像头已打开（WS）');
                     } else {
                         showToast('右手摄像头打开失败: ' + openResult.error, 'error');
@@ -621,6 +623,7 @@
 
         // 清空所有预览帧，避免残留上一次的画面
         clearPreviewImages();
+        stopCameraThumbTimer();  // 停止缩略图定时器
 
         isCameraStreaming = false;
         updateCameraStreamButton(false);
@@ -869,6 +872,113 @@
             window.collectionController.showToast(message, type);
         } else {
             console.log(`[Toast] ${message}`);
+        }
+    }
+
+    // ==================== 摄像头缩略图自动刷新（左下角小窗，1s间隔） ====================
+
+    let _thumbTimer = null;
+    let _thumbLastTime = 0;
+    let _thumbFrameCount = 0;
+
+    /** 启动缩略图自动刷新（摄像头打开后调用） */
+    function startCameraThumbTimer() {
+        // 显示容器
+        const container = document.getElementById('cameraThumbContainer');
+        if (container) container.classList.add('active');
+
+        _thumbFrameCount = 0;
+        _thumbLastTime = performance.now();
+
+        if (_thumbTimer) return; // 已在运行
+
+        console.log('[CameraUI] 🔄 启动缩略图自动刷新 (1s)');
+        _thumbTimer = setInterval(refreshThumbFrames, 1000);
+
+        // 立即刷新一次
+        refreshThumbFrames();
+    }
+
+    /** 停止缩略图自动刷新（摄像头关闭后调用） */
+    function stopCameraThumbTimer() {
+        if (_thumbTimer) {
+            clearInterval(_thumbTimer);
+            _thumbTimer = null;
+            console.log('[CameraUI] ⏸ 缩略图自动刷新已停止');
+        }
+
+        // 隐藏容器
+        const container = document.getElementById('cameraThumbContainer');
+        if (container) container.classList.remove('active');
+
+        // 清空状态
+        ['left', 'right'].forEach(side => {
+            const statusEl = document.getElementById(`thumb${capitalize(side)}Status`);
+            if (statusEl) statusEl.textContent = '未开启';
+        });
+        const fpsLabel = document.getElementById('thumbFpsLabel');
+        if (fpsLabel) fpsLabel.textContent = '';
+    }
+
+    function capitalize(str) {
+        return str.charAt(0).toUpperCase() + str.slice(1);
+    }
+
+    async function refreshThumbFrames() {
+        if (!window.CameraControl || !window.CameraControl.isConnected()) return;
+
+        // 检查哪些摄像头已打开
+        const camState = window.CameraControl.getCameraState();
+        const openedSides = ['left', 'right'].filter(s => camState[s] && camState[s].opened);
+
+        if (openedSides.length === 0) {
+            // 没有摄像头打开，停止定时器
+            stopCameraThumbTimer();
+            return;
+        }
+
+        // 并发拍照
+        const results = await Promise.all(
+            openedSides.map(side =>
+                window.CameraControl.captureSnapshot(side)
+                    .then(r => ({ side, ...r }))
+                    .catch(() => ({ side, success: false }))
+            )
+        );
+
+        for (const r of results) {
+            updateThumbCell(r.side, r);
+        }
+
+        // 更新 FPS 计数
+        _thumbFrameCount++;
+        const now = performance.now();
+        const elapsed = now - _thumbLastTime;
+        if (elapsed >= 5000) {
+            const fps = (_thumbFrameCount / (elapsed / 1000)).toFixed(1);
+            const fpsLabel = document.getElementById('thumbFpsLabel');
+            if (fpsLabel) fpsLabel.textContent = `${fps} fps`;
+            _thumbFrameCount = 0;
+            _thumbLastTime = now;
+        }
+    }
+
+    function updateThumbCell(side, result) {
+        const img = document.getElementById(`thumb${capitalize(side)}Img`);
+        const status = document.getElementById(`thumb${capitalize(side)}Status`);
+
+        if (result && result.success && result.frame) {
+            if (img) img.src = `data:image/jpeg;base64,${result.frame}`;
+            if (status) {
+                const source = result.source === 'cache' ? '' : ' (抓帧)';
+                status.textContent = `预览中 · ${(result.frame.length/1024).toFixed(1)}KB${source}`;
+                status.style.color = '#10b981';
+            }
+        } else {
+            if (status) {
+                status.textContent = result && result.error ? result.error : '无画面';
+                status.style.color = '#ef4444';
+            }
         }
     }
 

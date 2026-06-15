@@ -1560,6 +1560,79 @@
             display: none;
         }
 
+        /* 摄像头缩略图预览（左下角，1s自动刷新） */
+        .camera-thumb-container {
+            position: absolute;
+            bottom: 70px;
+            right: 20px;
+            width: 300px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            z-index: 100;
+            display: none;
+        }
+
+        .camera-thumb-container.active {
+            display: block;
+        }
+
+        .camera-thumb-header {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            background: #f3f4f6;
+            font-size: 11px;
+            color: #374151;
+            font-weight: 500;
+        }
+
+        .camera-thumb-header i {
+            font-size: 12px;
+        }
+
+        .camera-thumb-header .thumb-fps {
+            margin-left: auto;
+            font-size: 10px;
+            color: #9ca3af;
+        }
+
+        .camera-thumb-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4px;
+            padding: 6px;
+        }
+
+        .camera-thumb-cell {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+        }
+
+        .camera-thumb-label {
+            font-size: 9px;
+            color: #6b7280;
+            font-weight: 500;
+        }
+
+        .camera-thumb-img {
+            width: 100%;
+            height: 100px;
+            border-radius: 6px;
+            background: #1f2937;
+            object-fit: contain;
+            border: 1px solid #e5e7eb;
+        }
+
+        .camera-thumb-cell .thumb-status {
+            font-size: 9px;
+            color: #9ca3af;
+        }
+
         .gif-resize-handle {
             position: absolute;
             bottom: 0;
@@ -4991,7 +5064,7 @@
         /* ==================== 设备状态悬浮窗口 ==================== */
         .device-status-float {
             position: fixed;
-            top: 60px;
+            top: 100px;
             right: 10px;
             background: rgba(255, 255, 255, 0.7);
             backdrop-filter: blur(10px);
@@ -6021,6 +6094,27 @@
                             </div>
                         </div>
                         <div class="gif-resize-handle" id="gestureGifResizeHandle" title="拖动缩放"></div>
+                    </div>
+
+                    <!-- 摄像头缩略图预览（左下角，1s自动刷新） -->
+                    <div class="camera-thumb-container" id="cameraThumbContainer">
+                        <div class="camera-thumb-header">
+                            <i class="fas fa-camera"></i>
+                            <span>摄像头预览</span>
+                            <span class="thumb-fps" id="thumbFpsLabel"></span>
+                        </div>
+                        <div class="camera-thumb-grid">
+                            <div class="camera-thumb-cell" id="thumbLeftCell">
+                                <span class="camera-thumb-label">🖐 左手</span>
+                                <img class="camera-thumb-img" id="thumbLeftImg" src="" alt="左手摄像头">
+                                <span class="thumb-status" id="thumbLeftStatus">未开启</span>
+                            </div>
+                            <div class="camera-thumb-cell" id="thumbRightCell">
+                                <span class="camera-thumb-label">🖐 右手</span>
+                                <img class="camera-thumb-img" id="thumbRightImg" src="" alt="右手摄像头">
+                                <span class="thumb-status" id="thumbRightStatus">未开启</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
