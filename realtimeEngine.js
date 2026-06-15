@@ -533,11 +533,11 @@ class RealtimeEngine extends EventEmitter {
     onPromptEnd(promptName, promptIndex) {}
 
     onPrompt(name, stageName, timestamp) {
-        // 【修改】不再在第一个space时启动录制
-        // 录制已在采集开始时启动（collection_start），这里只记录时间戳
-        if (name === 'space') {
-            console.log('[realtimeEngine] 🎥 检测到space，记录时间戳:', timestamp);
-            // videoRecordingStarted 标志在 collection_start 时已设置
+        // 【修改】第一个space按下时，标记HLS录制起始点
+        if (name === 'space' && !this.videoRecordingStarted) {
+            console.log('[realtimeEngine] 🎥 检测到第一个space，标记HLS录制起始点...');
+            this._markVideoRecordingStart(timestamp, stageName);
+            this.videoRecordingStarted = true;
         }
 
         // 【新增】异常中断冻结状态下跳过 prompt
