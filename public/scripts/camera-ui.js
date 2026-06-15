@@ -120,55 +120,65 @@
      * 刷新摄像头列表
      */
     async function refreshCameraList() {
-        console.log('[CameraUI] 刷新摄像头列表...');
+        console.log('[CameraUI] 刷新摄像头列表（通过后端camera_server）...');
 
-        if (!window.cameraControl) {
-            console.error('[CameraUI] cameraControl未初始化');
-            return;
-        }
-
-        const cameras = await window.cameraControl.enumerateCameras();
-        console.log(`[CameraUI] 找到 ${cameras.length} 个USB摄像头`);
-
-        // 更新下拉列表
-        const leftSelect = document.getElementById('leftCameraSelect');
-        const rightSelect = document.getElementById('rightCameraSelect');
-
-        if (leftSelect && rightSelect) {
-            leftSelect.innerHTML = '<option value="">不使用</option>';
-            rightSelect.innerHTML = '<option value="">不使用</option>';
-
-            cameras.forEach((camera, index) => {
-                const option1 = document.createElement('option');
-                option1.value = camera.deviceId;
-                option1.textContent = camera.label || `USB摄像头 ${index + 1}`;
-                leftSelect.appendChild(option1);
-
-                const option2 = document.createElement('option');
-                option2.value = camera.deviceId;
-                option2.textContent = camera.label || `USB摄像头 ${index + 1}`;
-                rightSelect.appendChild(option2);
+        try {
+            // 【修改】通过后端 camera_server 枚举摄像头，避免浏览器权限问题
+            const response = await fetch('/api/camera/list', {
+                method: 'GET'
             });
 
-            // 如果只有1个摄像头，默认不选择（用户自己决定给哪只手）
-            if (cameras.length === 1) {
-                console.log('[CameraUI] 检测到1个USB摄像头，请手动选择分配给左手或右手');
-            } else if (cameras.length >= 2) {
-                // 多个摄像头，分配前两个
-                leftSelect.value = cameras[0].deviceId;
-                rightSelect.value = cameras[1].deviceId;
-                console.log('[CameraUI] 检测到多个USB摄像头，已自动分配前两个');
+            const result = await response.json();
+
+            if (!result.success || !result.devices) {
+                console.error('[CameraUI] 枚举摄像头失败:', result.error);
+                showToast('枚举摄像头失败', 'error');
+                return;
             }
 
-            // 添加选择变化监听，防止同一摄像头分配给两只手
-            leftSelect.addEventListener('change', () => {
-                if (leftSelect.value && leftSelect.value === rightSelect.value) {
-                    alert('同一摄像头不能同时分配给左手和右手');
-                    leftSelect.value = '';
-                }
-            });
+            const cameras = result.devices;
+            console.log(`[CameraUI] 找到 ${cameras.length} 个USB摄像头`);
 
-            rightSelect.addEventListener('change', () => {
+            // 更新下拉列表
+            const leftSelect = document.getElementById('leftCameraSelect');
+            const rightSelect = document.getElementById('rightCameraSelect');
+
+            if (leftSelect && rightSelect) {
+                leftSelect.innerHTML = '<option value="">请选择摄像头...</option>';
+                rightSelect.innerHTML = '<option value="">请选择摄像头...</option>';
+
+                cameras.forEach((camera, index) => {
+                    const option1 = document.createElement('option');
+                    option1.value = camera.id;
+                    option1.textContent = camera.name || `USB摄像头 ${index + 1}`;
+                    leftSelect.appendChild(option1);
+
+                    const option2 = document.createElement('option');
+                    option2.value = camera.id;
+                    option2.textContent = camera.name || `USB摄像头 ${index + 1}`;
+                    rightSelect.appendChild(option2);
+                });
+
+                // 如果只有1个摄像头，默认选择给左手
+                if (cameras.length === 1) {
+                    leftSelect.value = cameras[0].id;
+                    console.log('[CameraUI] 检测到1个USB摄像头，已分配给左手');
+                } else if (cameras.length >= 2) {
+                    // 多个摄像头，分配前两个
+                    leftSelect.value = cameras[0].id;
+                    rightSelect.value = cameras[1].id;
+                    console.log('[CameraUI] 检测到多个USB摄像头，已自动分配前两个');
+                }
+
+                // 添加选择变化监听，防止同一摄像头分配给两只手
+                leftSelect.addEventListener('change', () => {
+                    if (leftSelect.value && leftSelect.value === rightSelect.value) {
+                        alert('同一摄像头不能同时分配给左手和右手');
+                        leftSelect.value = '';
+                    }
+                });
+
+                rightSelect.addEventListener('change', () => {
                 if (rightSelect.value && rightSelect.value === leftSelect.value) {
                     alert('同一摄像头不能同时分配给左手和右手');
                     rightSelect.value = '';

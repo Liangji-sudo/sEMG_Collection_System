@@ -379,6 +379,17 @@ app.post('/api/camera/get-preview-frame', async (req, res) => {
     }
 });
 
+// 枚举摄像头设备
+app.get('/api/camera/list', async (req, res) => {
+    try {
+        const result = await realtimeEngine.sendCameraCommand('list_cameras', {});
+        res.json(result);
+    } catch (error) {
+        console.error('[server.js] 枚举摄像头失败:', error);
+        res.json({ success: false, error: error.message, devices: [] });
+    }
+});
+
 // 获取摄像头状态
 app.get('/api/camera/status', (req, res) => {
     try {
