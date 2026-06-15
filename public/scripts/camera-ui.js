@@ -245,36 +245,23 @@
             return;
         }
 
-        // 只启动已配置的摄像头
-        let leftSuccess = false;
-        let rightSuccess = false;
+        // 【修改】HLS模式下，配置摄像头后不启动前端推流
+        // 后端 camera_server 会自动启动 HLS 持续录制
+        // 前端推流会占用摄像头，导致后端 ffmpeg 无法访问
 
+        console.log('[CameraUI] HLS模式：摄像头配置完成，后端HLS录制已自动启动');
+
+        // 更新状态显示
         if (leftConfigured) {
-            const result = await window.cameraControl.startStreaming('left');
-            leftSuccess = result.success || result.left?.success;
-            if (leftSuccess) {
-                updateCameraStatus('left', '推流中', true);
-                console.log('[CameraUI] 左手摄像头推流成功');
-            }
+            updateCameraStatus('left', 'HLS录制中', true);
         }
-
         if (rightConfigured) {
-            const result = await window.cameraControl.startStreaming('right');
-            rightSuccess = result.success || result.right?.success;
-            if (rightSuccess) {
-                updateCameraStatus('right', '推流中', true);
-                console.log('[CameraUI] 右手摄像头推流成功');
-            }
+            updateCameraStatus('right', 'HLS录制中', true);
         }
 
-        if (leftSuccess || rightSuccess) {
-            isCameraStreaming = true;
-            updateCameraStreamButton(true);
-            showToast('摄像头推流已启动 📹', 'success');
-        } else {
-            console.error('[CameraUI] 推流失败');
-            showToast('摄像头推流启动失败', 'error');
-        }
+        isCameraStreaming = true;  // 标记为"推流中"（实际是HLS录制）
+        updateCameraStreamButton(true);
+        showToast('摄像头HLS录制已启动 🎬', 'success');
     }
 
     /**
