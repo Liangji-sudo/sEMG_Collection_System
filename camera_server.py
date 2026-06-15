@@ -414,62 +414,39 @@ class FrameRecorder:
             return {'success': False, 'error': str(e)}
 
     def _extract_timing(self, avi_path):
-        """用 ffprobe 提取视频时间戳"""
+        """提取视频时间戳
+
+        优先使用 Python 端记录的 wall-clock 时间戳作为可靠基准。
+        ffprobe 仅在可用时提供更精确的 PTS 修正值。
+        """
+        rec_start = self.recording_started_at or 0
+        rec_stop = self.recording_stopped_at or 0
+        wall_duration = max(0, rec_stop - rec_start)
+
         timing = {
-            'recording_started_at': self.recording_started_at,
-            'recording_stopped_at': self.recording_stopped_at,
-            'duration': 0,
+            'recording_started_at': rec_start,
+            'recording_stopped_at': rec_stop,
+            'duration': round(wall_duration, 3),
             'first_pts': 0,
-            'first_frame_unix': self.recording_started_at,
-            'last_frame_unix': self.recording_stopped_at,
+            'first_frame_unix': round(rec_start, 3),
+            'last_frame_unix': round(rec_stop, 3),
+            'frame_count': self.frame_count,
+            'timing_source': 'wall_clock',
         }
-        try:
-            # Cross-platform ffprobe path derivation
-            if sys.platform == 'win32':
-                ffprobe_path = self.ffmpeg_path.replace('ffmpeg.exe', 'ffprobe.exe')
-            else:
-                ffprobe_path = self.ffmpeg_path.replace('ffmpeg', 'ffprobe')
-            # Fallback: try shutil.which if replacement didn't find it
-            if not os.path.exists(ffprobe_path):
-                alt = shutil.which('ffprobe')
-                if alt:
-                    ffprobe_path = alt
-            # 获取视频时长
-            result = subprocess.run(
-                [ffprobe_path,
-                 '-v', 'error', '-show_entries', 'format=duration',
-                 '-of', 'default=noprint_wrappers=1:nokey=1',
-                 str(avi_path)],
-                capture_output=True, text=True, timeout=10,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                duration = float(result.stdout.strip())
-                timing['duration'] = round(duration, 3)
 
-            # 获取第一帧 PTS
-            result2 = subprocess.run(
-                [ffprobe_path,
-                 '-v', 'error', '-show_entries', 'packet=pts_time',
-                 '-of', 'default=noprint_wrappers=1:nokey=1',
-                 '-read_intervals', '%+#1',
-                 str(avi_path)],
-                capture_output=True, text=True, timeout=10,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-            )
-            if result2.returncode == 0 and result2.stdout.strip():
-                first_pts = float(result2.stdout.strip().split('\n')[0])
-                timing['first_pts'] = round(first_pts, 3)
-
-            # 计算实际帧对应的 Unix 时间戳
-            if self.recording_started_at:
-                timing['first_frame_unix'] = round(
-                    self.recording_started_at + timing['first_pts'], 3)
-                timing['last_frame_unix'] = round(
-                    self.recording_started_at + timing['first_pts'] + timing['duration'], 3)
-
-        except Exception as e:
-            print(f'[FrameRecorder] [{self.side}] ffprobe 时间戳提取失败: {e}')
+        # 尝试用 ffprobe 获取更精确的 PTS 时间戳
+        ffprobe_path = self._find_ffprobe()
+        if ffprobe_path:
+            try:
+                timing = self._refine_timing_with_ffprobe(
+                    timing, ffprobe_path, avi_path)
+            except Exception as e:
+                print(f'[FrameRecorder] [{self.side}] ffprobe 精化时间戳失败: {e}')
+                import traceback
+                traceback.print_exc()
+        else:
+            print(f'[FrameRecorder] [{self.side}] ⚠️ ffprobe 未找到，'
+                  f'使用 wall-clock 时间戳 (duration={wall_duration:.1f}s)')
 
         # 写出 .timing.json
         timing_path = avi_path.with_suffix(avi_path.suffix + '.timing.json')
@@ -481,6 +458,108 @@ class FrameRecorder:
             print(f'[FrameRecorder] [{self.side}] 写入时间戳文件失败: {e}')
 
         return timing
+
+    def _find_ffprobe(self):
+        """查找 ffprobe 可执行文件"""
+        # 从 ffmpeg_path 推导
+        if sys.platform == 'win32':
+            ffprobe_path = self.ffmpeg_path.replace('ffmpeg.exe', 'ffprobe.exe')
+        else:
+            ffprobe_path = self.ffmpeg_path.replace('ffmpeg', 'ffprobe')
+        if os.path.exists(ffprobe_path):
+            return ffprobe_path
+
+        # PATH 搜索
+        alt = shutil.which('ffprobe')
+        if alt:
+            return alt
+
+        # 与 find_ffmpeg() 一致的备用路径搜索
+        if sys.platform == 'win32':
+            local_appdata = os.environ.get('LOCALAPPDATA', '')
+            search_roots = []
+            if local_appdata:
+                search_roots.append(
+                    Path(local_appdata) / 'Microsoft/WinGet/Packages')
+            search_roots.extend([
+                Path('C:/ffmpeg/bin'),
+                Path('C:/Program Files/ffmpeg/bin'),
+                Path('C:/tools/ffmpeg/bin'),
+            ])
+            search_roots.append(
+                Path.home() / 'AppData/Local/Microsoft/WinGet/Packages')
+
+            win_pkg_names = ['Gyan.FFmpeg', 'Gyan.FFmpeg.Essentials',
+                             'Gyan.FFmpeg.Shared']
+            for root in search_roots:
+                root_str = str(root)
+                if 'WinGet' in root_str and 'Packages' in root_str:
+                    for pkg in win_pkg_names:
+                        pattern = str(
+                            root / f'{pkg}*' / 'ffmpeg-*' / 'bin' / 'ffprobe.exe')
+                        matches = glob.glob(pattern)
+                        if matches:
+                            return matches[0]
+                else:
+                    exe_path = root / 'ffprobe.exe'
+                    if exe_path.exists():
+                        return str(exe_path)
+
+        return None
+
+    def _refine_timing_with_ffprobe(self, timing, ffprobe_path, avi_path):
+        """用 ffprobe 精化时间戳（PTS 级别的精度）"""
+        cflags = (subprocess.CREATE_NO_WINDOW
+                  if sys.platform == 'win32' else 0)
+
+        # 获取视频时长（容器级别）
+        result = subprocess.run(
+            [ffprobe_path,
+             '-v', 'error', '-show_entries', 'format=duration',
+             '-of', 'default=noprint_wrappers=1:nokey=1',
+             str(avi_path)],
+            capture_output=True, text=True, timeout=10,
+            creationflags=cflags
+        )
+        ffprobe_duration = None
+        if result.returncode == 0 and result.stdout.strip():
+            try:
+                ffprobe_duration = float(result.stdout.strip())
+            except ValueError:
+                pass
+
+        # 获取第一帧 PTS
+        result2 = subprocess.run(
+            [ffprobe_path,
+             '-v', 'error', '-show_entries', 'packet=pts_time',
+             '-of', 'default=noprint_wrappers=1:nokey=1',
+             '-read_intervals', '%+#1',
+             str(avi_path)],
+            capture_output=True, text=True, timeout=10,
+            creationflags=cflags
+        )
+        first_pts = 0.0
+        if result2.returncode == 0 and result2.stdout.strip():
+            try:
+                first_pts = float(result2.stdout.strip().split('\n')[0])
+            except ValueError:
+                pass
+
+        # 只有当 ffprobe 返回了有效 duration (>0) 时才用 PTS 精化值覆盖
+        if ffprobe_duration and ffprobe_duration > 0 and self.recording_started_at:
+            timing['duration'] = round(ffprobe_duration, 3)
+            timing['first_pts'] = round(first_pts, 3)
+            timing['first_frame_unix'] = round(
+                self.recording_started_at + first_pts, 3)
+            timing['last_frame_unix'] = round(
+                self.recording_started_at + first_pts + ffprobe_duration, 3)
+            timing['timing_source'] = 'ffprobe'
+            print(f'[FrameRecorder] [{self.side}] ffprobe 精化: '
+                  f'duration={ffprobe_duration:.3f}s, first_pts={first_pts:.3f}s')
+        else:
+            print(f'[FrameRecorder] [{self.side}] ffprobe 未返回有效 duration '
+                  f'(dur={ffprobe_duration}, pts={first_pts}), '
+                  f'保持 wall_clock 时间戳')
 
 
 
