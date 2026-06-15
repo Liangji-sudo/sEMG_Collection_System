@@ -1119,6 +1119,17 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this._currentVideoStartTimestamp = null;
             this._currentH5FileName = null;
 
+            // 【新增】采集开始时立即启动摄像头录制（不等空格键）
+            // 这样可以确保空格时间戳与视频帧精确对应，无启动延迟
+            if (!isTestMode && window.cameraControl) {
+                console.log('[Collection] 🎥 采集开始，立即启动摄像头录制...');
+                const videoStartTime = Date.now() / 1000; // 转为秒
+                await this._startCameraRecording(videoStartTime);
+                this._cameraRecordingStarted = true;
+                this._currentVideoStartTimestamp = videoStartTime;
+                console.log('[Collection] ✅ 摄像头录制已启动，开始时间:', videoStartTime);
+            }
+
             // 构建 collection_start payload
             const startPayload = {
                 taskId: this.currentTaskId,
@@ -3517,11 +3528,12 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 recordingSessionId: this._recordingSessionId
             });
 
-            // 【新增】第一个space按下时，启动视频录制
-            if (!this._cameraRecordingStarted) {
-                console.log('[Collection] 🎥 第一个space按下，启动摄像头录制...');
-                await this._startCameraRecording(timestamp);
-                this._cameraRecordingStarted = true;
+            // 【修改】不再在第一个space按下时启动录制
+            // 录制已在采集开始时启动，这里只记录时间戳
+            console.log('[Collection] 🎥 记录空格时间戳:', timestamp);
+            if (this._currentVideoStartTimestamp) {
+                const offset = timestamp - this._currentVideoStartTimestamp;
+                console.log('[Collection] 空格相对于视频开始的偏移:', offset.toFixed(3), '秒');
             }
 
             // 显示视觉同步信号
