@@ -1064,25 +1064,32 @@ class CameraServer:
     def _cmd_get_preview_frame(self, data):
         """获取单帧预览（按需拍照模式）
 
-        优先从正在运行的 CameraCapture 取缓存帧（即时），
-        如果没有则用一次性 ffmpeg 抓帧（~1-2秒）。
+        优先从 CameraCapture 取缓存帧（即时）。
+        **绝不**在 CameraCapture 运行时回退到 one-shot ffmpeg，
+        防止两个 ffmpeg 抢同一个 DirectShow 摄像头导致 I/O 冲突。
+        CameraCapture 未启动时才使用 one-shot 抓帧。
         """
         side = data.get('side')
 
         if not side or side not in ['left', 'right']:
             return {'success': False, 'error': '无效的side参数'}
 
-        # 优先使用 MJPEG 采集的最新缓存帧（即时，零延迟）
-        if side in self.captures and self.captures[side].latest_frame_b64:
-            print(f'[CameraServer] 📸 {side}侧 返回缓存帧 ({(len(self.captures[side].latest_frame_b64)/1024):.1f}KB)')
-            return {
-                'success': True,
-                'side': side,
-                'frame': self.captures[side].latest_frame_b64,
-                'source': 'cache'
-            }
+        # CameraCapture 正在运行 → 只用缓存帧，不回退 one-shot
+        capture = self.captures.get(side)
+        if capture and capture.running:
+            if capture.latest_frame_b64:
+                print(f'[CameraServer] 📸 {side}侧 返回缓存帧 ({(len(capture.latest_frame_b64)/1024):.1f}KB)')
+                return {
+                    'success': True,
+                    'side': side,
+                    'frame': capture.latest_frame_b64,
+                    'source': 'cache'
+                }
+            else:
+                # 正在初始化，还没有帧，前端会在下次定时器重试
+                return {'success': False, 'error': f'{side}侧摄像头初始化中，稍后重试'}
 
-        # 回退：一次性 ffmpeg 抓帧
+        # CameraCapture 未运行 → 回退：一次性 ffmpeg 抓帧
         b64, error = self._capture_one_shot(side)
         if b64:
             return {
