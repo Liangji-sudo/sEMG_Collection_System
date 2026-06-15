@@ -96,9 +96,8 @@ class HLSRecorder:
             '-f', 'hls',
             '-hls_time', '1',  # 每1秒一个分段
             '-hls_list_size', '0',  # 保留所有分段
-            '-hls_flags', 'delete_segments+append_list',
+            '-hls_flags', 'append_list',  # 只追加列表，不删除分段
             '-hls_segment_filename', segment_pattern,
-            '-hls_delete_threshold', '60',  # 保留最近60个分段（60秒）
             str(m3u8_path)
         ]
 
