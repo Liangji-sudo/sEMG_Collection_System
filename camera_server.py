@@ -561,6 +561,8 @@ class FrameRecorder:
                   f'(dur={ffprobe_duration}, pts={first_pts}), '
                   f'保持 wall_clock 时间戳')
 
+        return timing
+
 
 
 # ==================== Camera Server 主类 ====================
