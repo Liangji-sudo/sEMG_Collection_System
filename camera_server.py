@@ -35,24 +35,49 @@ import base64
 # ==================== ffmpeg 查找 ====================
 
 def find_ffmpeg():
-    """查找 ffmpeg 可执行文件"""
+    """查找 ffmpeg 可执行文件（优先 PATH，回退常见安装位置）"""
     ffmpeg_path = shutil.which('ffmpeg')
     if ffmpeg_path:
+        print(f'[CameraServer] 找到 ffmpeg (PATH): {ffmpeg_path}')
         return ffmpeg_path
 
     if sys.platform == 'win32':
-        user_home = Path.home()
-        # 尝试多个 WinGet 包名模式（Gyan.FFmpeg / Gyan.FFmpeg.Essentials / Gyan.FFmpeg.Shared）
-        win_patterns = [
-            user_home / 'AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg*/ffmpeg-*/bin/ffmpeg.exe',
-            user_home / 'AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg.Essentials*/ffmpeg-*/bin/ffmpeg.exe',
-            user_home / 'AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg.Shared*/ffmpeg-*/bin/ffmpeg.exe',
-        ]
-        for pattern in win_patterns:
-            matches = glob.glob(str(pattern))
-            if matches:
-                print(f'[CameraServer] 找到 WinGet 安装的 ffmpeg: {matches[0]}')
-                return matches[0]
+        # 使用 %LOCALAPPDATA% 环境变量（用户名无关），而非 Path.home()
+        local_appdata = os.environ.get('LOCALAPPDATA', '')
+        search_roots = []
+
+        # 1. WinGet 安装路径（通过 %LOCALAPPDATA% 环境变量）
+        if local_appdata:
+            search_roots.append(Path(local_appdata) / 'Microsoft/WinGet/Packages')
+
+        # 2. 常见手动安装位置（用户名无关）
+        search_roots.extend([
+            Path('C:/ffmpeg/bin'),
+            Path('C:/Program Files/ffmpeg/bin'),
+            Path('C:/tools/ffmpeg/bin'),
+        ])
+
+        # 3. 回退：Path.home() (最后手段，用户名相关)
+        search_roots.append(Path.home() / 'AppData/Local/Microsoft/WinGet/Packages')
+
+        win_pkg_names = ['Gyan.FFmpeg', 'Gyan.FFmpeg.Essentials', 'Gyan.FFmpeg.Shared']
+
+        for root in search_roots:
+            root_str = str(root)
+            # 如果 root 包含 WinGet/Packages，尝试 glob 匹配包名
+            if 'WinGet' in root_str and 'Packages' in root_str:
+                for pkg in win_pkg_names:
+                    pattern = str(root / f'{pkg}*' / 'ffmpeg-*' / 'bin' / 'ffmpeg.exe')
+                    matches = glob.glob(pattern)
+                    if matches:
+                        print(f'[CameraServer] 找到 WinGet 安装的 ffmpeg: {matches[0]}')
+                        return matches[0]
+            else:
+                # 直接检查 ffmpeg.exe 是否在该目录
+                exe_path = root / 'ffmpeg.exe'
+                if exe_path.exists():
+                    print(f'[CameraServer] 找到 ffmpeg (固定路径): {exe_path}')
+                    return str(exe_path)
 
     return None
 
