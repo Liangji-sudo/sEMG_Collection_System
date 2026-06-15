@@ -885,7 +885,10 @@
     function startCameraThumbTimer() {
         // 显示容器
         const container = document.getElementById('cameraThumbContainer');
-        if (container) container.classList.add('active');
+        if (container) {
+            container.classList.add('active');
+            setupThumbDrag(container);
+        }
 
         _thumbFrameCount = 0;
         _thumbLastTime = performance.now();
@@ -980,6 +983,58 @@
                 status.style.color = '#ef4444';
             }
         }
+    }
+
+    // ==================== 缩略图全屏拖拽 ====================
+
+    let _thumbDragData = null;
+
+    function setupThumbDrag(container) {
+        const header = container.querySelector('.camera-thumb-header');
+        if (!header || header.dataset.dragSetup) return;
+        header.dataset.dragSetup = '1';
+        header.style.cursor = 'move';
+
+        header.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+
+            const rect = container.getBoundingClientRect();
+            _thumbDragData = {
+                el: container,
+                startX: e.clientX,
+                startY: e.clientY,
+                left: rect.left,
+                top: rect.top
+            };
+            container.style.cursor = 'grabbing';
+            header.style.cursor = 'grabbing';
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!_thumbDragData) return;
+            const d = _thumbDragData;
+            let newX = d.left + (e.clientX - d.startX);
+            let newY = d.top + (e.clientY - d.startY);
+
+            // 限制在视口内
+            const rect = d.el.getBoundingClientRect();
+            newX = Math.max(0, Math.min(newX, window.innerWidth - rect.width));
+            newY = Math.max(0, Math.min(newY, window.innerHeight - rect.height));
+
+            d.el.style.left = newX + 'px';
+            d.el.style.top = newY + 'px';
+            d.el.style.right = 'auto';
+            d.el.style.bottom = 'auto';
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (_thumbDragData) {
+                _thumbDragData.el.style.cursor = '';
+                header.style.cursor = 'move';
+                _thumbDragData = null;
+            }
+        });
     }
 
     console.log('[CameraUI] 脚本加载完成');
