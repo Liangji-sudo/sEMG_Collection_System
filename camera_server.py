@@ -461,6 +461,8 @@ class FrameRecorder:
 
     def _find_ffprobe(self):
         """查找 ffprobe 可执行文件"""
+        if not self.ffmpeg_path:
+            return None
         # 从 ffmpeg_path 推导
         if sys.platform == 'win32':
             ffprobe_path = self.ffmpeg_path.replace('ffmpeg.exe', 'ffprobe.exe')
