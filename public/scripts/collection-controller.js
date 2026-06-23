@@ -587,7 +587,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             let html = '';
 
             html += `
-                <div class="gesture-progress-summary" style="font-size: 9px; padding: 1px 4px; margin-bottom: 1px;">
+                <div class="gesture-progress-summary" style="font-size: 9px; padding: 1px 4px; margin: 0;">
                     <span>轮次: ${this.currentSessionIndex + 1}/${this.sessionCount}</span>
                     <span>Stage: ${this.currentStageIndex + 1}/${this.stages.length}</span>
                     <span>手势: ${this.currentGestureIndex}/${this.gestures.length}</span>
@@ -652,7 +652,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             let html = '';
 
             html += `
-                <div class="gesture-progress-summary" style="font-size: 9px; padding: 1px 4px; margin-bottom: 1px; background: #f0f9ff; border-radius: 3px;">
+                <div class="gesture-progress-summary" style="font-size: 9px; padding: 1px 4px; margin: 0; background: #f0f9ff; border-radius: 3px;">
                     <div style="display: flex; justify-content: space-between;">
                         <span><i class="fas fa-sync-alt"></i> 轮次 ${this.currentSessionIndex + 1}/${this.sessionCount}</span>
                         <span><i class="fas fa-layer-group"></i> Stage ${this.currentStageIndex + 1}/${this.stages.length}</span>
@@ -666,7 +666,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             
             const percent = trialsPerStage > 0 ? (currentTrial / trialsPerStage * 100) : 0;
             html += `
-                <div style="padding: 0 4px; margin-bottom: 1px;">
+                <div style="padding: 0 4px; margin: 0;">
                     <div style="height: 3px; background: #e5e7eb; border-radius: 2px; overflow: hidden;">
                         <div style="height: 100%; width: ${percent}%; background: linear-gradient(90deg, #3b82f6, #1e40af); border-radius: 2px; transition: width 0.3s;"></div>
                     </div>
@@ -676,7 +676,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             const currentStage = this.stages[this.currentStageIndex];
             if (currentStage) {
                 html += `
-                    <div style="padding: 1px 4px; background: #fafafa; border-radius: 2px; margin-bottom: 1px;">
+                    <div style="padding: 1px 4px; background: #fafafa; border-radius: 2px; margin: 0;">
                         <div style="font-size: 9px; font-weight: 600; color: #1f2937;">
                             <i class="fas fa-hand-point-right" style="color: #3b82f6;"></i> ${currentStage.name}
                         </div>

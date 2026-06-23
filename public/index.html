@@ -1769,19 +1769,22 @@
             top: 10px;
             left: 10px;
             background: white;
-            padding: 4px;
+            padding: 3px;
             border-radius: 6px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             max-height: 260px;
             overflow-y: auto;
             min-width: 180px;
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
         }
 
         .gesture-list-title {
             font-size: 10px;
             font-weight: 600;
             color: #1e40af;
-            margin-bottom: 2px;
+            margin-bottom: 1px;
         }
 
         .gesture-item {
@@ -1791,7 +1794,8 @@
             padding: 1px 4px;
             border-radius: 3px;
             font-size: 10px;
-            margin-bottom: 0;
+            line-height: 1.2;
+            margin: 0;
         }
 
         .gesture-item.completed {
