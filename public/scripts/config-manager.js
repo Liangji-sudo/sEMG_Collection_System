@@ -759,7 +759,8 @@
                 document.body.appendChild(toast);
             }
 
-            const icon = type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle';
+            const iconMap = { success: 'fa-check-circle', error: 'fa-times-circle', warning: 'fa-exclamation-triangle', info: 'fa-info-circle' };
+            const icon = iconMap[type] || 'fa-exclamation-circle';
             toast.className = `toast ${type}`;
             toast.innerHTML = `<i class="fa ${icon}"></i> ${message}`;
             toast.classList.add('visible');

@@ -603,9 +603,8 @@ async function decodeData(buffer) {
                 toast.className = `toast ${type}`;
                 if (msgEl) msgEl.textContent = msg;
                 if (icon) {
-                    icon.className = type === 'success' ? 'fas fa-check-circle' : 
-                                    type === 'error' ? 'fas fa-times-circle' : 
-                                    'fas fa-exclamation-circle';
+                    const iconMap = { success: 'fas fa-check-circle', error: 'fas fa-times-circle', warning: 'fas fa-exclamation-triangle', info: 'fas fa-info-circle' };
+                    icon.className = iconMap[type] || 'fas fa-exclamation-circle';
                 }
                 toast.classList.add('visible');
                 setTimeout(() => toast.classList.remove('visible'), 2500);

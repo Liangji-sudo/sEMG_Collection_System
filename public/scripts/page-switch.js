@@ -427,10 +427,13 @@
         /**
          * 显示Toast提示
          */
-        showToast(message) {
+        showToast(message, type = 'success') {
             const toast = document.getElementById('toast');
             if (toast) {
-                toast.innerHTML = `<i class="fas fa-check-circle"></i> ${message}`;
+                const iconMap = { success: 'check-circle', error: 'times-circle', warning: 'exclamation-triangle', info: 'info-circle' };
+                const icon = iconMap[type] || 'check-circle';
+                toast.className = `toast ${type}`;
+                toast.innerHTML = `<i class="fas fa-${icon}"></i> ${message}`;
                 toast.classList.add('visible');
                 setTimeout(() => {
                     toast.classList.remove('visible');
@@ -495,7 +498,7 @@
 
             const videoFile = this.getTutorialVideoFile();
             if (!videoFile) {
-                this.showToast('请先选择采集任务');
+                this.showToast('请先选择采集任务', 'warning');
                 return;
             }
 
