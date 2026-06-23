@@ -922,15 +922,27 @@
                 const response = await fetch('/api/storage-volume');
                 const data = await response.json();
                 if (data.storage) {
+                    const freePercent = parseFloat(data.storage.free_Percent) || 0;
+                    const usedPercent = Math.max(0, 100 - freePercent);
+
+                    // 总容量
                     const diskSpaceEl = document.getElementById('diskSpace');
-                    const diskPercentEl = document.getElementById('diskPercent');
                     if (diskSpaceEl) {
                         diskSpaceEl.textContent = `${data.storage.volume} GB`;
                     }
-                    if (diskPercentEl) {
-                        const span = diskPercentEl.querySelector('span');
-                        if (span) span.textContent = `${data.storage.free_Percent} %`;
+
+                    // 进度条 (红=已用)
+                    const usedBar = document.getElementById('diskUsedBar');
+                    if (usedBar) {
+                        usedBar.style.width = `${usedPercent}%`;
                     }
+
+                    // 百分比标签
+                    const freeEl = document.getElementById('diskFreePercent');
+                    if (freeEl) freeEl.textContent = `${freePercent.toFixed(1)}% 可用`;
+
+                    const usedEl = document.getElementById('diskUsedPercent');
+                    if (usedEl) usedEl.textContent = `${usedPercent.toFixed(1)}% 已用`;
                 }
             } catch (error) {
                 // 静默处理
