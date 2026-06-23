@@ -587,7 +587,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             let html = '';
 
             html += `
-                <div class="gesture-progress-summary" style="font-size: 10px; padding: 3px 6px; margin-bottom: 3px;">
+                <div class="gesture-progress-summary" style="font-size: 9px; padding: 2px 5px; margin-bottom: 2px;">
                     <span>轮次: ${this.currentSessionIndex + 1}/${this.sessionCount}</span>
                     <span>Stage: ${this.currentStageIndex + 1}/${this.stages.length}</span>
                     <span>手势: ${this.currentGestureIndex}/${this.gestures.length}</span>
@@ -605,24 +605,24 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
                 if (index < this.currentGestureIndex) {
                     status = 'completed';
-                    progressText = `<span class="gesture-progress" style="font-size: 11px;">✓ 完成</span>`;
+                    progressText = `<span class="gesture-progress" style="font-size: 9px;">✓ 完成</span>`;
                 } else if (index === this.currentGestureIndex && isActivelyCollecting) {
                     status = 'current';
-                    progressText = `<span class="gesture-progress" style="font-size: 11px;">${this.gestureRepeatCount}/${repeatCount}</span>`;
+                    progressText = `<span class="gesture-progress" style="font-size: 9px;">${this.gestureRepeatCount}/${repeatCount}</span>`;
                 } else {
                     status = 'pending';
-                    progressText = `<span class="gesture-progress" style="font-size: 11px; color: #999;">${repeatCount}次</span>`;
+                    progressText = `<span class="gesture-progress" style="font-size: 9px; color: #999;">${repeatCount}次</span>`;
                 }
-                
-                const iconClass = status === 'completed' ? 'check-circle' : 
+
+                const iconClass = status === 'completed' ? 'check-circle' :
                                  status === 'current' ? 'circle-notch fa-spin' : 'circle';
-                
+
                 html += `
                     <div class="gesture-item ${status}" data-index="${index}">
-                        <span class="gesture-icon" style="font-size: 12px;">${gesture.icon || '✋'}</span>
+                        <span class="gesture-icon" style="font-size: 11px;">${gesture.icon || '✋'}</span>
                         <span class="gesture-name" style="flex: 1;">${gesture.name}</span>
                         ${progressText}
-                        <i class="fas fa-${iconClass} status-icon" style="font-size: 10px;"></i>
+                        <i class="fas fa-${iconClass} status-icon" style="font-size: 9px;"></i>
                     </div>
                 `;
             });
@@ -652,8 +652,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             let html = '';
 
             html += `
-                <div class="gesture-progress-summary" style="font-size: 10px; padding: 5px; margin-bottom: 5px; background: #f0f9ff; border-radius: 6px;">
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
+                <div class="gesture-progress-summary" style="font-size: 9px; padding: 3px 5px; margin-bottom: 3px; background: #f0f9ff; border-radius: 4px;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 1px;">
                         <span><i class="fas fa-sync-alt"></i> 轮次 ${this.currentSessionIndex + 1}/${this.sessionCount}</span>
                         <span><i class="fas fa-layer-group"></i> Stage ${this.currentStageIndex + 1}/${this.stages.length}</span>
                     </div>
@@ -666,9 +666,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             
             const percent = trialsPerStage > 0 ? (currentTrial / trialsPerStage * 100) : 0;
             html += `
-                <div style="padding: 0 6px; margin-bottom: 5px;">
-                    <div style="height: 6px; background: #e5e7eb; border-radius: 3px; overflow: hidden;">
-                        <div style="height: 100%; width: ${percent}%; background: linear-gradient(90deg, #3b82f6, #1e40af); border-radius: 3px; transition: width 0.3s;"></div>
+                <div style="padding: 0 5px; margin-bottom: 3px;">
+                    <div style="height: 4px; background: #e5e7eb; border-radius: 2px; overflow: hidden;">
+                        <div style="height: 100%; width: ${percent}%; background: linear-gradient(90deg, #3b82f6, #1e40af); border-radius: 2px; transition: width 0.3s;"></div>
                     </div>
                 </div>
             `;
@@ -676,11 +676,11 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             const currentStage = this.stages[this.currentStageIndex];
             if (currentStage) {
                 html += `
-                    <div style="padding: 5px; background: #fafafa; border-radius: 4px; margin-bottom: 4px;">
-                        <div style="font-size: 11px; font-weight: 600; color: #1f2937; margin-bottom: 2px;">
+                    <div style="padding: 3px 5px; background: #fafafa; border-radius: 3px; margin-bottom: 3px;">
+                        <div style="font-size: 10px; font-weight: 600; color: #1f2937; margin-bottom: 1px;">
                             <i class="fas fa-hand-point-right" style="color: #3b82f6;"></i> ${currentStage.name}
                         </div>
-                        ${currentStage.instruction ? `<div style="font-size: 10px; color: #6b7280;">${currentStage.instruction}</div>` : ''}
+                        ${currentStage.instruction ? `<div style="font-size: 9px; color: #6b7280;">${currentStage.instruction}</div>` : ''}
                     </div>
                 `;
             }
@@ -698,8 +698,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             }
             
             html += `
-                <div style="padding: 3px 6px; font-size: 11px; color: ${statusColor}; display: flex; align-items: center; gap: 4px;">
-                    <span style="width: 6px; height: 6px; border-radius: 50%; background: ${statusColor};"></span>
+                <div style="padding: 2px 5px; font-size: 9px; color: ${statusColor}; display: flex; align-items: center; gap: 3px;">
+                    <span style="width: 5px; height: 5px; border-radius: 50%; background: ${statusColor};"></span>
                     ${statusText}
                 </div>
             `;
