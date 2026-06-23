@@ -776,75 +776,88 @@ def generate_breakpoint_json(h5_path):
 class StatisticsPanel(QFrame):
     """统计信息面板 — 可滚动、分组展示"""
 
-    # 字段分组定义
+    # 字段分组定义 — 按设备类型分门别类
     SECTIONS = [
-        ('基础信息', [
+        ('H5 基础信息', [
             ('文件名', '文件名'), ('文件大小', '文件大小'),
             ('创建时间', '创建时间'), ('sync_status', '同步状态'),
+            ('collection_status', '采集状态'),
+            ('is_resumed', '续采段'), ('segment_index', 'Segment序号'),
             ('session_index', 'Session索引'), ('session_count', 'Session总数'),
-            ('session_number', '轮次编号'),
+            ('session_number', '当前轮次'),
             ('recording_session_id', '录制会话ID'), ('is_multi_session', '多Session'),
             ('task_id', '任务ID'), ('user_id', '用户ID'),
-            ('stage_name', 'Stage名称'), ('template_name', '模板名称'),
-        ]),
-        ('数据集统计', [
-            ('emg1_250hz', 'EMG1 250Hz'), ('emg1_2khz', 'EMG1 2kHz'),
-            ('emg2_250hz', 'EMG2 250Hz'), ('emg2_2khz', 'EMG2 2kHz'),
-            ('imu1a_ble', 'IMU1A BLE'), ('imu1a_100hz', 'IMU1A 100Hz'),
-            ('imu1b_ble', 'IMU1B BLE'), ('imu1b_100hz', 'IMU1B 100Hz'),
-            ('imu1c_100hz', 'IMU1C 100Hz'),
-            ('imu2a_ble', 'IMU2A BLE'), ('imu2a_100hz', 'IMU2A 100Hz'),
-            ('imu2b_ble', 'IMU2B BLE'), ('imu2b_100hz', 'IMU2B 100Hz'),
-            ('imu2c_100hz', 'IMU2C 100Hz'),
-            ('imu1_all_ble', 'IMU1 All BLE'), ('imu2_all_ble', 'IMU2 All BLE'),
-            ('total_imu1_all_frames', 'IMU1 All帧数'), ('total_imu2_all_frames', 'IMU2 All帧数'),
-            ('mocap', 'Mocap'),
-        ]),
-        ('设备 / Bin / 流信息', [
-            ('sd_bin_dev1', 'SD Bin(设备1)'), ('sd_bin_dev2', 'SD Bin(设备2)'),
-            ('ble_device_dev1', 'BLE设备(设备1)'), ('ble_device_dev2', 'BLE设备(设备2)'),
-            ('imu1_hw_version', 'IMU1 硬件版本'), ('imu2_hw_version', 'IMU2 硬件版本'),
-            ('imu1_num_imus', 'IMU1 IMU数量'), ('imu2_num_imus', 'IMU2 IMU数量'),
-            ('stream_mode', '流模式'), ('stream_format_version', '流格式版本'),
-            ('bin_pair_source', 'Bin来源'), ('collection_stream_id', '采集流ID'),
-            ('stream_switch_delay_ms', '切换延迟(ms)'),
-            ('video_left', '左手视频'), ('video_right', '右手视频'),
-        ]),
-        ('采集 / Segment 信息', [
-            ('collection_status', '采集状态'),
-            ('is_resumed', '续采段'),
-            ('segment_index', 'Segment序号'),
-            ('collection_session_id', '会话ID'),
+            ('stage_name', 'Stage名称'), ('stage_index', 'Stage序号'),
+            ('template_name', '模板名称'),
+            ('collection_session_id', '采集会话ID'),
             ('parent_segment_index', '父Segment'),
-            ('start_time', '开始时间'),
-            ('end_time', '结束时间'),
+            ('start_time', '开始时间'), ('end_time', '结束时间'),
             ('duration', '持续(秒)'),
-            ('stage_index', 'Stage序号'),
-            ('emg1_frame_count', 'EMG1帧数'),
-            ('emg1_frame_range', 'EMG1帧号范围'),
-            ('emg2_frame_count', 'EMG2帧数'),
-            ('emg2_frame_range', 'EMG2帧号范围'),
-            ('segment_has_dev1_bin', 'Dev1有Bin'),
-            ('segment_has_dev2_bin', 'Dev2有Bin'),
             ('segment_device_count', '设备数'),
+        ]),
+        ('蓝牙手环 — 设备1', [
+            ('ble_device_dev1', 'BLE设备名称'),
+            ('sd_bin_dev1', 'SD Bin文件'),
+            ('segment_has_dev1_bin', '含Bin数据'),
+            ('emg1_250hz', 'EMG 250Hz'), ('emg1_2khz', 'EMG 2kHz'),
+            ('emg1_frame_count', 'EMG采集帧数'), ('emg1_frame_range', 'EMG帧号范围'),
+            ('imu1a_ble', 'IMU-A BLE'), ('imu1a_100hz', 'IMU-A 100Hz'),
+            ('imu1b_ble', 'IMU-B BLE'), ('imu1b_100hz', 'IMU-B 100Hz'),
+            ('imu1c_100hz', 'IMU-C 100Hz'),
+            ('imu1_all_ble', 'IMU All BLE'), ('total_imu1_all_frames', 'IMU总帧数'),
+            ('imu1_hw_version', '硬件版本'), ('imu1_num_imus', 'IMU传感器数'),
+        ]),
+        ('蓝牙手环 — 设备2', [
+            ('ble_device_dev2', 'BLE设备名称'),
+            ('sd_bin_dev2', 'SD Bin文件'),
+            ('segment_has_dev2_bin', '含Bin数据'),
+            ('emg2_250hz', 'EMG 250Hz'), ('emg2_2khz', 'EMG 2kHz'),
+            ('emg2_frame_count', 'EMG采集帧数'), ('emg2_frame_range', 'EMG帧号范围'),
+            ('imu2a_ble', 'IMU-A BLE'), ('imu2a_100hz', 'IMU-A 100Hz'),
+            ('imu2b_ble', 'IMU-B BLE'), ('imu2b_100hz', 'IMU-B 100Hz'),
+            ('imu2c_100hz', 'IMU-C 100Hz'),
+            ('imu2_all_ble', 'IMU All BLE'), ('total_imu2_all_frames', 'IMU总帧数'),
+            ('imu2_hw_version', '硬件版本'), ('imu2_num_imus', 'IMU传感器数'),
+        ]),
+        ('数据流信息', [
+            ('stream_mode', '流模式'), ('stream_format_version', '流格式版本'),
+            ('bin_pair_source', 'Bin配对来源'), ('collection_stream_id', '采集流ID'),
+            ('stream_switch_delay_ms', '流切换延迟(ms)'),
+        ]),
+        ('相机', [
+            ('video_left', '左手视频文件'), ('video_right', '右手视频文件'),
+        ]),
+        ('动捕', [
+            ('mocap', 'Mocap数据集'),
         ]),
         ('同步信息', [
             ('sync_mode', '同步模式'),
-            ('sync_bin_offset_dev1', 'Bin偏移(Dev1)'),
-            ('sync_bin_offset_dev2', 'Bin偏移(Dev2)'),
-            ('sync_offset_match_rate_dev1', '匹配率(Dev1)'),
-            ('sync_offset_match_rate_dev2', '匹配率(Dev2)'),
+            ('sync_bin_offset_dev1', 'Dev1 Bin偏移'),
+            ('sync_bin_offset_dev2', 'Dev2 Bin偏移'),
+            ('sync_offset_match_rate_dev1', 'Dev1 匹配率'),
+            ('sync_offset_match_rate_dev2', 'Dev2 匹配率'),
             ('sync_frame_id_mode', 'FrameID模式'),
             ('sync_bin_offset_mode', 'Offset模式'),
-            ('sync_time_alignment', '时间对齐'),
+            ('sync_time_alignment', '时间对齐方式'),
             ('sync_250hz_anchor_position', '250Hz锚点位置'),
         ]),
     ]
 
     # 颜色分组 key 集合
-    _session_keys = {'session_index', 'session_count', 'recording_session_id', 'is_multi_session', 'session_number'}
+    _session_keys = {'session_index', 'session_count', 'recording_session_id', 'is_multi_session', 'session_number',
+                     'collection_session_id'}
     _sd_bin_keys = {'sd_bin_dev1', 'sd_bin_dev2'}
     _status_keys = {'collection_status', 'is_resumed', 'segment_index'}
+    _video_keys = {'video_left', 'video_right'}
+    _mocap_keys = {'mocap'}
+    _wristband_dev1_keys = {'ble_device_dev1', 'emg1_250hz', 'emg1_2khz', 'emg1_frame_count', 'emg1_frame_range',
+                            'imu1a_ble', 'imu1a_100hz', 'imu1b_ble', 'imu1b_100hz', 'imu1c_100hz',
+                            'imu1_all_ble', 'total_imu1_all_frames', 'imu1_hw_version', 'imu1_num_imus',
+                            'segment_has_dev1_bin'}
+    _wristband_dev2_keys = {'ble_device_dev2', 'emg2_250hz', 'emg2_2khz', 'emg2_frame_count', 'emg2_frame_range',
+                            'imu2a_ble', 'imu2a_100hz', 'imu2b_ble', 'imu2b_100hz', 'imu2c_100hz',
+                            'imu2_all_ble', 'total_imu2_all_frames', 'imu2_hw_version', 'imu2_num_imus',
+                            'segment_has_dev2_bin'}
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -891,13 +904,19 @@ class StatisticsPanel(QFrame):
                 value_label = QLabel('-')
                 value_label.setMinimumHeight(22)
                 value_label.setWordWrap(False)
-                # colour
+                # colour — 按设备类别区分
                 if key in self._sd_bin_keys:
                     value_label.setStyleSheet(f'color: #009900; font-weight: bold; {LABEL_FONT}')
-                elif key.startswith('ble_device'):
-                    value_label.setStyleSheet(f'color: #0066cc; font-weight: bold; {LABEL_FONT}')
-                elif key in self._session_keys:
+                elif key in self._wristband_dev1_keys:
+                    value_label.setStyleSheet(f'color: #2563eb; font-weight: bold; {LABEL_FONT}')
+                elif key in self._wristband_dev2_keys:
                     value_label.setStyleSheet(f'color: #7c3aed; font-weight: bold; {LABEL_FONT}')
+                elif key in self._video_keys:
+                    value_label.setStyleSheet(f'color: #0891b2; font-weight: bold; {LABEL_FONT}')
+                elif key in self._mocap_keys:
+                    value_label.setStyleSheet(f'color: #d97706; font-weight: bold; {LABEL_FONT}')
+                elif key in self._session_keys:
+                    value_label.setStyleSheet(f'color: #6d28d9; {LABEL_FONT}')
                 elif key == 'sync_status':
                     value_label.setStyleSheet(f'color: #666; {LABEL_FONT}')
                 else:
@@ -907,14 +926,14 @@ class StatisticsPanel(QFrame):
                 self.labels[key] = value_label
             content_layout.addLayout(grid)
 
-        # Segment 链路
-        chain_header = QLabel('Segment 链路')
-        chain_header.setStyleSheet(f'font-weight: bold; color: #7c3aed; {LABEL_FONT} padding-top: 6px; border-bottom: 1px solid #e5e7eb;')
+        # 采集链路 — Segment 链
+        chain_header = QLabel('采集链路 — Segment 链')
+        chain_header.setStyleSheet(f'font-weight: bold; color: #0891b2; {LABEL_FONT} padding-top: 6px; border-bottom: 1px solid #e5e7eb;')
         chain_header.setMinimumHeight(20)
         content_layout.addWidget(chain_header)
         self.chain_text = QTextEdit()
         self.chain_text.setReadOnly(True)
-        self.chain_text.setMaximumHeight(120)
+        self.chain_text.setMaximumHeight(160)
         self.chain_text.setFont(QFont('Consolas', 7))
         self.chain_text.setStyleSheet('background: #f8f9fa; border: 1px solid #e5e7eb;')
         content_layout.addWidget(self.chain_text)
