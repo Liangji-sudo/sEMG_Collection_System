@@ -6428,9 +6428,32 @@
         let reconnectAttempts = 0;
         const maxReconnectAttempts = 10;
         let isReconnecting = false;
+        let _initialStatusReceived = false;  // 首次收到状态后才弹toast
+        let _pendingCommand = null;          // 待响应的命令: 'connect' | 'disconnect' | null
+        let _pendingCommandTimer = null;     // 命令超时定时器
 
         // DOM元素（延迟获取）
         let toggleBtn, btnText, statusBadge, infoText;
+
+        // Toast 辅助函数
+        function showMocapToast(message, type = 'info') {
+            const toast = document.getElementById('toast');
+            if (!toast) return;
+            let msgEl = document.getElementById('toastMessage');
+            let iconEl = toast.querySelector('i');
+            if (!msgEl || !iconEl) {
+                toast.innerHTML = '<i class="fas fa-check-circle"></i> <span id="toastMessage"></span>';
+                msgEl = document.getElementById('toastMessage');
+                iconEl = toast.querySelector('i');
+            }
+            const iconMap = { success: 'check-circle', error: 'times-circle', warning: 'exclamation-triangle', info: 'info-circle' };
+            const icon = iconMap[type] || 'info-circle';
+            toast.className = `toast ${type}`;
+            iconEl.className = `fas fa-${icon}`;
+            msgEl.textContent = message;
+            toast.classList.add('visible');
+            setTimeout(() => toast.classList.remove('visible'), 3000);
+        }
 
         // 连接WebSocket
         function connectWs() {
@@ -6477,6 +6500,19 @@
                         // 只处理SDK状态消息，忽略其他广播消息(如mocap_data)
                         if (data.type === 'mocap_sdk_status') {
                             console.log('[MocapControl] SDK状态:', data.sdk_connected);
+
+                            // 清除待处理命令和超时
+                            if (_pendingCommandTimer) { clearTimeout(_pendingCommandTimer); _pendingCommandTimer = null; }
+                            const cmd = _pendingCommand;
+                            _pendingCommand = null;
+
+                            // 命令执行结果反馈（连接失败/断开失败等）
+                            if (cmd === 'connect' && !data.sdk_connected) {
+                                showMocapToast('动捕SDK连接失败，请检查动捕设备是否已连接', 'error');
+                            } else if (cmd === 'disconnect' && data.sdk_connected) {
+                                showMocapToast('动捕SDK断开失败', 'error');
+                            }
+
                             updateUI(data.sdk_connected);
                         }
                     } catch (e) {
@@ -6518,6 +6554,9 @@
 
         // 更新UI
         function updateUI(connected) {
+            const wasInitial = !_initialStatusReceived;
+            _initialStatusReceived = true;
+            const changed = (sdkConnected !== connected);
             sdkConnected = connected;
             if (!statusBadge || !btnText || !infoText || !toggleBtn) return;
 
@@ -6527,12 +6566,14 @@
                 btnText.textContent = '断开SDK';
                 toggleBtn.querySelector('i').className = 'fas fa-stop';
                 infoText.textContent = '动捕SDK运行中';
+                if (!wasInitial && changed) showMocapToast('动捕SDK已连接', 'success');
             } else {
                 statusBadge.textContent = '未连接';
                 statusBadge.className = 'status-badge disconnected';
                 btnText.textContent = '连接SDK';
                 toggleBtn.querySelector('i').className = 'fas fa-play';
                 infoText.textContent = '点击按钮连接动捕SDK';
+                if (!wasInitial && changed) showMocapToast('动捕SDK已断开', 'info');
             }
         }
 
@@ -6542,11 +6583,24 @@
 
             if (!ws || ws.readyState !== WebSocket.OPEN) {
                 console.warn('[MocapControl] WebSocket未连接');
+                showMocapToast('动捕SDK服务器未连接，无法操作', 'warning');
                 return;
             }
 
             const action = sdkConnected ? 'mocap_sdk_disconnect' : 'mocap_sdk_connect';
             console.log('[MocapControl] 发送命令:', action);
+            _pendingCommand = sdkConnected ? 'disconnect' : 'connect';
+            showMocapToast(sdkConnected ? '正在断开动捕SDK...' : '正在连接动捕SDK...', 'info');
+
+            // 超时处理：10秒内未收到响应则提示
+            if (_pendingCommandTimer) clearTimeout(_pendingCommandTimer);
+            _pendingCommandTimer = setTimeout(() => {
+                if (_pendingCommand) {
+                    showMocapToast(`动捕SDK${_pendingCommand === 'connect' ? '连接' : '断开'}操作超时，请检查SDK是否运行`, 'error');
+                    _pendingCommand = null;
+                }
+            }, 10000);
+
             ws.send(JSON.stringify({ type: 'control_command', action: action, data: {} }));
         }
 
