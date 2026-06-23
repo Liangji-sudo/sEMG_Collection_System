@@ -262,9 +262,13 @@
          */
         updateStreamMode(prefix, mode, connected) {
             const streamEl = document.getElementById(`${prefix}Stream`);
+            const rowEl = document.getElementById(`${prefix}RingRow`);
             if (!streamEl) return;
 
             const textEl = streamEl.querySelector('span');
+
+            // 清除行级状态类
+            if (rowEl) rowEl.classList.remove('ring-preview', 'ring-collection');
 
             if (!connected) {
                 streamEl.className = 'stream-mode';
@@ -278,9 +282,11 @@
             if (mode === 'preview') {
                 modeText = '预览中';
                 modeClass = 'stream-mode preview';
+                if (rowEl) rowEl.classList.add('ring-preview');
             } else if (mode === 'collection') {
                 modeText = '采集中';
                 modeClass = 'stream-mode collection';
+                if (rowEl) rowEl.classList.add('ring-collection');
             } else {
                 modeText = '空闲';
                 modeClass = 'stream-mode';

@@ -836,12 +836,16 @@
             if (span) {
                 span.textContent = statusText;
             }
-            // 根据状态文字设置颜色类名
+            // 根据状态文字设置颜色类名（文字+行级背景）
             statusEl.classList.remove('camera-preview', 'camera-recording');
+            const rowEl = document.getElementById(`${side}CameraRow`);
+            if (rowEl) rowEl.classList.remove('camera-preview', 'camera-recording');
             if (statusText === '预览中') {
                 statusEl.classList.add('camera-preview');
+                if (rowEl) rowEl.classList.add('camera-preview');
             } else if (statusText === '写盘中') {
                 statusEl.classList.add('camera-recording');
+                if (rowEl) rowEl.classList.add('camera-recording');
             }
         }
 
