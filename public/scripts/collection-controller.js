@@ -2815,7 +2815,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             } else {
                 // 普通模式
                 if (startBtn) {
-                    startBtn.innerHTML = '<i class="fas fa-play"></i> 开始采集（单轮）';
+                    startBtn.innerHTML = '<i class="fas fa-play"></i> 开始采集（单个轮次）';
                     startBtn.disabled = running || !hasDevice;
                     startBtn.title = (!hasDevice && !running) ? noDeviceTip : '';
                 }
@@ -3450,7 +3450,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             // 恢复按钮文案和状态
             const startBtn = document.getElementById('startTaskBtn');
             if (startBtn) {
-                startBtn.innerHTML = '<i class="fas fa-play"></i> 开始采集（单轮）';
+                startBtn.innerHTML = '<i class="fas fa-play"></i> 开始采集（单个轮次）';
                 startBtn.disabled = false;
             }
             const startAllBtn = document.getElementById('startAllSessionsBtn');
