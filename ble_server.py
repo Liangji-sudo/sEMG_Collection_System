@@ -337,7 +337,7 @@ def init_filters():
 
 # ================= 连接配置 =================
 CONNECT_TIMEOUT = 30.0
-SCAN_TIMEOUT = 5.0
+SCAN_TIMEOUT = 3.0
 MAX_RETRIES = 3
 RETRY_DELAY = 2.0
 
