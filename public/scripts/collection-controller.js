@@ -443,6 +443,12 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
         onPageShow() {
             console.log('[Collection] 页面显示');
+            // 【修复】重新进入采集页时清空采集进度，避免残留旧进度
+            this.currentSessionIndex = 0;
+            this.currentStageIndex = 0;
+            this.currentGestureIndex = 0;
+            this.gestureRepeatCount = 0;
+            this.continualTrialCount = 0;
             this.loadCollectionConfig();
             // 【修复】重置动画模块状态
             this.resetAnimationModules();
@@ -581,7 +587,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             let html = '';
 
             html += `
-                <div class="gesture-progress-summary" style="font-size: 12px; padding: 5px 8px; margin-bottom: 5px;">
+                <div class="gesture-progress-summary" style="font-size: 10px; padding: 3px 6px; margin-bottom: 3px;">
                     <span>轮次: ${this.currentSessionIndex + 1}/${this.sessionCount}</span>
                     <span>Stage: ${this.currentStageIndex + 1}/${this.stages.length}</span>
                     <span>手势: ${this.currentGestureIndex}/${this.gestures.length}</span>
@@ -612,11 +618,11 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                                  status === 'current' ? 'circle-notch fa-spin' : 'circle';
                 
                 html += `
-                    <div class="gesture-item ${status}" data-index="${index}" style="padding: 6px 8px; font-size: 13px; display: flex; align-items: center; gap: 6px;">
-                        <span class="gesture-icon" style="font-size: 14px;">${gesture.icon || '✋'}</span>
-                        <span class="gesture-name" style="flex: 1; font-size: 13px;">${gesture.name}</span>
+                    <div class="gesture-item ${status}" data-index="${index}">
+                        <span class="gesture-icon" style="font-size: 12px;">${gesture.icon || '✋'}</span>
+                        <span class="gesture-name" style="flex: 1;">${gesture.name}</span>
                         ${progressText}
-                        <i class="fas fa-${iconClass} status-icon" style="font-size: 12px;"></i>
+                        <i class="fas fa-${iconClass} status-icon" style="font-size: 10px;"></i>
                     </div>
                 `;
             });
@@ -646,12 +652,12 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             let html = '';
 
             html += `
-                <div class="gesture-progress-summary" style="font-size: 12px; padding: 8px; margin-bottom: 8px; background: #f0f9ff; border-radius: 6px;">
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                <div class="gesture-progress-summary" style="font-size: 10px; padding: 5px; margin-bottom: 5px; background: #f0f9ff; border-radius: 6px;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
                         <span><i class="fas fa-sync-alt"></i> 轮次 ${this.currentSessionIndex + 1}/${this.sessionCount}</span>
                         <span><i class="fas fa-layer-group"></i> Stage ${this.currentStageIndex + 1}/${this.stages.length}</span>
                     </div>
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                    <div style="display: flex; justify-content: space-between;">
                         <span>试次进度:</span>
                         <span style="font-weight: 600; color: #1e40af;">${currentTrial}/${trialsPerStage}</span>
                     </div>
@@ -660,9 +666,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             
             const percent = trialsPerStage > 0 ? (currentTrial / trialsPerStage * 100) : 0;
             html += `
-                <div style="padding: 0 8px; margin-bottom: 10px;">
-                    <div style="height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden;">
-                        <div style="height: 100%; width: ${percent}%; background: linear-gradient(90deg, #3b82f6, #1e40af); border-radius: 4px; transition: width 0.3s;"></div>
+                <div style="padding: 0 6px; margin-bottom: 5px;">
+                    <div style="height: 6px; background: #e5e7eb; border-radius: 3px; overflow: hidden;">
+                        <div style="height: 100%; width: ${percent}%; background: linear-gradient(90deg, #3b82f6, #1e40af); border-radius: 3px; transition: width 0.3s;"></div>
                     </div>
                 </div>
             `;
@@ -670,11 +676,11 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             const currentStage = this.stages[this.currentStageIndex];
             if (currentStage) {
                 html += `
-                    <div style="padding: 8px; background: #fafafa; border-radius: 6px; margin-bottom: 8px;">
-                        <div style="font-size: 13px; font-weight: 600; color: #1f2937; margin-bottom: 4px;">
+                    <div style="padding: 5px; background: #fafafa; border-radius: 4px; margin-bottom: 4px;">
+                        <div style="font-size: 11px; font-weight: 600; color: #1f2937; margin-bottom: 2px;">
                             <i class="fas fa-hand-point-right" style="color: #3b82f6;"></i> ${currentStage.name}
                         </div>
-                        ${currentStage.instruction ? `<div style="font-size: 11px; color: #6b7280;">${currentStage.instruction}</div>` : ''}
+                        ${currentStage.instruction ? `<div style="font-size: 10px; color: #6b7280;">${currentStage.instruction}</div>` : ''}
                     </div>
                 `;
             }
@@ -692,8 +698,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             }
             
             html += `
-                <div style="padding: 6px 8px; font-size: 12px; color: ${statusColor}; display: flex; align-items: center; gap: 6px;">
-                    <span style="width: 8px; height: 8px; border-radius: 50%; background: ${statusColor};"></span>
+                <div style="padding: 3px 6px; font-size: 11px; color: ${statusColor}; display: flex; align-items: center; gap: 4px;">
+                    <span style="width: 6px; height: 6px; border-radius: 50%; background: ${statusColor};"></span>
                     ${statusText}
                 </div>
             `;
@@ -3213,20 +3219,27 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 'continuous2': 'continual_gesture_2',
                 'continuous3': 'continual_gesture_3'
             };
-            
+
             this.currentTaskId = taskIdMap[htmlTaskId] || htmlTaskId;
             console.log('[Collection] 设置任务类型:', this.currentTaskId);
-            
+
+            // 【修复】重新选择任务时清空采集进度
+            this.currentSessionIndex = 0;
+            this.currentStageIndex = 0;
+            this.currentGestureIndex = 0;
+            this.gestureRepeatCount = 0;
+            this.continualTrialCount = 0;
+
             // 重新加载配置
             this.loadCollectionConfig();
-            
+
             if (window.animationController) {
                 window.animationController.setCurrentTask(this.currentTaskId);
             }
-            
+
             // 重置动画模块
             this.resetAnimationModules();
-            
+
             this.updateUI();
         }
 
