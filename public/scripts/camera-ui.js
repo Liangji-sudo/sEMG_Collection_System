@@ -836,6 +836,13 @@
             if (span) {
                 span.textContent = statusText;
             }
+            // 根据状态文字设置颜色类名
+            statusEl.classList.remove('camera-preview', 'camera-recording');
+            if (statusText === '预览中') {
+                statusEl.classList.add('camera-preview');
+            } else if (statusText === '写盘中') {
+                statusEl.classList.add('camera-recording');
+            }
         }
 
         if (previewBtn) {

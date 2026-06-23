@@ -276,7 +276,7 @@
             let modeClass = 'stream-mode';
 
             if (mode === 'preview') {
-                modeText = '预览';
+                modeText = '预览中';
                 modeClass = 'stream-mode preview';
             } else if (mode === 'collection') {
                 modeText = '采集中';

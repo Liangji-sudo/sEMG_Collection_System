@@ -5258,21 +5258,34 @@
         }
 
         .stream-mode.preview {
-            color: #3b82f6;
+            color: #16a34a;
+            font-weight: 600;
         }
 
         .stream-mode.preview i {
-            color: #3b82f6;
-            animation: blink 1.5s ease-in-out infinite;
+            color: #22c55e;
+            animation: pulse 1.5s ease-in-out infinite;
         }
 
         .stream-mode.collection {
-            color: #ef4444;
+            color: #d97706;
+            font-weight: 600;
         }
 
         .stream-mode.collection i {
-            color: #ef4444;
+            color: #f59e0b;
             animation: blink 1s ease-in-out infinite;
+        }
+
+        /* 摄像头状态：预览中和写盘中的颜色 */
+        .connection-status.camera-preview {
+            color: #16a34a !important;
+            font-weight: 600;
+        }
+
+        .connection-status.camera-recording {
+            color: #d97706 !important;
+            font-weight: 600;
         }
 
         @keyframes pulse {
