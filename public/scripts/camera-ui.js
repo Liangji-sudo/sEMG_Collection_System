@@ -997,10 +997,17 @@
         const container = document.getElementById('cameraThumbContainer');
         if (container) container.classList.remove('active');
 
-        // 清空状态
+        // 重置缩略图状态
         ['left', 'right'].forEach(side => {
+            const cell = document.getElementById(`thumb${capitalize(side)}Cell`);
+            const img = document.getElementById(`thumb${capitalize(side)}Img`);
             const statusEl = document.getElementById(`thumb${capitalize(side)}Status`);
-            if (statusEl) statusEl.textContent = '未开启';
+            if (cell) cell.classList.add('no-signal');
+            if (img) img.removeAttribute('src');
+            if (statusEl) {
+                statusEl.textContent = '未连接设备';
+                statusEl.style.color = '#94a3b8';
+            }
         });
         const fpsLabel = document.getElementById('thumbFpsLabel');
         if (fpsLabel) fpsLabel.textContent = '';
@@ -1052,8 +1059,10 @@
     function updateThumbCell(side, result) {
         const img = document.getElementById(`thumb${capitalize(side)}Img`);
         const status = document.getElementById(`thumb${capitalize(side)}Status`);
+        const cell = document.getElementById(`thumb${capitalize(side)}Cell`);
 
         if (result && result.success && result.frame) {
+            if (cell) cell.classList.remove('no-signal');
             if (img) img.src = `data:image/jpeg;base64,${result.frame}`;
             if (status) {
                 const source = result.source === 'cache' ? '' : ' (抓帧)';
@@ -1061,6 +1070,8 @@
                 status.style.color = '#10b981';
             }
         } else {
+            if (cell) cell.classList.add('no-signal');
+            if (img) img.removeAttribute('src');
             if (status) {
                 status.textContent = result && result.error ? result.error : '无画面';
                 status.style.color = '#ef4444';

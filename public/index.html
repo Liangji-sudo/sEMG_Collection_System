@@ -1684,9 +1684,25 @@
             border: 1px solid #e5e7eb;
         }
 
+        /* 无画面时隐藏img，显示状态文字 */
+        .camera-thumb-img[src=""],
+        .camera-thumb-img:not([src]) {
+            display: none;
+        }
+
+        .camera-thumb-cell.no-signal .camera-thumb-img {
+            display: none;
+        }
+
         .camera-thumb-cell .thumb-status {
             font-size: 9px;
             color: #9ca3af;
+        }
+
+        .camera-thumb-cell.no-signal .thumb-status {
+            font-size: 12px;
+            color: #94a3b8;
+            padding: 20px 0;
         }
 
         .gif-resize-handle {
@@ -6236,15 +6252,15 @@
                             <span class="thumb-fps" id="thumbFpsLabel"></span>
                         </div>
                         <div class="camera-thumb-grid">
-                            <div class="camera-thumb-cell" id="thumbLeftCell">
+                            <div class="camera-thumb-cell no-signal" id="thumbLeftCell">
                                 <span class="camera-thumb-label">🖐 左手</span>
                                 <img class="camera-thumb-img" id="thumbLeftImg" src="" alt="左手摄像头">
-                                <span class="thumb-status" id="thumbLeftStatus">未开启</span>
+                                <span class="thumb-status" id="thumbLeftStatus">未连接设备</span>
                             </div>
-                            <div class="camera-thumb-cell" id="thumbRightCell">
+                            <div class="camera-thumb-cell no-signal" id="thumbRightCell">
                                 <span class="camera-thumb-label">🖐 右手</span>
                                 <img class="camera-thumb-img" id="thumbRightImg" src="" alt="右手摄像头">
-                                <span class="thumb-status" id="thumbRightStatus">未开启</span>
+                                <span class="thumb-status" id="thumbRightStatus">未连接设备</span>
                             </div>
                         </div>
                     </div>
