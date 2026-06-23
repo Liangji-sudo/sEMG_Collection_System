@@ -619,10 +619,10 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
                 html += `
                     <div class="gesture-item ${status}" data-index="${index}">
-                        <span class="gesture-icon" style="font-size: 11px;">${gesture.icon || '✋'}</span>
-                        <span class="gesture-name" style="flex: 1;">${gesture.name}</span>
+                        <span class="gesture-icon" style="font-size: 10px;">${gesture.icon || '✋'}</span>
+                        <span class="gesture-name" style="flex: 1; font-size: 9px;">${gesture.name}</span>
                         ${progressText}
-                        <i class="fas fa-${iconClass} status-icon" style="font-size: 9px;"></i>
+                        <i class="fas fa-${iconClass} status-icon" style="font-size: 8px;"></i>
                     </div>
                 `;
             });
