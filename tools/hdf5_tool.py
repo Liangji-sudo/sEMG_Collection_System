@@ -894,28 +894,39 @@ class StatisticsPanel(QFrame):
 
         LABEL_FONT = 'font-size: 9pt;'
 
+        # 统一网格 — 所有 section 共用同一个 QGridLayout，保证纵向对齐
+        unified_grid = QGridLayout()
+        unified_grid.setVerticalSpacing(2)
+        unified_grid.setHorizontalSpacing(10)
+        unified_grid.setContentsMargins(4, 4, 4, 4)
+        # 4 列: name0 | value0 | name1 | value1
+        unified_grid.setColumnStretch(0, 0)
+        unified_grid.setColumnStretch(1, 1)
+        unified_grid.setColumnStretch(2, 0)
+        unified_grid.setColumnStretch(3, 1)
+
+        grid_row = 0
         first_section = True
+
         for section_title, fields in self.SECTIONS:
-            # 区块间距（首个 section 不加）
+            # 区块间横线分隔（首个 section 不加）
             if not first_section:
-                spacer = QWidget()
-                spacer.setFixedHeight(10)
-                spacer.setStyleSheet('background: transparent;')
-                content_layout.addWidget(spacer)
+                sep = QFrame()
+                sep.setFrameShape(QFrame.HLine)
+                sep.setFrameShadow(QFrame.Sunken)
+                sep.setStyleSheet('color: #e5e7eb; max-height: 1px; margin: 4px 0;')
+                unified_grid.addWidget(sep, grid_row, 0, 1, 4)
+                grid_row += 1
             first_section = False
 
-            # section header
+            # section header (占满 4 列)
             header = QLabel(section_title)
-            header.setStyleSheet(f'font-weight: bold; color: #374151; {LABEL_FONT} padding-top: 3px; padding-bottom: 3px; border-bottom: 1px solid #e5e7eb;')
+            header.setStyleSheet(f'font-weight: bold; color: #374151; {LABEL_FONT} padding-top: 4px; padding-bottom: 3px;')
             header.setMinimumHeight(24)
-            content_layout.addWidget(header)
+            unified_grid.addWidget(header, grid_row, 0, 1, 4)
+            grid_row += 1
 
-            # grid for this section
-            grid = QGridLayout()
-            grid.setVerticalSpacing(2)
-            grid.setHorizontalSpacing(10)
-            grid.setContentsMargins(4, 2, 4, 2)
-
+            # section 字段 (2 对/行)
             for i, (key, name) in enumerate(fields):
                 row = i // 2
                 col = (i % 2) * 2
@@ -946,10 +957,15 @@ class StatisticsPanel(QFrame):
                     value_label.setStyleSheet(f'color: #666; {LABEL_FONT}')
                 else:
                     value_label.setStyleSheet(f'color: #0066cc; {LABEL_FONT}')
-                grid.addWidget(name_label, row, col)
-                grid.addWidget(value_label, row, col + 1)
+                unified_grid.addWidget(name_label, grid_row + row, col)
+                unified_grid.addWidget(value_label, grid_row + row, col + 1)
                 self.labels[key] = value_label
-            content_layout.addLayout(grid)
+
+            # 前进到下一个 section 的起始行
+            section_field_rows = (len(fields) + 1) // 2  # 每行 2 对
+            grid_row += section_field_rows
+
+        content_layout.addLayout(unified_grid)
 
         # 采集链路 — Segment 链（与前一个 section 保持间距）
         chain_spacer = QWidget()
