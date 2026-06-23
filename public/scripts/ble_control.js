@@ -312,6 +312,9 @@ async function decodeData(buffer) {
                     name: msg.name,
                     rssi: msg.rssi,
                 };
+                if (BleState.onDeviceChange) {
+                    BleState.onDeviceChange(deviceId, BleState.devices[deviceId]);
+                }
                 updateDeviceUI(deviceId);
                 showToast(`设备 ${deviceId} 连接成功`);
             } else if (msg.success === false) {
@@ -336,6 +339,9 @@ async function decodeData(buffer) {
                     name: null,
                     rssi: null,
                 };
+                if (BleState.onDeviceChange) {
+                    BleState.onDeviceChange(deviceId, BleState.devices[deviceId]);
+                }
                 updateDeviceUI(deviceId);
                 showToast(`设备 ${deviceId} 已断开`);
             } else {
@@ -431,6 +437,11 @@ async function decodeData(buffer) {
                 battery_percent: data.battery_percent || 0,
                 stream_mode: data.stream_mode || 'idle',
             });
+        }
+
+        // 通知设备状态变化回调
+        if (BleState.onDeviceChange) {
+            BleState.onDeviceChange(deviceId, BleState.devices[deviceId]);
         }
     }
 

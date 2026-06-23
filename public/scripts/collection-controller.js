@@ -106,6 +106,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             console.log('[Collection] init() 开始');
             try {
                 this.bindEvents();
+                this._bindDeviceStatusListener();
                 this.loadCollectionConfig();
                 this.updateUI();
                 // 【新增】初始化空格键监听器
@@ -114,6 +115,20 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             } catch (error) {
                 console.error('[Collection] init() 错误:', error);
             }
+        }
+
+        /**
+         * 【新增】监听手环设备连接/断开，实时更新按钮状态
+         */
+        _bindDeviceStatusListener() {
+            if (!window.BleControl) return;
+
+            // BLE 设备状态变化（connect/disconnect/status 推送）
+            window.BleControl.onDeviceChange = (deviceId, state) => {
+                if (!this._isRunning) {
+                    this.updateControlButtons(false);
+                }
+            };
         }
 
         bindEvents() {
@@ -2773,15 +2788,23 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             const abortBtn = document.getElementById('abortTaskBtn');
             const startAllBtn = document.getElementById('startAllSessionsBtn');
 
+            // 【新增】检测是否有手环设备已连接
+            const hasDevice = this._isAnyDeviceConnected();
+            const noDeviceTip = '未连接手环设备，无法开始采集';
+
             if (this._isResumeMode && !running) {
                 // 续采准备态：startTaskBtn 改为"开始续采"，全轮次/测试禁用
                 if (startBtn) {
                     startBtn.innerHTML = '<i class="fas fa-redo-alt"></i> 开始续采';
-                    startBtn.disabled = false;
+                    startBtn.disabled = !hasDevice;
+                    startBtn.title = hasDevice ? '' : noDeviceTip;
                 }
                 if (testBtn) testBtn.disabled = true;
                 if (stopBtn) stopBtn.disabled = true;
-                if (startAllBtn) startAllBtn.disabled = true;
+                if (startAllBtn) {
+                    startAllBtn.disabled = true;
+                    startAllBtn.title = '';
+                }
                 // abortBtn 作为"放弃断点"
                 if (abortBtn) {
                     abortBtn.innerHTML = '<i class="fas fa-times-circle"></i> 放弃断点';
@@ -2792,17 +2815,46 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 // 普通模式
                 if (startBtn) {
                     startBtn.innerHTML = '<i class="fas fa-play"></i> 开始采集（单轮）';
-                    startBtn.disabled = running;
+                    startBtn.disabled = running || !hasDevice;
+                    startBtn.title = (!hasDevice && !running) ? noDeviceTip : '';
                 }
-                if (testBtn) testBtn.disabled = running;
+                if (testBtn) {
+                    testBtn.disabled = running;
+                    testBtn.title = '';
+                }
                 if (stopBtn) stopBtn.disabled = !running;
-                if (startAllBtn) startAllBtn.disabled = running;
+                if (startAllBtn) {
+                    startAllBtn.disabled = running || !hasDevice;
+                    startAllBtn.title = (!hasDevice && !running) ? noDeviceTip : '';
+                }
                 if (abortBtn) {
                     abortBtn.innerHTML = '<i class="fas fa-exclamation-triangle"></i> 异常中断';
                     abortBtn.style.background = '#f97316';
                     abortBtn.disabled = !running || this._isTestMode;
                 }
             }
+        }
+
+        /**
+         * 【新增】检查是否有手环设备已连接
+         */
+        _isAnyDeviceConnected() {
+            // 优先通过 BleControl 检查
+            if (window.BleControl && window.BleControl.devices) {
+                const dev1 = window.BleControl.devices[1];
+                const dev2 = window.BleControl.devices[2];
+                if ((dev1 && dev1.connected) || (dev2 && dev2.connected)) {
+                    return true;
+                }
+            }
+            // 备用：通过 deviceStatusWidget 检查
+            if (window.deviceStatusWidget) {
+                const w = window.deviceStatusWidget;
+                if (w.device1Status?.connected || w.device2Status?.connected) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         updateStatus(text) {
