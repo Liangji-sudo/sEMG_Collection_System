@@ -2894,13 +2894,24 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
         showToast(message, type = 'info') {
             const toast = document.getElementById('toast');
-            if (toast) {
-                const icon = type === 'success' ? 'check' : type === 'warning' ? 'exclamation-triangle' : 'info';
-                toast.className = `toast ${type}`;
-                toast.innerHTML = `<i class="fas fa-${icon}-circle"></i> ${message}`;
-                toast.classList.add('visible');
-                setTimeout(() => toast.classList.remove('visible'), 3000);
+            if (!toast) return;
+
+            // 确保 #toastMessage 存在（可能被其他模块的 innerHTML 销毁）
+            let msgEl = document.getElementById('toastMessage');
+            let iconEl = toast.querySelector('i');
+            if (!msgEl || !iconEl) {
+                toast.innerHTML = '<i class="fas fa-check-circle"></i> <span id="toastMessage"></span>';
+                msgEl = document.getElementById('toastMessage');
+                iconEl = toast.querySelector('i');
             }
+
+            const iconMap = { success: 'check-circle', error: 'times-circle', warning: 'exclamation-triangle', info: 'info-circle' };
+            const icon = iconMap[type] || 'info-circle';
+            toast.className = `toast ${type}`;
+            iconEl.className = `fas fa-${icon}`;
+            msgEl.textContent = message;
+            toast.classList.add('visible');
+            setTimeout(() => toast.classList.remove('visible'), 3000);
         }
 
         // ==================== 全屏Session提示弹窗 ====================

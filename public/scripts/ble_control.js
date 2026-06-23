@@ -597,9 +597,16 @@ async function decodeData(buffer) {
             // 简易 toast
             const toast = document.getElementById('toast');
             if (toast) {
-                const msgEl = document.getElementById('toastMessage');
-                const icon = toast.querySelector('i');
-                
+                let msgEl = document.getElementById('toastMessage');
+                let icon = toast.querySelector('i');
+
+                // 如果 #toastMessage 被其他模块的 innerHTML 销毁，重建结构
+                if (!msgEl || !icon) {
+                    toast.innerHTML = '<i class="fas fa-check-circle"></i> <span id="toastMessage"></span>';
+                    msgEl = document.getElementById('toastMessage');
+                    icon = toast.querySelector('i');
+                }
+
                 toast.className = `toast ${type}`;
                 if (msgEl) msgEl.textContent = msg;
                 if (icon) {
