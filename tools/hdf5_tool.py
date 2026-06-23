@@ -792,7 +792,13 @@ class StatisticsPanel(QFrame):
             ('recording_session_id', '录制会话ID'), ('is_multi_session', '多Session'),
             ('segment_device_count', '设备数'),
         ]),
-        ('受试者与任务', [
+        ('受试者信息', [
+            ('subject_name', '姓名'), ('subject_id', '编号'),
+            ('subject_age', '年龄'), ('subject_gender', '性别'),
+            ('subject_hand', '惯用手'),
+            ('subject_height', '身高(cm)'), ('subject_weight', '体重(kg)'),
+        ]),
+        ('任务配置', [
             ('user_id', '受试者编号'),
             ('task_id', '任务协议'),
             ('stage_name', 'Stage名称'), ('stage_index', 'Stage序号'),
@@ -853,7 +859,9 @@ class StatisticsPanel(QFrame):
     _status_keys = {'collection_status', 'is_resumed', 'segment_index'}
     _video_keys = {'video_left', 'video_right'}
     _mocap_keys = {'mocap'}
-    _subject_keys = {'user_id', 'task_id', 'stage_name', 'stage_index', 'template_name'}
+    _subject_info_keys = {'subject_name', 'subject_id', 'subject_age', 'subject_gender',
+                          'subject_hand', 'subject_height', 'subject_weight'}
+    _task_config_keys = {'user_id', 'task_id', 'stage_name', 'stage_index', 'template_name'}
     _wristband_dev1_keys = {'ble_device_dev1', 'emg1_250hz', 'emg1_2khz', 'emg1_frame_count', 'emg1_frame_range',
                             'imu1a_ble', 'imu1a_100hz', 'imu1b_ble', 'imu1b_100hz', 'imu1c_100hz',
                             'imu1_all_ble', 'total_imu1_all_frames', 'imu1_hw_version', 'imu1_num_imus',
@@ -928,8 +936,10 @@ class StatisticsPanel(QFrame):
                     value_label.setStyleSheet(f'color: #0891b2; font-weight: bold; {LABEL_FONT}')
                 elif key in self._mocap_keys:
                     value_label.setStyleSheet(f'color: #d97706; font-weight: bold; {LABEL_FONT}')
-                elif key in self._subject_keys:
+                elif key in self._subject_info_keys:
                     value_label.setStyleSheet(f'color: #059669; font-weight: bold; {LABEL_FONT}')
+                elif key in self._task_config_keys:
+                    value_label.setStyleSheet(f'color: #0d9488; font-weight: bold; {LABEL_FONT}')
                 elif key in self._session_keys:
                     value_label.setStyleSheet(f'color: #6d28d9; {LABEL_FONT}')
                 elif key == 'sync_status':
@@ -1051,6 +1061,39 @@ class StatisticsPanel(QFrame):
                     self.labels['template_name'].setText(str(template_name))
                 else:
                     self.labels['template_name'].setText('-')
+
+                # ===== 读取受试者信息（subject group） =====
+                GENDER_MAP = {'male': '男', 'female': '女'}
+                HAND_MAP = {'right': '右手', 'left': '左手', 'both': '双手'}
+                SUBJECT_FIELDS = [
+                    ('subject_name', 'name'), ('subject_id', 'id'),
+                    ('subject_age', 'age'), ('subject_gender', 'gender'),
+                    ('subject_hand', 'hand'),
+                    ('subject_height', 'height'), ('subject_weight', 'weight'),
+                ]
+                try:
+                    if 'subject' in f:
+                        subj = f['subject']
+                        for label_key, attr_name in SUBJECT_FIELDS:
+                            val = subj.attrs.get(attr_name, None)
+                            if val is not None:
+                                if isinstance(val, bytes):
+                                    val = val.decode('utf-8')
+                                val_str = str(val)
+                                # 性别 / 惯用手 中文映射
+                                if attr_name == 'gender':
+                                    val_str = GENDER_MAP.get(val_str, val_str)
+                                elif attr_name == 'hand':
+                                    val_str = HAND_MAP.get(val_str, val_str)
+                                self.labels[label_key].setText(val_str)
+                            else:
+                                self.labels[label_key].setText('-')
+                    else:
+                        for label_key, _ in SUBJECT_FIELDS:
+                            self.labels[label_key].setText('-')
+                except Exception:
+                    for label_key, _ in SUBJECT_FIELDS:
+                        self.labels[label_key].setText('-')
 
                 # 读取SD卡bin文件名（绿色）
                 sd_bin_dev1 = f.attrs.get('sd_bin_dev1', None)
