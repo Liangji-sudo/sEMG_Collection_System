@@ -413,14 +413,8 @@
 
             this._panel.classList.add('active');
 
-            // 面板刚变为可见，如果没有有效 inline left/top，设置默认位置
-            const left = parseFloat(this._panel.style.left);
-            const top = parseFloat(this._panel.style.top);
-            if (isNaN(left) || isNaN(top)) {
-                if (!this._restorePosition(this._panel, STORAGE_KEY_PANEL)) {
-                    this._setDefaultPosition(this._panel, STORAGE_KEY_PANEL);
-                }
-            }
+            // 每次显示动画面板时居中到采集引导区域中间
+            this._setDefaultPosition(this._panel, STORAGE_KEY_PANEL);
             this._clampToContainer(this._panel);
             this._triggerResize();
         }
