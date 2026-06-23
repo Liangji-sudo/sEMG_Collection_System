@@ -432,7 +432,7 @@
             switch (status) {
                 case 'connected':
                     badge.className = 'status-badge connected';
-                    badge.textContent = '已连接';
+                    badge.textContent = '就绪';
                     break;
                 case 'connecting':
                     badge.className = 'status-badge';
