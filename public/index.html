@@ -295,6 +295,53 @@
         .status-progress-fill.green { background: #22c55e; }
         .status-progress-fill.yellow { background: #f59e0b; }
 
+        /* 摄像头卡片绿色连接状态 */
+        #cameraCard.camera-connected {
+            border-left: 3px solid #22c55e;
+            background: linear-gradient(135deg, #f0fdf4 0%, white 100%);
+        }
+
+        .camera-hands-status {
+            display: flex;
+            gap: 10px;
+            margin: 6px 0 4px 0;
+        }
+
+        .camera-hand-slot {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            background: #f8fafc;
+            border: 1px solid #e5e7eb;
+            font-size: 10px;
+            color: #94a3b8;
+            transition: all 0.3s;
+        }
+
+        .camera-hand-slot.streaming {
+            background: #f0fdf4;
+            border-color: #86efac;
+            color: #16a34a;
+        }
+
+        .camera-hand-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #d1d5db;
+            flex-shrink: 0;
+            transition: all 0.3s;
+        }
+
+        .camera-hand-slot.streaming .camera-hand-dot {
+            background: #22c55e;
+            box-shadow: 0 0 4px #22c55e;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
         /* 蓝牙设备卡片 */
         .bt-card {
             grid-column: span 1;
@@ -5624,14 +5671,23 @@
                 </div>
 
                 <!-- 摄像头控制 -->
-                <div class="status-card">
+                <div class="status-card" id="cameraCard">
                     <div class="status-card-header">
                         <div class="status-card-title">
                             <i class="fas fa-camera"></i> 摄像头控制
                         </div>
                         <span class="status-badge disconnected" id="cameraStreamStatus">未启动</span>
                     </div>
-                    <div class="status-sub" id="cameraStreamInfo">点击按钮配置摄像头</div>
+                    <div class="camera-hands-status" id="cameraStreamInfo">
+                        <div class="camera-hand-slot" id="cameraLeftSlot">
+                            <span class="camera-hand-dot"></span>
+                            <span>左手: 未配置</span>
+                        </div>
+                        <div class="camera-hand-slot" id="cameraRightSlot">
+                            <span class="camera-hand-dot"></span>
+                            <span>右手: 未配置</span>
+                        </div>
+                    </div>
                     <button class="config-btn load-btn" id="cameraStreamBtn" style="width: 100%; margin-top: 8px;">
                         <i class="fas fa-video"></i> <span id="cameraStreamBtnText">打开摄像头</span>
                     </button>

@@ -799,7 +799,6 @@
         const btn = document.getElementById('cameraStreamBtn');
         const btnText = document.getElementById('cameraStreamBtnText');
         const badge = document.getElementById('cameraStreamStatus');
-        const info = document.getElementById('cameraStreamInfo');
 
         if (!btn) return;
 
@@ -812,7 +811,6 @@
                 badge.className = 'status-badge connected';
                 badge.textContent = '预览中';
             }
-            if (info) info.textContent = '摄像头已打开，预览中';
         } else {
             btn.className = 'config-btn load-btn';
             btn.style.background = '';
@@ -822,8 +820,9 @@
                 badge.className = 'status-badge disconnected';
                 badge.textContent = '未打开';
             }
-            if (info) info.textContent = '点击按钮配置并打开摄像头';
         }
+
+        updateCameraCardState();
     }
 
     function updateCameraStatus(side, statusText, showPreview) {
@@ -841,6 +840,76 @@
 
         if (previewBtn) {
             previewBtn.style.display = showPreview ? 'inline-block' : 'none';
+        }
+
+        // 同步更新下方相机卡片的左右手状态指示
+        updateCameraCardState();
+    }
+
+    /**
+     * 更新相机卡片整体状态：绿色边框/背景 + 左右手连接指示
+     */
+    function updateCameraCardState() {
+        const card = document.getElementById('cameraCard');
+        const leftSlot = document.getElementById('cameraLeftSlot');
+        const rightSlot = document.getElementById('cameraRightSlot');
+
+        // 获取左右手摄像头状态
+        let leftState = null, rightState = null;
+        if (window.CameraControl) {
+            leftState = window.CameraControl.getCameraState('left');
+            rightState = window.CameraControl.getCameraState('right');
+        }
+
+        const leftStreaming = !!(leftState && leftState.opened);
+        const rightStreaming = !!(rightState && rightState.opened);
+        const leftConfigured = !!(leftState && leftState.configured);
+        const rightConfigured = !!(rightState && rightState.configured);
+
+        // 更新左手槽位
+        if (leftSlot) {
+            const dot = leftSlot.querySelector('.camera-hand-dot');
+            const text = leftSlot.querySelector('span:last-child');
+            leftSlot.classList.toggle('streaming', leftStreaming);
+            if (leftStreaming) {
+                if (text) text.textContent = '左手: 预览中';
+            } else if (leftConfigured) {
+                if (text) text.textContent = '左手: 已配置';
+            } else {
+                if (text) text.textContent = '左手: 未配置';
+            }
+        }
+
+        // 更新右手槽位
+        if (rightSlot) {
+            const dot = rightSlot.querySelector('.camera-hand-dot');
+            const text = rightSlot.querySelector('span:last-child');
+            rightSlot.classList.toggle('streaming', rightStreaming);
+            if (rightStreaming) {
+                if (text) text.textContent = '右手: 预览中';
+            } else if (rightConfigured) {
+                if (text) text.textContent = '右手: 已配置';
+            } else {
+                if (text) text.textContent = '右手: 未配置';
+            }
+        }
+
+        // 更新卡片整体绿显
+        if (card) {
+            if (leftStreaming || rightStreaming) {
+                card.classList.add('camera-connected');
+            } else {
+                card.classList.remove('camera-connected');
+            }
+        }
+
+        // 更新 info 文字
+        const info = document.getElementById('cameraStreamInfo');
+        if (info && (leftStreaming || rightStreaming)) {
+            const hands = [];
+            if (leftStreaming) hands.push('左手');
+            if (rightStreaming) hands.push('右手');
+            // info 现在是 camera-hands-status 容器，不需要更新整体文字
         }
     }
 
