@@ -88,20 +88,7 @@
                 closeBtn.addEventListener('click', () => this.close());
             }
 
-            const overlay = document.getElementById('collectionSelectorModal');
-            if (overlay) {
-                overlay.addEventListener('click', (e) => {
-                    if (e.target === overlay) this.close();
-                });
-            }
-
-            // 【新增】阻止模态框内部的点击事件冒泡到 overlay
-            const modalContent = overlay?.querySelector('.selector-modal');
-            if (modalContent) {
-                modalContent.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                });
-            }
+            // 不再允许点击overlay外部关闭，只能通过右上角X按钮关闭
 
             const prevBtn = document.getElementById('selectorPrevBtn');
             if (prevBtn) {
