@@ -894,8 +894,8 @@ class StatisticsPanel(QFrame):
 
             # section header
             header = QLabel(section_title)
-            header.setStyleSheet(f'font-weight: bold; color: #374151; {LABEL_FONT} padding-top: 2px; padding-bottom: 2px; border-bottom: 1px solid #e5e7eb;')
-            header.setMinimumHeight(20)
+            header.setStyleSheet(f'font-weight: bold; color: #374151; {LABEL_FONT} padding-top: 3px; padding-bottom: 3px; border-bottom: 1px solid #e5e7eb;')
+            header.setMinimumHeight(24)
             content_layout.addWidget(header)
 
             # grid for this section
@@ -942,8 +942,8 @@ class StatisticsPanel(QFrame):
         content_layout.addWidget(chain_spacer)
 
         chain_header = QLabel('采集链路 — Segment 链')
-        chain_header.setStyleSheet(f'font-weight: bold; color: #0891b2; {LABEL_FONT} padding-top: 2px; padding-bottom: 2px; border-bottom: 1px solid #e5e7eb;')
-        chain_header.setMinimumHeight(20)
+        chain_header.setStyleSheet(f'font-weight: bold; color: #0891b2; {LABEL_FONT} padding-top: 3px; padding-bottom: 3px; border-bottom: 1px solid #e5e7eb;')
+        chain_header.setMinimumHeight(24)
         content_layout.addWidget(chain_header)
         self.chain_text = QTextEdit()
         self.chain_text.setReadOnly(True)
