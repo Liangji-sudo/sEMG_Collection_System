@@ -587,7 +587,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             let html = '';
 
             html += `
-                <div class="gesture-progress-summary" style="font-size: 9px; padding: 2px 5px; margin-bottom: 2px;">
+                <div class="gesture-progress-summary" style="font-size: 9px; padding: 1px 4px; margin-bottom: 1px;">
                     <span>轮次: ${this.currentSessionIndex + 1}/${this.sessionCount}</span>
                     <span>Stage: ${this.currentStageIndex + 1}/${this.stages.length}</span>
                     <span>手势: ${this.currentGestureIndex}/${this.gestures.length}</span>
@@ -652,8 +652,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             let html = '';
 
             html += `
-                <div class="gesture-progress-summary" style="font-size: 9px; padding: 3px 5px; margin-bottom: 3px; background: #f0f9ff; border-radius: 4px;">
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 1px;">
+                <div class="gesture-progress-summary" style="font-size: 9px; padding: 1px 4px; margin-bottom: 1px; background: #f0f9ff; border-radius: 3px;">
+                    <div style="display: flex; justify-content: space-between;">
                         <span><i class="fas fa-sync-alt"></i> 轮次 ${this.currentSessionIndex + 1}/${this.sessionCount}</span>
                         <span><i class="fas fa-layer-group"></i> Stage ${this.currentStageIndex + 1}/${this.stages.length}</span>
                     </div>
@@ -666,8 +666,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             
             const percent = trialsPerStage > 0 ? (currentTrial / trialsPerStage * 100) : 0;
             html += `
-                <div style="padding: 0 5px; margin-bottom: 3px;">
-                    <div style="height: 4px; background: #e5e7eb; border-radius: 2px; overflow: hidden;">
+                <div style="padding: 0 4px; margin-bottom: 1px;">
+                    <div style="height: 3px; background: #e5e7eb; border-radius: 2px; overflow: hidden;">
                         <div style="height: 100%; width: ${percent}%; background: linear-gradient(90deg, #3b82f6, #1e40af); border-radius: 2px; transition: width 0.3s;"></div>
                     </div>
                 </div>
@@ -676,11 +676,11 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             const currentStage = this.stages[this.currentStageIndex];
             if (currentStage) {
                 html += `
-                    <div style="padding: 3px 5px; background: #fafafa; border-radius: 3px; margin-bottom: 3px;">
-                        <div style="font-size: 10px; font-weight: 600; color: #1f2937; margin-bottom: 1px;">
+                    <div style="padding: 1px 4px; background: #fafafa; border-radius: 2px; margin-bottom: 1px;">
+                        <div style="font-size: 9px; font-weight: 600; color: #1f2937;">
                             <i class="fas fa-hand-point-right" style="color: #3b82f6;"></i> ${currentStage.name}
                         </div>
-                        ${currentStage.instruction ? `<div style="font-size: 9px; color: #6b7280;">${currentStage.instruction}</div>` : ''}
+                        ${currentStage.instruction ? `<div style="font-size: 8px; color: #6b7280;">${currentStage.instruction}</div>` : ''}
                     </div>
                 `;
             }
@@ -698,8 +698,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             }
             
             html += `
-                <div style="padding: 2px 5px; font-size: 9px; color: ${statusColor}; display: flex; align-items: center; gap: 3px;">
-                    <span style="width: 5px; height: 5px; border-radius: 50%; background: ${statusColor};"></span>
+                <div style="padding: 1px 4px; font-size: 9px; color: ${statusColor}; display: flex; align-items: center; gap: 2px;">
+                    <span style="width: 4px; height: 4px; border-radius: 50%; background: ${statusColor};"></span>
                     ${statusText}
                 </div>
             `;
