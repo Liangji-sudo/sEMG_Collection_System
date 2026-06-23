@@ -885,7 +885,7 @@ class StatisticsPanel(QFrame):
         for section_title, fields in self.SECTIONS:
             # section header
             header = QLabel(section_title)
-            header.setStyleSheet(f'font-weight: bold; color: #374151; {LABEL_FONT} padding-top: 4px; border-bottom: 1px solid #e5e7eb;')
+            header.setStyleSheet(f'font-weight: bold; color: #374151; {LABEL_FONT} padding-top: 10px; margin-top: 6px; border-bottom: 1px solid #e5e7eb;')
             header.setMinimumHeight(20)
             content_layout.addWidget(header)
 
@@ -950,18 +950,27 @@ class StatisticsPanel(QFrame):
             self.labels['创建时间'].setText(time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mtime)))
 
             with h5py.File(file_path, 'r') as f:
-                # 读取同步状态
+                # 读取同步状态 — 中文显示 + 颜色
                 sync_status = f.attrs.get('sync_status', 'unknown')
                 if isinstance(sync_status, bytes):
                     sync_status = sync_status.decode('utf-8')
-                self.labels['sync_status'].setText(sync_status)
-                # 根据状态设置颜色
+                SYNC_LABELS = {
+                    'synced': '✅ 已同步', 'pending': '⏳ 待同步',
+                    'syncing': '🔄 同步中', 'failed': '❌ 同步失败',
+                    'unknown': '❓ 未知',
+                }
+                sync_label = SYNC_LABELS.get(sync_status, sync_status)
+                self.labels['sync_status'].setText(sync_label)
                 if sync_status == 'synced':
-                    self.labels['sync_status'].setStyleSheet('color: #009900; font-weight: bold;')  # 绿色
+                    self.labels['sync_status'].setStyleSheet('color: #16a34a; font-weight: bold; font-size: 10pt;')
                 elif sync_status == 'pending':
-                    self.labels['sync_status'].setStyleSheet('color: #ff6600; font-weight: bold;')  # 橙色
+                    self.labels['sync_status'].setStyleSheet('color: #f97316; font-weight: bold; font-size: 10pt;')
+                elif sync_status == 'syncing':
+                    self.labels['sync_status'].setStyleSheet('color: #3b82f6; font-weight: bold; font-size: 10pt;')
+                elif sync_status == 'failed':
+                    self.labels['sync_status'].setStyleSheet('color: #dc2626; font-weight: bold; font-size: 10pt;')
                 else:
-                    self.labels['sync_status'].setStyleSheet('color: #666;')
+                    self.labels['sync_status'].setStyleSheet('color: #9ca3af; font-size: 10pt;')
 
                 # 读取Session相关字段（紫色）
                 session_index = f.attrs.get('session_index', None)
