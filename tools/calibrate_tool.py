@@ -120,14 +120,11 @@ class EMGFilter:
         return filtered
 
 
-class CalibrateTool(QMainWindow):
-    """H5数据可视化工具主窗口"""
+class CalibrateWidget(QWidget):
+    """H5数据可视化控件 — 可嵌入其他应用"""
 
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle('H5数据可视化工具 - calibrate_tool')
-        self.resize(1200, 800)
-        self.setMinimumSize(900, 600)
+    def __init__(self, parent=None):
+        super().__init__(parent)
 
         # 数据存储
         self.h5_file = None
@@ -218,9 +215,8 @@ class CalibrateTool(QMainWindow):
 
     def init_ui(self):
         """初始化UI"""
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        main_layout = QVBoxLayout(central_widget)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
 
         # === 顶部控制栏 ===
         control_widget = QWidget()
@@ -1358,15 +1354,20 @@ class CalibrateTool(QMainWindow):
                 data = getattr(self, attr, None)
                 if data is None or len(data) == 0:
                     continue
-                if len(imu_indices) > len(data):
+                # 过滤越界索引（不同 IMU 传感器数据长度可能不同）
+                valid_mask = imu_indices < len(data)
+                imu_idx_subset = imu_indices[valid_mask]
+                if len(imu_idx_subset) == 0:
                     continue
-                chunk = data[imu_indices]
+                # 同时裁剪 imu_times 保持一致
+                imu_t_subset = imu_times[valid_mask] if imu_times is not None else None
+                chunk = data[imu_idx_subset]
                 if len(chunk) == 0:
                     continue
                 chunk, step = self._downsample_for_plot(chunk, max_plot_points)
                 # X 轴：优先用 IMU time，否则线性插值
-                if imu_times is not None and len(imu_times) > 0:
-                    t = imu_times[::step] if step > 1 else imu_times
+                if imu_t_subset is not None and len(imu_t_subset) > 0:
+                    t = imu_t_subset[::step] if step > 1 else imu_t_subset
                     x = t[:len(chunk)]
                 else:
                     x = np.linspace(time_start, time_start + len(chunk) * step / imu_sample_rate, len(chunk))
@@ -1517,6 +1518,31 @@ class CalibrateTool(QMainWindow):
         if self.h5_file:
             self.h5_file.close()
         event.accept()
+
+
+class CalibrateTool(QMainWindow):
+    """H5数据可视化工具主窗口 — 独立运行（薄包装器）"""
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle('H5数据可视化工具 - calibrate_tool')
+        self.resize(1200, 800)
+        self.setMinimumSize(900, 600)
+
+        self._widget = CalibrateWidget()
+        self.setCentralWidget(self._widget)
+
+    def closeEvent(self, event):
+        """关闭窗口时清理H5资源（委托给内部 widget）"""
+        self._widget.closeEvent(event)
+        super().closeEvent(event)
+
+    def __getattr__(self, name):
+        """将未定义属性访问代理到内部 CalibrateWidget"""
+        widget = self.__dict__.get('_widget', None)
+        if widget is not None:
+            return getattr(widget, name)
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
 
 
 def main():

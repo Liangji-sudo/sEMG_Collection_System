@@ -40,6 +40,14 @@ except ImportError:
     HAS_SYNC_TOOL = False
     print("[警告] 无法导入bin_sync_tool，同步功能不可用")
 
+# 导入 calibrate_tool 可视化控件
+try:
+    from calibrate_tool import CalibrateWidget
+    HAS_CALIBRATE_TOOL = True
+except ImportError:
+    HAS_CALIBRATE_TOOL = False
+    print("[警告] 无法导入calibrate_tool，数据可视化功能不可用")
+
 # 尝试导入matplotlib
 try:
     import matplotlib
@@ -2238,6 +2246,34 @@ class ViewerTab(QWidget):
         self.text_view.setText("\n".join(lines))
 
 
+class CalibrateTab(QWidget):
+    """数据可视化标签页 — H5 信号预览与滤波（嵌入 calibrate_tool）"""
+    def __init__(self):
+        super().__init__()
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        if HAS_CALIBRATE_TOOL:
+            self.calibrate_widget = CalibrateWidget()
+            layout.addWidget(self.calibrate_widget)
+        else:
+            label = QLabel(
+                "⚠️ 无法导入 calibrate_tool 模块\n\n"
+                "请确保 tools/calibrate_tool.py 存在，且已安装依赖：\n"
+                "  pip install matplotlib scipy h5py PyQt5"
+            )
+            label.setAlignment(Qt.AlignCenter)
+            label.setStyleSheet("color: #888; padding: 50px; font-size: 12pt;")
+            layout.addWidget(label)
+
+    def load_file(self, file_path):
+        """加载H5文件并可视化"""
+        if HAS_CALIBRATE_TOOL:
+            self.calibrate_widget.load_h5_file(file_path)
+
+
 class SyncTab(QWidget):
     """同步标签页 - 完整的bin同步功能"""
     def __init__(self):
@@ -3735,8 +3771,13 @@ class HDF5Tool(QMainWindow):
             }
         """)
 
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+
         self.viewer_tab = ViewerTab()
         self.tabs.addTab(self.viewer_tab, "查看")
+
+        self.calibrate_tab = CalibrateTab()
+        self.tabs.addTab(self.calibrate_tab, "📊 数据可视化")
 
         self.sync_tab = SyncTab()
         self.tabs.addTab(self.sync_tab, "同步（新版本）")
@@ -3830,6 +3871,19 @@ class HDF5Tool(QMainWindow):
             self.view_btn.setEnabled(False)
             self.add_to_sync_btn.setEnabled(False)
             self.add_to_sync_btn.setText("添加到同步列表")
+
+    def _on_tab_changed(self, index):
+        """标签页切换时自动加载当前选中文件到目标标签页"""
+        calibrate_tab = getattr(self, 'calibrate_tab', None)
+        if calibrate_tab is None:
+            return
+        widget = self.tabs.widget(index)
+        if widget is calibrate_tab and HAS_CALIBRATE_TOOL:
+            items = self.file_list.selectedItems()
+            if items:
+                file_path = items[0].data(Qt.UserRole)
+                if file_path:
+                    calibrate_tab.load_file(file_path)
 
     def on_file_double_clicked(self, item):
         file_path = item.data(Qt.UserRole)
