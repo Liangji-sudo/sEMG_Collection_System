@@ -661,7 +661,7 @@ def _format_validation_report(validation_report):
 # ===================== h5文件同步 =====================
 
 def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, verify=True, set_synced=True,
-                     channel_map_name='V2'):
+                     channel_map_name='V2', manual_num_imus=None):
     """
     将h5文件与bin文件同步
 
@@ -675,6 +675,7 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
                     当需要同步多个设备时，应在最后一个设备同步时才设为True
         channel_map_name: 通道映射名称 ('V1'/'V2'/'physical')，默认 'V2'
                           H5 attrs 中的 channel_map 优先于此参数
+        manual_num_imus: 手动指定 IMU 数量，bin 自动检测失败时启用（None=自动检测）
 
     Returns:
         dict: 同步结果统计
@@ -689,7 +690,7 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
     _num_imus = 2
     try:
         with h5py.File(h5_path, 'r') as _f:
-            _num_imus = _resolve_num_imus(_f, device_id)
+            _num_imus = _resolve_num_imus(_f, device_id, imu_bin_path, manual_num_imus=manual_num_imus)
     except Exception:
         pass
     imu_parser = IMUBinParser(imu_bin_path, num_imus=_num_imus).parse() if imu_bin_path else None
@@ -1432,24 +1433,254 @@ def find_bin_offset_by_adc(h5_path, emg_bin_path, device_id=1, channel_map_name=
         'error': None if found else f'match_rate {best_rate:.3f} < threshold {match_threshold}',
     }
 
-def _resolve_num_imus(h5_file, device_id):
-    """从 H5 attrs 推断 IMU 数量。优先级: imu{device}_num_imus > num_imus > dataset 推断 > 默认 2"""
+def _verify_imu_frame_ids(imu_bin_path, num_imus, max_frames=100):
+    """用给定的 num_imus 解析 bin 前 max_frames 帧，验证 frame_id 严格递增。
+
+    错误 num_imus 会导致帧边界偏移，后续帧的 "frame_id" 实际是传感器数据字节，
+    极不可能形成 prev_id+1 的递增序列。因此 frame_id 是否严格 +1 递增是强判别信号。
+
+    针对多段录制拼接 bin（前段尾部残余 + 新段从 0 开始），不要求从第 0 帧起连续，
+    而是追踪**全局最长连续递增序列 (longest_consecutive_run)**。
+
+    Returns:
+        dict: {
+            'total': int,                    # 成功读取的帧数
+            'valid': int,                    # 所有 +1 递增帧数 (含不同段)
+            'longest_run': int,              # 最长连续 +1 递增序列长度
+            'score': float,                  # longest_run / total (0.0-1.0)
+            'first_fid': int,                # 首帧 frame_id
+            'last_fid': int,                 # 末帧 frame_id
+            'run_start_fid': int,            # 最长连续序列起始 frame_id
+        }
+        读取失败返回 {'total': 0, 'valid': 0, 'score': 0.0, ...}
+    """
+    frame_size = 4 + num_imus * BYTES_PER_IMU_CHIP
+    result = {'total': 0, 'valid': 0, 'score': 0.0,
+              'first_fid': None, 'last_fid': None,
+              'longest_run': 0, 'run_start_fid': None}
+    try:
+        with open(imu_bin_path, 'rb') as f:
+            f.seek(HEADER_SIZE)
+            prev_fid = None
+            current_run = 0
+            for i in range(max_frames):
+                chunk = f.read(frame_size)
+                if len(chunk) < frame_size:
+                    break
+                result['total'] += 1
+                fid = struct.unpack('<I', chunk[0:4])[0]
+                if result['first_fid'] is None:
+                    result['first_fid'] = fid
+                result['last_fid'] = fid
+
+                if prev_fid is None:
+                    # 第一帧：始终接受，启动当前连续序列
+                    current_run = 1
+                    result['valid'] += 1
+                    if current_run > result['longest_run']:
+                        result['longest_run'] = current_run
+                        result['run_start_fid'] = fid
+                elif fid == prev_fid + 1:
+                    result['valid'] += 1
+                    current_run += 1
+                    if current_run > result['longest_run']:
+                        result['longest_run'] = current_run
+                        result['run_start_fid'] = fid - current_run + 1
+                else:
+                    # 断裂点：结束当前 run，开始新的
+                    # 如果断裂后立即恢复递增（多段拼接），重置 current_run
+                    # 否则中断整个验证（错误 num_imus）
+                    if current_run < 2 and i > 1:
+                        # 已读超过 1 帧但最长 run 仍 < 2 → 无法形成有效递增，中断
+                        break
+                    current_run = 1  # 从当前帧重新开始计数
+                    result['valid'] += 1  # 当前帧也算 valid (作为新 run 的起点)
+                    if current_run > result['longest_run']:
+                        result['longest_run'] = current_run
+                        result['run_start_fid'] = fid
+                prev_fid = fid
+
+            # 最终 score 基于最长连续序列
+            result['score'] = result['longest_run'] / result['total'] if result['total'] > 0 else 0.0
+    except Exception:
+        pass
+    return result
+
+
+def _detect_num_imus_from_bin(imu_bin_path):
+    """通过 IMU bin 文件自动检测 IMU 芯片数量。
+
+    三级策略（按优先级递进）：
+    1. 整除检测：data_size % frame_size == 0 → 精确匹配，直接返回
+    2. 帧解析验证：对每个候选 num_imus 解析前 N 帧，
+       验证 frame_id 严格 +1 递增 — 这是强判别信号，
+       错误 num_imus 会导致帧边界错位，读到的 "frame_id" 实际是传感器数据
+    3. 最佳余数：截断文件场景，选择余数最小且 < frame/2 的 num_imus
+       （仅当其他候选余数均 > frame/2 时，避免平局误判）
+
+    Returns:
+        int: 检测到的 IMU 数量 (2/3/4)，检测失败返回 None
+    """
+    if not imu_bin_path or not os.path.exists(imu_bin_path):
+        return None
+    try:
+        file_size = os.path.getsize(imu_bin_path)
+        data_size = file_size - HEADER_SIZE
+        if data_size <= 0:
+            return None
+
+        # ---- 策略 1: 整除检测 ----
+        candidates_exact = []
+        for n in [4, 3, 2]:
+            frame_size = 4 + n * BYTES_PER_IMU_CHIP
+            if data_size % frame_size == 0:
+                candidates_exact.append(n)
+        if len(candidates_exact) == 1:
+            return candidates_exact[0]
+
+        # ---- 策略 2: 帧解析验证 (多候选或有截断时) ----
+        # 计算每个候选 num_imus 的最高帧数和最低帧数
+        max_frames_by_n = {}
+        for n in [4, 3, 2]:
+            fs = 4 + n * BYTES_PER_IMU_CHIP
+            max_f = data_size // fs
+            if max_f >= 3:  # 至少需要 3 帧才能验证递增
+                max_frames_by_n[n] = min(100, max_f)
+
+        if max_frames_by_n:
+            verify_results = {}
+            for n, max_f in max_frames_by_n.items():
+                vr = _verify_imu_frame_ids(imu_bin_path, n, max_f)
+                verify_results[n] = vr
+                if vr['total'] > 0:
+                    log(f"  num_imus={n}: 解析 {vr['total']} 帧, "
+                        f"最长递增序列 {vr['longest_run']}/{vr['total']} "
+                        f"(score={vr['score']:.1%}), "
+                        f"first={vr['first_fid']}, last={vr['last_fid']}")
+
+            # 筛选：最长连续序列 >= 10 帧且 score >= 90%
+            high_score = {n: vr for n, vr in verify_results.items()
+                          if vr['score'] >= 0.90 and vr['longest_run'] >= 10}
+            if len(high_score) == 1:
+                n = list(high_score.keys())[0]
+                log(f"  帧解析验证: num_imus={n} (最长连续 {high_score[n]['longest_run']} 帧, "
+                    f"score={high_score[n]['score']:.1%})")
+                return n
+            if len(high_score) > 1:
+                log(f"  ⚠️ 多个 num_imus 帧解析均通过: {list(high_score.keys())}，继续检测...")
+                # 多个都通过 → 歧义，继续策略 3
+
+            # 宽松：至少连续 3 帧递增
+            any_valid = {n: vr for n, vr in verify_results.items()
+                         if vr['longest_run'] >= 3}
+            if len(any_valid) == 1:
+                n = list(any_valid.keys())[0]
+                log(f"  帧解析验证(宽松): num_imus={n} (最长连续 {any_valid[n]['longest_run']} 帧)")
+                return n
+
+        # ---- 策略 3: 最佳余数 (截断文件 fallback) ----
+        remainders = {}
+        for n in [4, 3, 2]:
+            frame_size = 4 + n * BYTES_PER_IMU_CHIP
+            rem = data_size % frame_size
+            remainders[n] = (rem, frame_size)
+
+        # 找余数最小（绝对值）的候选
+        best_n = min(remainders, key=lambda n: remainders[n][0])
+        best_rem, best_fs = remainders[best_n]
+
+        # 检查：最佳候选的余数 < frame/2，且其他候选余数 >= frame/2
+        others_below_half = [n for n, (rem, fs) in remainders.items()
+                             if n != best_n and rem < fs * 0.5]
+        if best_rem < best_fs * 0.5 and len(others_below_half) == 0:
+            log(f"  最佳余数检测: num_imus={best_n} (余数={best_rem}B < frame/2={best_fs * 0.5:.0f}B, "
+                f"其他候选余数均 > frame/2)")
+            return best_n
+
+        # 检查：最佳候选余数明显小于其他候选（差距 > 4 字节）
+        second_rem = min((remainders[n][0] for n in remainders if n != best_n), default=999)
+        if best_rem + 4 < second_rem:
+            log(f"  最佳余数检测: num_imus={best_n} (余数={best_rem}B << 次优={second_rem}B)")
+            return best_n
+
+        if candidates_exact:
+            log(f"  ⚠️ bin 整除检测歧义 (均整除): {candidates_exact}，保守回退")
+        else:
+            log(f"  ⚠️ bin 自动检测不确定: remainders={[(n, remainders[n][0]) for n in [4,3,2]]}")
+        return None
+    except OSError:
+        pass
+    return None
+
+
+def _resolve_num_imus(h5_file, device_id, imu_bin_path=None, manual_num_imus=None):
+    """从 bin 文件 / H5 attrs 推断用于同步的 IMU 数量。
+
+    优先级:
+    1. bin 自动检测（最高 — bin 是 SD 卡真实数据源）
+    2. 用户手动指定 manual_num_imus（bin 检测失败时的兜底）
+    3. H5 attrs: imu{device}_num_imus（GUI 设置的设备特定值）
+    4. H5 attrs: num_imus（通用值）
+    5. dataset 推断（BLE 数据集中出现的 IMU 数量）
+    6. 默认 2
+
+    H5 attr 由 BLE 包数量决定（BLE 通常只传 2 个 IMU），
+    但 bin 文件才是 SD 卡数据的真实来源，可能有 3 个 IMU。
+    """
+    # 1. bin 自动检测（最高优先级 — bin 是 SD 卡真实数据）
+    if imu_bin_path:
+        detected = _detect_num_imus_from_bin(imu_bin_path)
+        if detected is not None:
+            h5_val = h5_file.attrs.get(f'imu{device_id}_num_imus')
+            if h5_val is not None:
+                h5_val = int(h5_val)
+            if h5_val is None:
+                h5_val = h5_file.attrs.get('num_imus')
+                if h5_val is not None:
+                    h5_val = int(h5_val)
+            if h5_val and detected != h5_val:
+                log(f"  自动检测 IMU 数量: {detected} (来自 bin)，"
+                    f"H5 attr 记录为 {h5_val} (BLE 仅传 {h5_val} 个)，以 bin 为准")
+            else:
+                log(f"  自动检测 IMU 数量: {detected} (来自 bin 文件)")
+            return detected
+
+    # 2. 用户手动指定（bin 自动检测失败时的兜底）
+    if manual_num_imus is not None:
+        n = max(1, min(4, int(manual_num_imus)))
+        log(f"  IMU 数量由用户指定: {n} (bin 自动检测未成功)")
+        return n
+
+    # 3. H5 attrs — 设备特定
     val = h5_file.attrs.get(f'imu{device_id}_num_imus')
     if val is not None:
-        return max(1, min(4, int(val)))
+        n = max(1, min(4, int(val)))
+        log(f"  IMU 数量来自 H5 attr imu{device_id}_num_imus: {n}")
+        return n
+
+    # 4. H5 attrs — 通用
     val = h5_file.attrs.get('num_imus')
     if val is not None:
-        return max(1, min(4, int(val)))
-    # infer from imu*_all_ble dataset imu_index
+        n = max(1, min(4, int(val)))
+        log(f"  IMU 数量来自 H5 attr num_imus: {n}")
+        return n
+
+    # 5. 从 imu*_all_ble dataset 推断
     all_ds = f'imu{device_id}_all_ble'
     if all_ds in h5_file and 'imu_index' in h5_file[all_ds].dtype.names:
         max_idx = int(h5_file[all_ds][:]['imu_index'].max())
-        return max(1, min(4, max_idx + 1))
-    # infer from existence of a/b/c BLE datasets
+        n = max(1, min(4, max_idx + 1))
+        log(f"  IMU 数量推断自 BLE 数据: {n} (imu_index max={max_idx})")
+        return n
+
+    # 6. 从 imu*{a,b,c}_ble dataset 存在性推断
     for candidate in [3, 2]:
         ds = f'imu{device_id}{chr(ord("a") + candidate - 1)}_ble'
         if ds in h5_file:
+            log(f"  IMU 数量推断自数据集 {ds}: {candidate}")
             return candidate
+
+    log("  IMU 数量默认: 2")
     return 2
 
 
@@ -1525,7 +1756,8 @@ def _recover_one_to_one_anchors(parser, channels_250hz, channel_map):
 
 
 def sync_h5_one_to_one(h5_path, emg_bin_path, imu_bin_path=None, device_id=1,
-                       verify=True, set_synced=True, channel_map_name='V2'):
+                       verify=True, set_synced=True, channel_map_name='V2',
+                       manual_num_imus=None):
     """一对一同步：H5 与 bin 一一对应，bin_offset=0，使用 row_index 定位。
 
     适用于 stream_format_version >= 2 且 bin_pair_source=collection_stream 的新格式 H5。
@@ -1538,6 +1770,7 @@ def sync_h5_one_to_one(h5_path, emg_bin_path, imu_bin_path=None, device_id=1,
         verify: 是否 ADC 校验
         set_synced: 是否设 sync_status=synced
         channel_map_name: 通道映射
+        manual_num_imus: 手动指定 IMU 数量，bin 自动检测失败时启用（None=自动检测）
 
     Returns:
         dict: 同步结果
@@ -1574,7 +1807,7 @@ def sync_h5_one_to_one(h5_path, emg_bin_path, imu_bin_path=None, device_id=1,
     _ni = 2
     try:
         with h5py.File(h5_path, 'r') as _f:
-            _ni = _resolve_num_imus(_f, device_id)
+            _ni = _resolve_num_imus(_f, device_id, imu_bin_path, manual_num_imus=manual_num_imus)
     except Exception:
         pass
     imu_parser = IMUBinParser(imu_bin_path, num_imus=_ni).parse() if imu_bin_path else None
@@ -1862,7 +2095,8 @@ def _sync_imu_100hz(h5_file, emg_parser, imu_parser, data_2khz, device_id):
 
 def sync_h5_one_to_many_adc_search(h5_path, emg_bin_path, imu_bin_path=None, device_id=1,
                                    verify=True, set_synced=True, channel_map_name='V2',
-                                   num_anchors=40, match_threshold=0.95):
+                                   num_anchors=40, match_threshold=0.95,
+                                   manual_num_imus=None):
     """一对多 ADC 搜索同步：通过 ADC 值搜索 H5 在长 bin 中的 offset，然后同步。
 
     适用于旧格式 H5（多 H5 共享一个长 bin），不依赖 frame_id。
@@ -1877,6 +2111,7 @@ def sync_h5_one_to_many_adc_search(h5_path, emg_bin_path, imu_bin_path=None, dev
         channel_map_name: 通道映射
         num_anchors: 搜索锚点数量
         match_threshold: 匹配阈值
+        manual_num_imus: 手动指定 IMU 数量，bin 自动检测失败时启用（None=自动检测）
 
     Returns:
         dict: 同步结果
@@ -1914,7 +2149,7 @@ def sync_h5_one_to_many_adc_search(h5_path, emg_bin_path, imu_bin_path=None, dev
     _ni = 2
     try:
         with h5py.File(h5_path, 'r') as _f:
-            _ni = _resolve_num_imus(_f, device_id)
+            _ni = _resolve_num_imus(_f, device_id, imu_bin_path, manual_num_imus=manual_num_imus)
     except Exception:
         pass
     imu_parser = IMUBinParser(imu_bin_path, num_imus=_ni).parse() if imu_bin_path else None
@@ -2282,6 +2517,8 @@ def main():
     parser.add_argument("--imu-bin", help="IMU bin文件路径（可选）")
     parser.add_argument("--device", type=int, default=1, choices=[1, 2], help="设备ID (1或2)")
     parser.add_argument("--no-verify", action="store_true", help="跳过数据校验")
+    parser.add_argument("--num-imus", type=int, default=None, choices=[2, 3, 4],
+                        help="手动指定 IMU 芯片数量 (默认: 自动检测 bin 文件)")
     parser.add_argument("--channel-map", type=str, default="V2", choices=["V1", "V2", "physical"],
                         help="通道映射模式 (默认 V2，V1/V2 将 bin 物理顺序映射到 H5 显示顺序)")
     parser.add_argument("--gui", action="store_true", help="启动GUI界面")
@@ -2307,7 +2544,8 @@ def main():
         args.imu_bin,
         device_id=args.device,
         verify=not args.no_verify,
-        channel_map_name=args.channel_map
+        channel_map_name=args.channel_map,
+        manual_num_imus=args.num_imus,
     )
 
     if result['status'] == 'success':

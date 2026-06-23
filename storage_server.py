@@ -695,6 +695,25 @@ class HDF5StorageServer:
             imu2b_100hz_ds.attrs["sample_rate"] = 100
             imu2b_100hz_ds.attrs["description"] = "100Hz IMU-B data (synced from SD card bin)"
 
+            # 设备1/2的第3个IMU（仅 3-IMU 硬件有数据，由 sync 填充，BLE 不传）
+            imu1c_100hz_ds = self.f.create_dataset(
+                "imu1c_100hz", shape=(0,), dtype=IMU_100HZ_DTYPE,
+                chunks=(500,), maxshape=(None,), compression="gzip"
+            )
+            imu1c_100hz_ds.attrs["device"] = "device_1"
+            imu1c_100hz_ds.attrs["sensor"] = "IMU_C (AD1)"
+            imu1c_100hz_ds.attrs["sample_rate"] = 100
+            imu1c_100hz_ds.attrs["description"] = "100Hz IMU-C data (synced from SD card bin, no BLE)"
+
+            imu2c_100hz_ds = self.f.create_dataset(
+                "imu2c_100hz", shape=(0,), dtype=IMU_100HZ_DTYPE,
+                chunks=(500,), maxshape=(None,), compression="gzip"
+            )
+            imu2c_100hz_ds.attrs["device"] = "device_2"
+            imu2c_100hz_ds.attrs["sensor"] = "IMU_C (AD1)"
+            imu2c_100hz_ds.attrs["sample_rate"] = 100
+            imu2c_100hz_ds.attrs["description"] = "100Hz IMU-C data (synced from SD card bin, no BLE)"
+
             # ===================== 同步状态标记 =====================
             # pending: 待同步（250Hz数据，需要与SD卡bin同步补全为2kHz）
             # synced: 已同步（已补全为2kHz数据）
