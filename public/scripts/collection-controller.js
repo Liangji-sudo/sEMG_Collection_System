@@ -127,6 +127,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             window.BleControl.onDeviceChange = (deviceId, state) => {
                 if (!this._isRunning) {
                     this.updateControlButtons(false);
+                    this.resetDisplay();
                 }
             };
         }
@@ -2927,11 +2928,15 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             const progressFill = document.getElementById('progressFill');
             const progressText = document.getElementById('progressText');
             const countdownEl = document.getElementById('countdown');
+            const phaseLabel = document.getElementById('shufflePhaseLabel');
 
-            if (gestureNameEl) gestureNameEl.textContent = '点击开始';
+            const hasDevice = this._isAnyDeviceConnected();
+
+            if (gestureNameEl) {
+                gestureNameEl.textContent = hasDevice ? '准备就绪' : '未连接设备';
+            }
             if (gestureInstructionEl) {
-                const stageName = this.stages[this.currentStageIndex]?.name || '';
-                gestureInstructionEl.textContent = `当前Stage: ${stageName}，点击开始按钮开始采集`;
+                gestureInstructionEl.textContent = this._getContextualHint(hasDevice);
             }
             if (gestureIcon?.parentElement) gestureIcon.parentElement.style.display = '';
             if (progressFill) {
@@ -2940,7 +2945,6 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             }
             if (progressText) progressText.textContent = `0 / ${this.gestures.length} 手势`;
 
-            const phaseLabel = document.getElementById('shufflePhaseLabel');
             if (phaseLabel) {
                 phaseLabel.className = 'shuffle-phase-label';
                 phaseLabel.textContent = '';
@@ -2948,7 +2952,27 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             if (countdownEl) countdownEl.style.display = 'none';
 
-            this.updateStatus('准备就绪');
+            this.updateStatus(hasDevice ? '准备就绪' : '未连接设备');
+        }
+
+        /**
+         * 【新增】根据设备连接状态返回引导提示文案
+         */
+        _getContextualHint(hasDevice) {
+            if (!hasDevice) {
+                return '当前没有连接手环，无法采集数据，请退出并重新连接手环';
+            }
+
+            if (this._isResumeMode) {
+                const stageName = this.stages[this.currentStageIndex]?.name || '';
+                return `断点续采模式 — 当前Stage: ${stageName}，点击「开始续采」继续采集`;
+            }
+
+            const stageName = this.stages[this.currentStageIndex]?.name || '';
+            if (this.stages.length > 1) {
+                return `当前Stage: ${stageName}，选择对应Stage后点击「开始采集（全部轮次）」`;
+            }
+            return `当前Stage: ${stageName}，点击「开始采集（全部轮次）」开始采集`;
         }
 
         showToast(message, type = 'info') {
