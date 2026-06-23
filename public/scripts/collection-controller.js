@@ -1424,6 +1424,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this.updateNextStageButton();
             this.updateGestureList();
             this.updateStatus('已停止');
+            this.resetDisplay();
 
             // 【新增】采集结束后恢复质量颜色指示（如果仍在采集页且设备连接）
             if (window.waveformController) {
