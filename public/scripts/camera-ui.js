@@ -868,9 +868,9 @@
 
         // 更新左手槽位
         if (leftSlot) {
-            const dot = leftSlot.querySelector('.camera-hand-dot');
-            const text = leftSlot.querySelector('span:last-child');
             leftSlot.classList.toggle('streaming', leftStreaming);
+            leftSlot.classList.toggle('configured', leftConfigured && !leftStreaming);
+            const text = leftSlot.querySelector('span:last-child');
             if (leftStreaming) {
                 if (text) text.textContent = '左手: 预览中';
             } else if (leftConfigured) {
@@ -882,9 +882,9 @@
 
         // 更新右手槽位
         if (rightSlot) {
-            const dot = rightSlot.querySelector('.camera-hand-dot');
-            const text = rightSlot.querySelector('span:last-child');
             rightSlot.classList.toggle('streaming', rightStreaming);
+            rightSlot.classList.toggle('configured', rightConfigured && !rightStreaming);
+            const text = rightSlot.querySelector('span:last-child');
             if (rightStreaming) {
                 if (text) text.textContent = '右手: 预览中';
             } else if (rightConfigured) {
@@ -901,15 +901,6 @@
             } else {
                 card.classList.remove('camera-connected');
             }
-        }
-
-        // 更新 info 文字
-        const info = document.getElementById('cameraStreamInfo');
-        if (info && (leftStreaming || rightStreaming)) {
-            const hands = [];
-            if (leftStreaming) hands.push('左手');
-            if (rightStreaming) hands.push('右手');
-            // info 现在是 camera-hands-status 容器，不需要更新整体文字
         }
     }
 

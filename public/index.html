@@ -303,42 +303,51 @@
 
         .camera-hands-status {
             display: flex;
-            gap: 10px;
-            margin: 6px 0 4px 0;
+            gap: 8px;
+            margin: 8px 0 4px 0;
         }
 
         .camera-hand-slot {
             flex: 1;
             display: flex;
             align-items: center;
-            gap: 4px;
-            padding: 4px 8px;
-            border-radius: 4px;
-            background: #f8fafc;
-            border: 1px solid #e5e7eb;
-            font-size: 10px;
-            color: #94a3b8;
+            gap: 6px;
+            padding: 6px 10px;
+            border-radius: 6px;
+            background: #f1f5f9;
+            border: 1px solid #cbd5e1;
+            font-size: 11px;
+            font-weight: 500;
+            color: #64748b;
             transition: all 0.3s;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.04);
         }
 
         .camera-hand-slot.streaming {
-            background: #f0fdf4;
+            background: #dcfce7;
             border-color: #86efac;
-            color: #16a34a;
+            color: #15803d;
+            font-weight: 600;
+            box-shadow: 0 1px 4px rgba(34,197,94,0.15);
         }
 
         .camera-hand-dot {
-            width: 7px;
-            height: 7px;
+            width: 8px;
+            height: 8px;
             border-radius: 50%;
-            background: #d1d5db;
+            background: #94a3b8;
             flex-shrink: 0;
             transition: all 0.3s;
         }
 
+        .camera-hand-slot.configured .camera-hand-dot {
+            background: #3b82f6;
+            box-shadow: 0 0 3px #3b82f6;
+        }
+
         .camera-hand-slot.streaming .camera-hand-dot {
             background: #22c55e;
-            box-shadow: 0 0 4px #22c55e;
+            box-shadow: 0 0 6px #22c55e;
             animation: pulse 2s ease-in-out infinite;
         }
 
