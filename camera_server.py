@@ -3,7 +3,7 @@ camera_server.py - USB摄像头管理服务器
 
 功能：
 1. 枚举USB摄像头设备（通过ffmpeg dshow）
-2. 实时MJPEG预览推流（WebSocket推送帧给前端，1280x720@30fps）
+2. 实时MJPEG预览推流（WebSocket推送帧给前端，1920x1080@30fps）
 3. 帧录制（FrameRecorder：从MJPEG管道直接保存帧，预览不中断）
 4. 支持多客户端同时连接（前端预览 + realtimeEngine录制控制）
 
@@ -114,9 +114,9 @@ class CameraCapture:
             self.ffmpeg_path,
             '-fflags', 'nobuffer',       # 禁用输入端缓冲
             '-flags', 'low_delay',       # 低延迟模式
-            '-rtbufsize', '256K',        # 限制 dshow 实时缓冲大小
+            '-rtbufsize', '2M',           # dshow 实时缓冲（1080p 需要更大）
             '-f', 'dshow',
-            '-video_size', '1280x720',
+            '-video_size', '1920x1080',
             '-framerate', '30',
             '-i', f'video={clean_name}',
             '-vcodec', 'mjpeg',
@@ -287,8 +287,8 @@ class CameraCapture:
 class FrameRecorder:
     """帧录制器 — 从 MJPEG 预览管道直接保存帧，无需单独的 ffmpeg 进程
 
-    核心思路：预览用 1280x720@30fps（保证摄像头兼容性），
-    录制时直接从同一管道保存 MJPEG 帧 → 停止时 ffmpeg 缩放封装为 640x480@15fps AVI。
+    核心思路：预览用 1920x1080@30fps（保证摄像头兼容性），
+    录制时直接从预览管道保存 MJPEG 帧（1920x1080），停止时 ffmpeg 封装为 AVI（保持原始分辨率和帧率）。
     预览在录制期间持续可用，不存在 dshow 设备独占冲突。
     """
 
@@ -363,15 +363,13 @@ class FrameRecorder:
               f'({raw_size} bytes, {self.frame_count} frames, '
               f'{self.recording_stopped_at - self.recording_started_at:.1f}s elapsed)')
 
-        # 用 ffmpeg 将 MJPEG 流缩放并封装为 AVI
-        # 预览用 1280x720@30fps（保证摄像头兼容性），录制缩放到 640x480@15fps（控制文件大小）
+        # 用 ffmpeg 将 MJPEG 流封装为 AVI（保持原始 1920x1080@30fps）
         try:
             result = subprocess.run([
                 self.ffmpeg_path,
                 '-f', 'mjpeg',
                 '-i', str(self.raw_path),
-                '-vf', 'scale=640:480',
-                '-r', '15',
+                '-r', '30',
                 '-c:v', 'mjpeg',
                 '-q:v', '12',
                 '-y',
@@ -1107,7 +1105,8 @@ class CameraServer:
         cmd = [
             self.ffmpeg_path,
             '-f', 'dshow',
-            '-video_size', '1280x720',
+            '-rtbufsize', '2M',
+            '-video_size', '1920x1080',
             '-framerate', '30',
             '-i', f'video={clean_name}',
             '-vframes', '1',         # 只抓一帧就退出
