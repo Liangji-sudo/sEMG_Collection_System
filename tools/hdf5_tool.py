@@ -882,11 +882,20 @@ class StatisticsPanel(QFrame):
 
         LABEL_FONT = 'font-size: 9pt;'
 
+        first_section = True
         for section_title, fields in self.SECTIONS:
+            # 区块间距（首个 section 不加）
+            if not first_section:
+                spacer = QWidget()
+                spacer.setFixedHeight(10)
+                spacer.setStyleSheet('background: transparent;')
+                content_layout.addWidget(spacer)
+            first_section = False
+
             # section header
             header = QLabel(section_title)
-            header.setStyleSheet(f'font-weight: bold; color: #374151; {LABEL_FONT} padding-top: 10px; margin-top: 6px; border-bottom: 1px solid #e5e7eb;')
-            header.setMinimumHeight(28)
+            header.setStyleSheet(f'font-weight: bold; color: #374151; {LABEL_FONT} padding-top: 2px; padding-bottom: 2px; border-bottom: 1px solid #e5e7eb;')
+            header.setMinimumHeight(20)
             content_layout.addWidget(header)
 
             # grid for this section
@@ -926,10 +935,15 @@ class StatisticsPanel(QFrame):
                 self.labels[key] = value_label
             content_layout.addLayout(grid)
 
-        # 采集链路 — Segment 链
+        # 采集链路 — Segment 链（与前一个 section 保持间距）
+        chain_spacer = QWidget()
+        chain_spacer.setFixedHeight(10)
+        chain_spacer.setStyleSheet('background: transparent;')
+        content_layout.addWidget(chain_spacer)
+
         chain_header = QLabel('采集链路 — Segment 链')
-        chain_header.setStyleSheet(f'font-weight: bold; color: #0891b2; {LABEL_FONT} padding-top: 10px; margin-top: 6px; border-bottom: 1px solid #e5e7eb;')
-        chain_header.setMinimumHeight(28)
+        chain_header.setStyleSheet(f'font-weight: bold; color: #0891b2; {LABEL_FONT} padding-top: 2px; padding-bottom: 2px; border-bottom: 1px solid #e5e7eb;')
+        chain_header.setMinimumHeight(20)
         content_layout.addWidget(chain_header)
         self.chain_text = QTextEdit()
         self.chain_text.setReadOnly(True)
