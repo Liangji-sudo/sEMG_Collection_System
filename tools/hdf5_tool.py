@@ -783,17 +783,20 @@ class StatisticsPanel(QFrame):
             ('创建时间', '创建时间'), ('sync_status', '同步状态'),
             ('collection_status', '采集状态'),
             ('is_resumed', '续采段'), ('segment_index', 'Segment序号'),
-            ('session_index', 'Session索引'), ('session_count', 'Session总数'),
-            ('session_number', '当前轮次'),
-            ('recording_session_id', '录制会话ID'), ('is_multi_session', '多Session'),
-            ('task_id', '任务ID'), ('user_id', '用户ID'),
-            ('stage_name', 'Stage名称'), ('stage_index', 'Stage序号'),
-            ('template_name', '模板名称'),
             ('collection_session_id', '采集会话ID'),
             ('parent_segment_index', '父Segment'),
             ('start_time', '开始时间'), ('end_time', '结束时间'),
             ('duration', '持续(秒)'),
+            ('session_index', 'Session索引'), ('session_count', 'Session总数'),
+            ('session_number', '当前轮次'),
+            ('recording_session_id', '录制会话ID'), ('is_multi_session', '多Session'),
             ('segment_device_count', '设备数'),
+        ]),
+        ('受试者与任务', [
+            ('user_id', '受试者编号'),
+            ('task_id', '任务协议'),
+            ('stage_name', 'Stage名称'), ('stage_index', 'Stage序号'),
+            ('template_name', '配置模板'),
         ]),
         ('蓝牙手环 — 设备1', [
             ('ble_device_dev1', 'BLE设备名称'),
@@ -850,6 +853,7 @@ class StatisticsPanel(QFrame):
     _status_keys = {'collection_status', 'is_resumed', 'segment_index'}
     _video_keys = {'video_left', 'video_right'}
     _mocap_keys = {'mocap'}
+    _subject_keys = {'user_id', 'task_id', 'stage_name', 'stage_index', 'template_name'}
     _wristband_dev1_keys = {'ble_device_dev1', 'emg1_250hz', 'emg1_2khz', 'emg1_frame_count', 'emg1_frame_range',
                             'imu1a_ble', 'imu1a_100hz', 'imu1b_ble', 'imu1b_100hz', 'imu1c_100hz',
                             'imu1_all_ble', 'total_imu1_all_frames', 'imu1_hw_version', 'imu1_num_imus',
@@ -924,6 +928,8 @@ class StatisticsPanel(QFrame):
                     value_label.setStyleSheet(f'color: #0891b2; font-weight: bold; {LABEL_FONT}')
                 elif key in self._mocap_keys:
                     value_label.setStyleSheet(f'color: #d97706; font-weight: bold; {LABEL_FONT}')
+                elif key in self._subject_keys:
+                    value_label.setStyleSheet(f'color: #059669; font-weight: bold; {LABEL_FONT}')
                 elif key in self._session_keys:
                     value_label.setStyleSheet(f'color: #6d28d9; {LABEL_FONT}')
                 elif key == 'sync_status':
