@@ -1315,9 +1315,8 @@ class ViewerTab(QWidget):
 
         # 统计信息面板
         self.stats_panel = StatisticsPanel()
-        layout.addWidget(self.stats_panel)
 
-        # 主分割器 - 可拖动
+        # 主分割器 - 可拖动 (树 | 属性+预览)
         main_splitter = QSplitter(Qt.Horizontal)
         main_splitter.setHandleWidth(5)
         main_splitter.setStyleSheet("""
@@ -1328,6 +1327,19 @@ class ViewerTab(QWidget):
                 background-color: #aaa;
             }
         """)
+
+        # 外层垂直分割器 — 统计面板 | 下方详情区（均可拖动）
+        viewer_splitter = QSplitter(Qt.Vertical)
+        viewer_splitter.setHandleWidth(5)
+        viewer_splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: #ddd;
+            }
+            QSplitter::handle:hover {
+                background-color: #aaa;
+            }
+        """)
+        viewer_splitter.addWidget(self.stats_panel)
 
         # 左侧：文件结构树
         tree_widget = QWidget()
@@ -1358,9 +1370,17 @@ class ViewerTab(QWidget):
         tree_layout.addWidget(self.tree)
         main_splitter.addWidget(tree_widget)
 
-        # 右侧分割器
+        # 右侧分割器（垂直）— 属性 | 数据预览
         right_splitter = QSplitter(Qt.Vertical)
         right_splitter.setHandleWidth(5)
+        right_splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: #ddd;
+            }
+            QSplitter::handle:hover {
+                background-color: #aaa;
+            }
+        """)
 
         # 属性信息
         attr_widget = QWidget()
@@ -1470,11 +1490,15 @@ class ViewerTab(QWidget):
         preview_layout.addWidget(self.preview_tabs)
         right_splitter.addWidget(preview_widget)
 
-        right_splitter.setSizes([150, 400])
         main_splitter.addWidget(right_splitter)
         main_splitter.setSizes([300, 700])
 
-        layout.addWidget(main_splitter)
+        right_splitter.setSizes([150, 400])
+
+        viewer_splitter.addWidget(main_splitter)
+        viewer_splitter.setSizes([300, 500])
+
+        layout.addWidget(viewer_splitter)
 
     def load_file(self, file_path):
         """加载HDF5文件"""
@@ -2165,6 +2189,14 @@ class SyncTab(QWidget):
         # 使用分割器
         splitter = QSplitter(Qt.Horizontal)
         splitter.setHandleWidth(5)
+        splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: #ddd;
+            }
+            QSplitter::handle:hover {
+                background-color: #aaa;
+            }
+        """)
 
         # 左侧：设置面板
         left_widget = QWidget()
