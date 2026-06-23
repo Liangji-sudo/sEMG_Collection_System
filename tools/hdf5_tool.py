@@ -67,7 +67,7 @@ class SyncWorker(QThread):
 
     def _find_bin_files(self, h5_path, device_id):
         """
-        从H5文件属性中读取bin文件前缀，在目录中查找对应的bin文件
+        从H5文件属性中读取bin文件前缀，在目录（含子目录）中查找对应的bin文件
 
         Args:
             h5_path: H5文件路径
@@ -89,19 +89,24 @@ class SyncWorker(QThread):
                 if isinstance(bin_prefix, bytes):
                     bin_prefix = bin_prefix.decode('utf-8')
 
-                # 构建完整的bin文件路径
+                # 在 bin_dir 及子目录中搜索
                 emg_bin_name = f"{bin_prefix}_emg.bin"
                 imu_bin_name = f"{bin_prefix}_imu.bin"
 
-                emg_bin_path = os.path.join(self.bin_dir, emg_bin_name)
-                imu_bin_path = os.path.join(self.bin_dir, imu_bin_name)
+                emg_path = None
+                imu_path = None
+                for root, dirs, files in os.walk(self.bin_dir):
+                    for f in files:
+                        if f == emg_bin_name:
+                            emg_path = os.path.join(root, f)
+                        elif f == imu_bin_name:
+                            imu_path = os.path.join(root, f)
+                        if emg_path and imu_path:
+                            break
+                    if emg_path and imu_path:
+                        break
 
-                # 检查文件是否存在
-                emg_exists = os.path.exists(emg_bin_path)
-                imu_exists = os.path.exists(imu_bin_path)
-
-                return (emg_bin_path if emg_exists else None,
-                        imu_bin_path if imu_exists else None)
+                return (emg_path, imu_path)
 
         except Exception as e:
             self.log.emit(f"    读取H5属性失败: {str(e)}")
@@ -2239,6 +2244,31 @@ class SyncTab(QWidget):
         """)
         bin_dir_layout.addWidget(self.bin_dir_label, 1)
         bin_dir_layout.addWidget(self.bin_dir_btn)
+
+        self.auto_bin_btn = QPushButton("自动查找")
+        self.auto_bin_btn.setFixedWidth(75)
+        self.auto_bin_btn.setToolTip("根据已添加H5文件的位置自动推测Bin目录")
+        self.auto_bin_btn.clicked.connect(self._auto_detect_bin_dir)
+        self.auto_bin_btn.setStyleSheet("""
+            QPushButton {
+                padding: 6px 10px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #10b981, stop:1 #059669);
+                color: white;
+                border: none;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #34d399, stop:1 #10b981);
+            }
+            QPushButton:pressed {
+                background: #047857;
+            }
+        """)
+        bin_dir_layout.addWidget(self.auto_bin_btn)
         bin_layout.addLayout(bin_dir_layout)
 
         left_layout.addWidget(bin_group)
@@ -2374,6 +2404,8 @@ class SyncTab(QWidget):
                 item.setToolTip(f)
                 self.h5_list.addItem(item)
         self.h5_count_label.setText(f"共 {len(self.h5_files)} 个文件")
+        if self.bin_dir:
+            self._refresh_pairing_status()
 
     def add_files_from_list(self, files):
         for f in files:
@@ -2383,11 +2415,159 @@ class SyncTab(QWidget):
                 item.setToolTip(f)
                 self.h5_list.addItem(item)
         self.h5_count_label.setText(f"共 {len(self.h5_files)} 个文件")
+        if self.bin_dir:
+            self._refresh_pairing_status()
 
     def clear_h5_files(self):
         self.h5_files.clear()
         self.h5_list.clear()
         self.h5_count_label.setText("共 0 个文件")
+        self.h5_count_label.setStyleSheet("color: #666;")
+
+    def _check_bin_pairing(self, file_path, bin_dir, device_id=1):
+        """检查单个 H5 文件与 bin 目录的配对状态
+
+        Returns:
+            tuple: (status_str, emg_path_or_None, imu_path_or_None)
+                status: 'paired' | 'missing_emg' | 'missing_imu' | 'no_attr' | 'synced'
+        """
+        try:
+            with h5py.File(file_path, 'r') as f:
+                # 已同步的跳过
+                sync_st = f.attrs.get('sync_status', 'unknown')
+                if isinstance(sync_st, bytes):
+                    sync_st = sync_st.decode('utf-8')
+                if sync_st == 'synced':
+                    return ('synced', None, None)
+
+                # 读取 bin 前缀
+                attr_name = f'sd_bin_dev{device_id}'
+                bin_prefix = f.attrs.get(attr_name, None)
+                if bin_prefix is None:
+                    return ('no_attr', None, None)
+                if isinstance(bin_prefix, bytes):
+                    bin_prefix = bin_prefix.decode('utf-8')
+
+                # 在 bin_dir 及子目录中搜索
+                search_dirs = [bin_dir]
+                try:
+                    for entry in os.listdir(bin_dir):
+                        full = os.path.join(bin_dir, entry)
+                        if os.path.isdir(full):
+                            search_dirs.append(full)
+                except OSError:
+                    pass
+
+                emg_found = None
+                imu_found = None
+                emg_name = f"{bin_prefix}_emg.bin"
+                imu_name = f"{bin_prefix}_imu.bin"
+
+                for d in search_dirs:
+                    if emg_found is None:
+                        p = os.path.join(d, emg_name)
+                        if os.path.exists(p):
+                            emg_found = p
+                    if imu_found is None:
+                        p = os.path.join(d, imu_name)
+                        if os.path.exists(p):
+                            imu_found = p
+                    if emg_found and imu_found:
+                        break
+
+                if emg_found:
+                    return ('paired', emg_found, imu_found)
+                else:
+                    return ('missing_emg', None, None)
+        except Exception:
+            return ('error', None, None)
+
+    def _auto_detect_bin_dir(self):
+        """自动推测 Bin 目录：从 H5 文件路径出发，搜索常见位置"""
+        candidates = set()
+        # 从已加载 H5 的位置推测
+        for h5_path in self.h5_files:
+            h5_dir = os.path.dirname(os.path.abspath(h5_path))
+            # 同目录
+            candidates.add(h5_dir)
+            # 上级目录的 bin/ 子目录
+            parent = os.path.dirname(h5_dir)
+            candidates.add(os.path.join(parent, 'bin'))
+            # 上上级
+            grandparent = os.path.dirname(parent)
+            candidates.add(os.path.join(grandparent, 'bin'))
+            # 同级 _bin 目录
+            for item in os.listdir(parent):
+                full = os.path.join(parent, item)
+                if os.path.isdir(full) and item.endswith('_bin'):
+                    candidates.add(full)
+            # storage 根目录下查找 bin 目录
+            for item in os.listdir(grandparent):
+                full = os.path.join(grandparent, item)
+                if os.path.isdir(full) and ('bin' in item.lower()):
+                    candidates.add(full)
+
+        # 找到第一个包含 _emg.bin 文件的目录
+        for d in sorted(candidates):
+            if os.path.isdir(d):
+                try:
+                    for f in os.listdir(d):
+                        if f.endswith('_emg.bin') and 'PREVIEW_' not in f:
+                            self.bin_dir = d
+                            display_path = d
+                            if len(display_path) > 50:
+                                display_path = "..." + display_path[-47:]
+                            self.bin_dir_label.setText(display_path)
+                            self.bin_dir_label.setStyleSheet(
+                                "color: #009900; padding: 5px; background: #f0fff0; border: 1px solid #90EE90;")
+                            self.bin_dir_label.setToolTip(d)
+                            self.log_text.append(f"🔍 自动发现Bin目录: {d}")
+                            if self.h5_files:
+                                self._refresh_pairing_status()
+                            return
+                except OSError:
+                    continue
+
+        self.log_text.append("⚠️ 自动查找Bin目录失败，请手动选择")
+
+    def _refresh_pairing_status(self):
+        """扫描 H5 列表，更新每个文件的 bin 配对状态显示"""
+        if not self.bin_dir or not self.h5_files:
+            return
+
+        paired_count = 0
+        missing_count = 0
+        synced_count = 0
+
+        for i, h5_path in enumerate(self.h5_files):
+            status, _, _ = self._check_bin_pairing(h5_path, self.bin_dir, device_id=1)
+            item = self.h5_list.item(i)
+
+            if status == 'synced':
+                item.setForeground(QColor(128, 128, 128))  # gray
+                item.setText(f"✓ {item.text().replace('✓ ', '').replace('✗ ', '').replace('? ', '')}")
+                synced_count += 1
+            elif status == 'paired':
+                item.setForeground(QColor(0, 153, 0))  # green
+                item.setText(f"✓ {item.text().replace('✓ ', '').replace('✗ ', '').replace('? ', '')}")
+                paired_count += 1
+            elif status == 'missing_emg':
+                item.setForeground(QColor(220, 38, 38))  # red
+                item.setText(f"✗ {item.text().replace('✓ ', '').replace('✗ ', '').replace('? ', '')}")
+                missing_count += 1
+            else:
+                item.setForeground(QColor(150, 150, 150))  # light gray
+                item.setText(f"? {item.text().replace('✓ ', '').replace('✗ ', '').replace('? ', '')}")
+                missing_count += 1
+
+        self.h5_count_label.setText(
+            f"共 {len(self.h5_files)} 个文件 | "
+            f"可同步: {paired_count} | 缺Bin: {missing_count} | 已完成: {synced_count}"
+        )
+        if paired_count > 0:
+            self.h5_count_label.setStyleSheet("color: #009900; font-weight: bold;")
+        elif missing_count > 0:
+            self.h5_count_label.setStyleSheet("color: #dc2626; font-weight: bold;")
 
     def select_bin_dir(self):
         """选择bin文件所在目录"""
@@ -2405,10 +2585,21 @@ class SyncTab(QWidget):
             self.bin_dir_label.setToolTip(dir_path)
 
             # 统计目录中的bin文件数量
-            emg_count = len([f for f in os.listdir(dir_path) if f.endswith('_emg.bin')])
-            imu_count = len([f for f in os.listdir(dir_path) if f.endswith('_imu.bin')])
-            self.log_text.append(f"已选择目录: {dir_path}")
-            self.log_text.append(f"  找到 {emg_count} 个EMG bin文件, {imu_count} 个IMU bin文件")
+            all_emg = []
+            all_imu = []
+            for root, dirs, files in os.walk(dir_path):
+                for f in files:
+                    if f.endswith('_emg.bin') and 'PREVIEW_' not in f:
+                        all_emg.append(os.path.join(root, f))
+                    elif f.endswith('_imu.bin') and 'PREVIEW_' not in f:
+                        all_imu.append(os.path.join(root, f))
+            self.log_text.append(f"已选择Bin目录: {dir_path}")
+            self.log_text.append(f"  找到 {len(all_emg)} EMG bin + {len(all_imu)} IMU bin (含子目录)")
+
+            # 自动预检配对状态
+            if self.h5_files:
+                self._refresh_pairing_status()
+                self.log_text.append(f"  配对预检完成，见H5列表颜色标记")
 
     def start_sync(self):
         if not self.h5_files:
@@ -2811,14 +3002,20 @@ class OneToManySyncTab(QWidget):
                 prefix = f.attrs.get(f'sd_bin_dev{device_id}')
                 if prefix and self.bin_dir:
                     if isinstance(prefix, bytes): prefix = prefix.decode('utf-8')
-                    ep = os.path.join(self.bin_dir, f'{prefix}_emg.bin')
-                    ip = os.path.join(self.bin_dir, f'{prefix}_imu.bin')
-                    if os.path.exists(ep):
-                        return ep, ip if os.path.exists(ip) else None
+                    emg_name = f'{prefix}_emg.bin'
+                    imu_name = f'{prefix}_imu.bin'
+                    # 搜索 bin_dir 及子目录
+                    for root, dirs, files in os.walk(self.bin_dir):
+                        ep = os.path.join(root, emg_name)
+                        ip = os.path.join(root, imu_name)
+                        if os.path.exists(ep):
+                            return ep, ip if os.path.exists(ip) else None
+            # fallback: 找第一个非 preview emg bin
             if self.bin_dir:
-                for fn in sorted(os.listdir(self.bin_dir)):
-                    if fn.endswith('_emg.bin') and 'PREVIEW_' not in fn:
-                        return os.path.join(self.bin_dir, fn), None
+                for root, dirs, files in os.walk(self.bin_dir):
+                    for fn in sorted(files):
+                        if fn.endswith('_emg.bin') and 'PREVIEW_' not in fn:
+                            return os.path.join(root, fn), None
         except Exception as e:
             self.log(f"  查找 bin 失败: {e}")
         return None, None
@@ -2943,13 +3140,18 @@ class OneToManySyncWorker(QThread):
                 prefix = f.attrs.get(f'sd_bin_dev{device_id}')
                 if prefix and self.bin_dir:
                     if isinstance(prefix, bytes): prefix = prefix.decode('utf-8')
-                    ep = os.path.join(self.bin_dir, f'{prefix}_emg.bin')
-                    ip = os.path.join(self.bin_dir, f'{prefix}_imu.bin')
-                    if os.path.exists(ep):
-                        return ep, ip if os.path.exists(ip) else None
-            for fn in sorted(os.listdir(self.bin_dir)):
-                if fn.endswith('_emg.bin') and 'PREVIEW_' not in fn:
-                    return os.path.join(self.bin_dir, fn), None
+                    emg_name = f'{prefix}_emg.bin'
+                    imu_name = f'{prefix}_imu.bin'
+                    for root, dirs, files in os.walk(self.bin_dir):
+                        ep = os.path.join(root, emg_name)
+                        ip = os.path.join(root, imu_name)
+                        if os.path.exists(ep):
+                            return ep, ip if os.path.exists(ip) else None
+            # fallback: 第一个非 preview emg bin
+            for root, dirs, files in os.walk(self.bin_dir):
+                for fn in sorted(files):
+                    if fn.endswith('_emg.bin') and 'PREVIEW_' not in fn:
+                        return os.path.join(root, fn), None
         except Exception:
             pass
         return None, None
@@ -3513,10 +3715,22 @@ class HDF5Tool(QMainWindow):
         current_tab = self.tabs.currentWidget()
         if current_tab is self.sync_tab:
             self.sync_tab.add_files_from_list(file_paths)
+            # 如果还没选 Bin 目录，自动尝试查找
+            if not self.sync_tab.bin_dir:
+                self.sync_tab._auto_detect_bin_dir()
             self.tabs.setCurrentIndex(1)
         elif current_tab is self.one_to_many_tab:
             for fp in file_paths:
                 self.one_to_many_tab.add_h5_file(fp)
+            # 同样尝试自动查找 bin 目录
+            if not self.one_to_many_tab.bin_dir:
+                parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(file_paths[0])))
+                for d in [os.path.join(parent_dir, 'bin'), os.path.join(os.path.dirname(parent_dir), 'bin')]:
+                    if os.path.isdir(d) and any(f.endswith('_emg.bin') for f in (os.listdir(d) if os.path.exists(d) else [])):
+                        self.one_to_many_tab.bin_dir = d
+                        self.one_to_many_tab.bin_label.setText(d)
+                        self.one_to_many_tab._update_ui()
+                        break
             self.tabs.setCurrentIndex(2)
         elif current_tab is self.sync_tools_tab:
             for fp in file_paths:
@@ -3524,6 +3738,8 @@ class HDF5Tool(QMainWindow):
             self.tabs.setCurrentIndex(3)
         else:
             self.sync_tab.add_files_from_list(file_paths)
+            if not self.sync_tab.bin_dir:
+                self.sync_tab._auto_detect_bin_dir()
             self.tabs.setCurrentIndex(1)
 
 
