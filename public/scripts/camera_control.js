@@ -426,7 +426,7 @@
 
     function updateConnectionStatus(status) {
         const badge = document.getElementById('cameraStreamStatus');
-        const info = document.getElementById('cameraStreamInfo');
+        const hint = document.getElementById('cameraStreamHint');
 
         if (badge) {
             switch (status) {
@@ -446,16 +446,16 @@
             }
         }
 
-        if (info) {
+        if (hint) {
             switch (status) {
                 case 'connected':
-                    info.textContent = '点击配置并打开摄像头';
+                    hint.textContent = '点击配置并打开摄像头';
                     break;
                 case 'connecting':
-                    info.textContent = '正在连接Camera服务器...';
+                    hint.textContent = '正在连接Camera服务器...';
                     break;
                 default:
-                    info.textContent = 'Camera服务器未连接';
+                    hint.textContent = 'Camera服务器未连接';
                     break;
             }
         }
