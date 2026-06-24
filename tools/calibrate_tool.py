@@ -416,7 +416,7 @@ class CalibrateWidget(QWidget):
         left_video_inner.addWidget(self.lbl_video_left)
         self.lbl_video_left_time = QLabel('--:--')
         self.lbl_video_left_time.setAlignment(Qt.AlignCenter)
-        self.lbl_video_left_time.setStyleSheet('color: #888; font-size: 9px;')
+        self.lbl_video_left_time.setStyleSheet('color: #e74c3c; font-size: 11px; font-weight: bold;')
         left_video_inner.addWidget(self.lbl_video_left_time)
         video_layout.addWidget(left_video_group)
 
@@ -447,7 +447,7 @@ class CalibrateWidget(QWidget):
         right_video_inner.addWidget(self.lbl_video_right)
         self.lbl_video_right_time = QLabel('--:--')
         self.lbl_video_right_time.setAlignment(Qt.AlignCenter)
-        self.lbl_video_right_time.setStyleSheet('color: #888; font-size: 9px;')
+        self.lbl_video_right_time.setStyleSheet('color: #e74c3c; font-size: 11px; font-weight: bold;')
         right_video_inner.addWidget(self.lbl_video_right_time)
         video_layout.addWidget(right_video_group)
 
@@ -1445,13 +1445,19 @@ class CalibrateWidget(QWidget):
                                            Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 lbl.setPixmap(QPixmap.fromImage(scaled))
 
-                # 更新时间标签
+                # 更新时间标签（视频帧号 + 视频时间 + EMG相对时间）
                 fps = self.video_fps.get(side, 30)
                 frame_time_sec = frame_idx / fps if fps > 0 else 0
                 minutes = int(frame_time_sec // 60)
                 seconds = int(frame_time_sec % 60)
                 ms = int((frame_time_sec % 1) * 100)
-                lbl_time.setText(f'Frame #{frame_idx} | {minutes:02d}:{seconds:02d}.{ms:02d}')
+                # EMG 相对时间（与 Prompt 时间戳对齐）
+                if self.emg_start_time is not None:
+                    first_unix = self.video_first_frame_unix.get(side, 0)
+                    emg_rel = first_unix + frame_idx / fps - float(self.emg_start_time)
+                    lbl_time.setText(f'Frame #{frame_idx} | 视频 {minutes:02d}:{seconds:02d}.{ms:02d} | EMG {emg_rel:.2f}s')
+                else:
+                    lbl_time.setText(f'Frame #{frame_idx} | 视频 {minutes:02d}:{seconds:02d}.{ms:02d}')
             else:
                 lbl.setText('(无法定位帧)')
                 lbl_time.setText('--:--')
@@ -1924,31 +1930,32 @@ class CalibrateWidget(QWidget):
                     rotation=0, verticalalignment='bottom', horizontalalignment='left',
                     fontsize=11, color='red', alpha=0.9, fontweight='bold')
 
-            # 下方：时间戳
+            # 下方：时间戳（大字醒目）
             ax.text(t, ylim[0] + y_range * 0.02, f'{t:.2f}s',
                     rotation=0, verticalalignment='top', horizontalalignment='left',
-                    fontsize=8, color='#c0392b', alpha=0.8, style='italic')
+                    fontsize=13, color='#c0392b', alpha=0.9, style='italic',
+                    fontweight='bold')
 
         # 窗口内 ≥2 个 prompt：标注 start/end 和间隔
         if n >= 2 and show_text and last_t > first_t:
             interval = last_t - first_t
             # start 标注（在第一个 prompt 左下方）
             ax.text(first_t, ylim[0] + y_range * 0.08, f'start: {first_t:.2f}s',
-                    fontsize=8, color='#e74c3c', alpha=0.85,
+                    fontsize=11, color='#e74c3c', alpha=0.9,
                     fontweight='bold', style='italic')
             # end 标注（在最后一个 prompt 右下方）
             ax.text(last_t, ylim[0] + y_range * 0.08, f'end: {last_t:.2f}s',
-                    fontsize=8, color='#e74c3c', alpha=0.85,
+                    fontsize=11, color='#e74c3c', alpha=0.9,
                     fontweight='bold', style='italic',
                     horizontalalignment='right')
             # 间隔标注（两线之间顶部）
             mid_t = (first_t + last_t) / 2.0
             ax.annotate(f'Δ {interval:.2f}s',
                         xy=(mid_t, ylim[1] - y_range * 0.02),
-                        fontsize=9, color='#d63031', alpha=0.85,
+                        fontsize=12, color='#d63031', alpha=0.9,
                         fontweight='bold',
                         ha='center', va='bottom',
-                        bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffeaa7', alpha=0.8, edgecolor='#fdcb6e'))
+                        bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffeaa7', alpha=0.85, edgecolor='#fdcb6e'))
 
     def goto_prev_prompt(self):
         """跳转到上一个Prompt"""
@@ -2117,7 +2124,13 @@ class CalibrateWidget(QWidget):
         frame_time_sec = new_idx / fps if fps > 0 else 0
         minutes = int(frame_time_sec // 60)
         seconds = int(frame_time_sec % 60)
-        lbl_time.setText(f'Frame #{new_idx} | {minutes:02d}:{seconds:02d}')
+        # EMG 相对时间（与 Prompt 时间戳对齐）
+        if self.emg_start_time is not None:
+            first_unix = self.video_first_frame_unix.get(side, 0)
+            emg_rel = first_unix + new_idx / fps - float(self.emg_start_time)
+            lbl_time.setText(f'Frame #{new_idx} | 视频 {minutes:02d}:{seconds:02d} | EMG {emg_rel:.2f}s')
+        else:
+            lbl_time.setText(f'Frame #{new_idx} | 视频 {minutes:02d}:{seconds:02d}')
 
         # 同步另一侧视频（seek 到对应时间点）
         first_unix = self.video_first_frame_unix.get(side, 0)
@@ -2148,7 +2161,11 @@ class CalibrateWidget(QWidget):
                 om = int(other_frame_time // 60)
                 os = int(other_frame_time % 60)
                 lbl_time2 = getattr(self, f'lbl_video_{other_side}_time')
-                lbl_time2.setText(f'Frame #{other_frame} | {om:02d}:{os:02d}')
+                if self.emg_start_time is not None:
+                    emg_rel2 = other_first + other_frame / other_fps_val - float(self.emg_start_time)
+                    lbl_time2.setText(f'Frame #{other_frame} | 视频 {om:02d}:{os:02d} | EMG {emg_rel2:.2f}s')
+                else:
+                    lbl_time2.setText(f'Frame #{other_frame} | 视频 {om:02d}:{os:02d}')
 
     # ─────────── 2s 预览结束 ───────────
 
