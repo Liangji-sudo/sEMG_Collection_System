@@ -313,18 +313,43 @@ class CalibrateWidget(QWidget):
 
         # Prompt跳转按钮
         control_layout.addWidget(QLabel('  |  '))
+        prompt_btn_style = (
+            'QPushButton {'
+            '  font-size: 12px; font-weight: bold; padding: 6px 16px;'
+            '  border-radius: 5px; border: none;'
+            '}'
+            'QPushButton:enabled {'
+            '  color: #fff;'
+            '}'
+            'QPushButton:disabled {'
+            '  color: #999; background-color: #ddd;'
+            '}'
+        )
         self.btn_prev_prompt = QPushButton('◀ 上一个Prompt')
         self.btn_prev_prompt.clicked.connect(self.goto_prev_prompt)
         self.btn_prev_prompt.setEnabled(False)
+        self.btn_prev_prompt.setStyleSheet(
+            prompt_btn_style +
+            'QPushButton:enabled { background-color: #6c5ce7; }'
+            'QPushButton:enabled:hover { background-color: #5a4bd1; }'
+            'QPushButton:enabled:pressed { background-color: #4a3db5; }'
+        )
         control_layout.addWidget(self.btn_prev_prompt)
 
         self.lbl_prompt_info = QLabel('Prompt: -/-')
-        self.lbl_prompt_info.setMinimumWidth(120)
+        self.lbl_prompt_info.setMinimumWidth(130)
+        self.lbl_prompt_info.setStyleSheet('font-size: 12px; font-weight: bold; color: #333;')
         control_layout.addWidget(self.lbl_prompt_info)
 
         self.btn_next_prompt = QPushButton('下一个Prompt ▶')
         self.btn_next_prompt.clicked.connect(self.goto_next_prompt)
         self.btn_next_prompt.setEnabled(False)
+        self.btn_next_prompt.setStyleSheet(
+            prompt_btn_style +
+            'QPushButton:enabled { background-color: #00b894; }'
+            'QPushButton:enabled:hover { background-color: #00a381; }'
+            'QPushButton:enabled:pressed { background-color: #008f6b; }'
+        )
         control_layout.addWidget(self.btn_next_prompt)
 
         control_scroll = QScrollArea()
