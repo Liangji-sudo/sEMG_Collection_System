@@ -463,7 +463,7 @@ class CalibrateWidget(QWidget):
         imu_acc_layout.setContentsMargins(0, 0, 0, 0)
         # 中文标题 + offset 控件
         acc_title = QHBoxLayout()
-        acc_title.addWidget(QLabel('📐 左手 IMU 加速度计'))
+        acc_title.addWidget(QLabel('📐 左手加速度计'))
         acc_title.addStretch()
         acc_title.addWidget(QLabel('Offset(g):'))
         self.spin_imu_acc_offset = QSpinBox()
@@ -473,7 +473,7 @@ class CalibrateWidget(QWidget):
         self.spin_imu_acc_offset.valueChanged.connect(self.on_imu_offset_changed)
         acc_title.addWidget(self.spin_imu_acc_offset)
         acc_title.addStretch()
-        acc_title.addWidget(QLabel('📐 右手 IMU 加速度计'))
+        acc_title.addWidget(QLabel('📐 右手加速度计'))
         acc_title.setContentsMargins(0, 2, 0, 2)
         imu_acc_layout.addLayout(acc_title)
         self.fig_imu_acc = Figure(figsize=(16, 2.5), dpi=100)
@@ -488,7 +488,7 @@ class CalibrateWidget(QWidget):
         imu_gyr_layout.setContentsMargins(0, 0, 0, 0)
         # 中文标题 + offset 控件
         gyr_title = QHBoxLayout()
-        gyr_title.addWidget(QLabel('🔄 左手 IMU 陀螺仪'))
+        gyr_title.addWidget(QLabel('🔄 左手陀螺仪'))
         gyr_title.addStretch()
         gyr_title.addWidget(QLabel('Offset(deg/s):'))
         self.spin_imu_gyr_offset = QSpinBox()
@@ -498,7 +498,7 @@ class CalibrateWidget(QWidget):
         self.spin_imu_gyr_offset.valueChanged.connect(self.on_imu_offset_changed)
         gyr_title.addWidget(self.spin_imu_gyr_offset)
         gyr_title.addStretch()
-        gyr_title.addWidget(QLabel('🔄 右手 IMU 陀螺仪'))
+        gyr_title.addWidget(QLabel('🔄 右手陀螺仪'))
         gyr_title.setContentsMargins(0, 2, 0, 2)
         imu_gyr_layout.addLayout(gyr_title)
         self.fig_imu_gyr = Figure(figsize=(16, 2.5), dpi=100)
@@ -1932,7 +1932,9 @@ class CalibrateWidget(QWidget):
                 wrapped_name = name
             ax.text(t, ylim[1] - y_range * 0.02, wrapped_name,
                     rotation=0, verticalalignment='bottom', horizontalalignment='left',
-                    fontsize=11, color='red', alpha=0.9, fontweight='bold')
+                    fontsize=11, color='#c0392b', alpha=1.0, fontweight='bold',
+                    bbox=dict(boxstyle='round,pad=0.3', facecolor='#fff3cd', alpha=0.9,
+                              edgecolor='#e74c3c', linewidth=1.2))
 
             # 下方：时间戳（大字醒目）
             ax.text(t, ylim[0] + y_range * 0.02, f'{t:.2f}s',
