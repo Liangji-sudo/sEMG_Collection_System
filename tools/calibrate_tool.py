@@ -2074,9 +2074,9 @@ class CalibrateWidget(QWidget):
             self._stop_playback()
             return
 
-        # 每 5 个视频帧更新一次 EMG/IMU 图表（减轻绘制压力，视频保持流畅）
-        if self._playback_plot_counter >= 5 and target_unix is not None and self.emg_start_time is not None:
-            self._playback_plot_counter = 0
+        # 播放期间只更新滑块位置，不重绘 EMG/IMU（避免 ax.clear() 导致图表错乱）
+        # 播放停止后 _stop_playback 会做一次完整重绘
+        if target_unix is not None and self.emg_start_time is not None:
             emg_time = target_unix - float(self.emg_start_time)
             sample_rate = self._active_emg_sample_rate()
             new_pos = int(emg_time * sample_rate)
@@ -2086,9 +2086,6 @@ class CalibrateWidget(QWidget):
             self.slider.setValue(self.current_pos)
             self.slider.blockSignals(False)
             self.lbl_pos.setText(f'位置: {self.current_pos}')
-            # 快速模式更新图表
-            self.update_emg_plot(fast_mode=True)
-            self.update_imu_plot(fast_mode=True)
 
     def on_speed_changed(self, idx):
         """播放速度改变"""
