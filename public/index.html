@@ -3765,19 +3765,31 @@
             min-width: 80px;
         }
 
-        .gesture-gif-input {
-            width: 100px;
-            padding: 6px 8px;
-            border: 1px solid #e5e7eb;
+        .gesture-gif-btn {
+            min-width: 90px;
+            max-width: 130px;
+            padding: 6px 10px;
+            border: 1px dashed #9ca3af;
             border-radius: 4px;
             font-size: 11px;
-            background: white;
+            background: #f9fafb;
             color: #6b7280;
+            cursor: pointer;
             flex-shrink: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            transition: all 0.2s;
         }
 
-        .gesture-gif-input::placeholder {
-            color: #9ca3af;
+        .gesture-gif-btn:hover {
+            border-color: #667eea;
+            color: #667eea;
+            background: #f0f0ff;
+        }
+
+        .gesture-gif-btn:active {
+            transform: scale(0.97);
         }
 
         /* 【新增】手势类型选择下拉框 */
@@ -3946,20 +3958,30 @@
             color: #374151;
         }
 
-        .continual-gif-input {
+        .continual-gif-btn {
             flex: 1;
-            max-width: 200px;
-            padding: 8px 12px;
-            border: 1px solid #e5e7eb;
+            max-width: 220px;
+            padding: 8px 14px;
+            border: 1px dashed #9ca3af;
             border-radius: 6px;
             font-size: 13px;
-            background: white;
+            background: #f9fafb;
+            color: #6b7280;
+            cursor: pointer;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            transition: all 0.2s;
         }
 
-        .continual-gif-input:focus {
-            outline: none;
-            border-color: #3b82f6;
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        .continual-gif-btn:hover {
+            border-color: #667eea;
+            color: #667eea;
+            background: #f0f0ff;
+        }
+
+        .continual-gif-btn:active {
+            transform: scale(0.98);
         }
 
         .gif-path-hint {

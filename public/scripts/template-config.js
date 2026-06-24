@@ -1354,8 +1354,9 @@
                                     <span class="duration-unit">秒</span>
                                 </div>
                                 ` : ''}
-                                <input type="text" class="gesture-gif-input" data-index="${index}"
-                                       value="${gesture.gifFile || ''}" placeholder="GIF文件名" title="GIF文件名（如 thumb_up.gif）">
+                                <button class="gesture-gif-btn" data-index="${index}" title="点击选择GIF文件">
+                                    ${gesture.gifFile ? `📁 ${gesture.gifFile}` : '📁 选择GIF'}
+                                </button>
                                 <button class="gesture-delete-btn" data-index="${index}">
                                     <i class="fa fa-times"></i>
                                 </button>
@@ -1373,23 +1374,23 @@
                     <div class="continual-gif-config">
                         <div class="continual-gif-item">
                             <label>连续手势1 (滚轮控制)</label>
-                            <input type="text" class="continual-gif-input" data-task="continual_1"
-                                   value="${continualGestures.continual_1?.[0]?.gifFile || ''}"
-                                   placeholder="如 continual_01.gif">
+                            <button class="continual-gif-btn" data-task="continual_1" title="点击选择GIF文件">
+                                ${continualGestures.continual_1?.[0]?.gifFile ? `📁 ${continualGestures.continual_1[0].gifFile}` : '📁 选择GIF'}
+                            </button>
                             <span class="gif-path-hint">tutorial/gestures/continual_1/</span>
                         </div>
                         <div class="continual-gif-item">
                             <label>连续手势2 (手腕控制)</label>
-                            <input type="text" class="continual-gif-input" data-task="continual_2"
-                                   value="${continualGestures.continual_2?.[0]?.gifFile || ''}"
-                                   placeholder="如 continual_2.gif">
+                            <button class="continual-gif-btn" data-task="continual_2" title="点击选择GIF文件">
+                                ${continualGestures.continual_2?.[0]?.gifFile ? `📁 ${continualGestures.continual_2[0].gifFile}` : '📁 选择GIF'}
+                            </button>
                             <span class="gif-path-hint">tutorial/gestures/continual_2/</span>
                         </div>
                         <div class="continual-gif-item">
                             <label>连续手势3 (自定义控制)</label>
-                            <input type="text" class="continual-gif-input" data-task="continual_3"
-                                   value="${continualGestures.continual_3?.[0]?.gifFile || ''}"
-                                   placeholder="如 continual_03.gif">
+                            <button class="continual-gif-btn" data-task="continual_3" title="点击选择GIF文件">
+                                ${continualGestures.continual_3?.[0]?.gifFile ? `📁 ${continualGestures.continual_3[0].gifFile}` : '📁 选择GIF'}
+                            </button>
                             <span class="gif-path-hint">tutorial/gestures/continual_3/</span>
                         </div>
                     </div>
@@ -1493,13 +1494,17 @@
                 });
             });
 
-            // GIF文件名输入
-            container.querySelectorAll('.gesture-gif-input').forEach(input => {
-                input.addEventListener('change', (e) => {
-                    const index = parseInt(e.target.dataset.index);
-                    const gifFile = e.target.value.trim();
-                    this.currentTemplate.gestures.discrete[index].gifFile = gifFile;
-                    this.isDirty = true;
+            // GIF文件选择按钮
+            container.querySelectorAll('.gesture-gif-btn').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    e.preventDefault();
+                    const index = parseInt(e.currentTarget.dataset.index);
+                    const gifFile = await this.pickGifFile();
+                    if (gifFile) {
+                        this.currentTemplate.gestures.discrete[index].gifFile = gifFile;
+                        this.isDirty = true;
+                        this.renderGesturesTab();
+                    }
                 });
             });
 
@@ -1524,7 +1529,7 @@
                     if (name && name.trim()) {
                         const trimmedName = name.trim();
                         const icon = await this.showPrompt('请输入手势图标（emoji）：', '✋');
-                        const gifFile = await this.showPrompt('请输入GIF文件名（如 gesture.gif）：', '');
+                        const gifFile = await this.pickGifFile();
 
                         this.currentTemplate.gestures.discrete.push({
                             id: trimmedName,
@@ -1549,7 +1554,7 @@
                     if (name && name.trim()) {
                         const trimmedName = name.trim();
                         const icon = await this.showPrompt('请输入手势图标（emoji）：', '🤏');
-                        const gifFile = await this.showPrompt('请输入GIF文件名（如 gesture.gif）：', '');
+                        const gifFile = await this.pickGifFile();
 
                         this.currentTemplate.gestures.discrete.push({
                             id: trimmedName,
@@ -1566,11 +1571,13 @@
                 });
             }
 
-            // 连续手势 GIF 输入
-            container.querySelectorAll('.continual-gif-input').forEach(input => {
-                input.addEventListener('change', (e) => {
-                    const taskType = e.target.dataset.task;
-                    const gifFile = e.target.value.trim();
+            // 连续手势 GIF 选择按钮
+            container.querySelectorAll('.continual-gif-btn').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    e.preventDefault();
+                    const taskType = e.currentTarget.dataset.task;
+                    const gifFile = await this.pickGifFile();
+                    if (!gifFile) return;
 
                     // 确保连续手势数组存在
                     if (!this.currentTemplate.gestures[taskType]) {
@@ -1592,6 +1599,7 @@
 
                     this.isDirty = true;
                     console.log(`[TemplateConfig] 更新 ${taskType} GIF:`, gifFile);
+                    this.renderGesturesTab();
                 });
             });
         }
@@ -2561,6 +2569,41 @@
                         resolve(false);
                     }
                 });
+            });
+        }
+
+        /**
+         * 弹出文件选择器，选择 GIF 文件
+         * @returns {Promise<string>} - 返回选中的文件名，取消返回空字符串
+         */
+        pickGifFile() {
+            return new Promise((resolve) => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = '.gif';
+                input.style.display = 'none';
+                document.body.appendChild(input);
+                input.addEventListener('change', () => {
+                    const file = input.files[0];
+                    document.body.removeChild(input);
+                    resolve(file ? file.name : '');
+                });
+                // 用户取消选择
+                input.addEventListener('cancel', () => {
+                    document.body.removeChild(input);
+                    resolve('');
+                });
+                // 兼容：focus 丢失也视为取消
+                window.addEventListener('focus', function onFocus() {
+                    window.removeEventListener('focus', onFocus);
+                    setTimeout(() => {
+                        if (input.parentNode && !input.files.length) {
+                            document.body.removeChild(input);
+                            resolve('');
+                        }
+                    }, 300);
+                });
+                input.click();
             });
         }
     }
