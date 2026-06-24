@@ -361,26 +361,31 @@ class CalibrateWidget(QWidget):
         # === 图表区域 ===
         splitter = QSplitter(Qt.Vertical)
 
-        # EMG图表
+        # ── EMG 图表 ──
         emg_widget = QWidget()
         emg_layout = QVBoxLayout(emg_widget)
         emg_layout.setContentsMargins(0, 0, 0, 0)
-
+        # 中文标题栏
+        emg_title = QHBoxLayout()
+        emg_title.addWidget(QLabel('✋ 左手 EMG (16通道)'))
+        emg_title.addStretch()
+        emg_title.addWidget(QLabel('🤚 右手 EMG (16通道)'))
+        emg_title.setContentsMargins(0, 2, 0, 2)
+        emg_layout.addLayout(emg_title)
         self.fig_emg = Figure(figsize=(16, 10), dpi=100)
+        self.fig_emg.set_tight_layout(True)
         self.canvas_emg = FigureCanvas(self.fig_emg)
-        self.toolbar_emg = NavigationToolbar(self.canvas_emg, self)
-        emg_layout.addWidget(self.toolbar_emg)
         emg_layout.addWidget(self.canvas_emg)
         splitter.addWidget(emg_widget)
 
-        # 视频预览面板（左右视频并排）
+        # ── 视频预览面板 ──
         video_widget = QWidget()
         video_layout = QHBoxLayout(video_widget)
         video_layout.setContentsMargins(2, 2, 2, 2)
         video_layout.setSpacing(4)
 
         # 左侧视频
-        left_video_group = QGroupBox('📹 左手视频 (Left)')
+        left_video_group = QGroupBox('📹 左手相机')
         left_video_inner = QVBoxLayout(left_video_group)
         left_video_inner.setContentsMargins(2, 2, 2, 2)
         self.lbl_video_left = QLabel()
@@ -398,7 +403,7 @@ class CalibrateWidget(QWidget):
         video_layout.addWidget(left_video_group)
 
         # 右侧视频
-        right_video_group = QGroupBox('📹 右手视频 (Right)')
+        right_video_group = QGroupBox('📹 右手相机')
         right_video_inner = QVBoxLayout(right_video_group)
         right_video_inner.setContentsMargins(2, 2, 2, 2)
         self.lbl_video_right = QLabel()
@@ -417,47 +422,53 @@ class CalibrateWidget(QWidget):
 
         splitter.addWidget(video_widget)
 
-        # IMU Acc 图表
+        # ── IMU 加速度计 ──
         imu_acc_widget = QWidget()
         imu_acc_layout = QVBoxLayout(imu_acc_widget)
         imu_acc_layout.setContentsMargins(0, 0, 0, 0)
-        # Acc offset control
-        acc_ctrl = QHBoxLayout()
-        acc_ctrl.addWidget(QLabel('Acc Offset(g):'))
+        # 中文标题 + offset 控件
+        acc_title = QHBoxLayout()
+        acc_title.addWidget(QLabel('📐 左手 IMU 加速度计'))
+        acc_title.addStretch()
+        acc_title.addWidget(QLabel('Offset(g):'))
         self.spin_imu_acc_offset = QSpinBox()
         self.spin_imu_acc_offset.setRange(1, 50)
         self.spin_imu_acc_offset.setValue(int(self.imu_acc_offset))
         self.spin_imu_acc_offset.setSingleStep(1)
         self.spin_imu_acc_offset.valueChanged.connect(self.on_imu_offset_changed)
-        acc_ctrl.addWidget(self.spin_imu_acc_offset)
-        acc_ctrl.addStretch()
-        imu_acc_layout.addLayout(acc_ctrl)
+        acc_title.addWidget(self.spin_imu_acc_offset)
+        acc_title.addStretch()
+        acc_title.addWidget(QLabel('📐 右手 IMU 加速度计'))
+        acc_title.setContentsMargins(0, 2, 0, 2)
+        imu_acc_layout.addLayout(acc_title)
         self.fig_imu_acc = Figure(figsize=(16, 2.5), dpi=100)
+        self.fig_imu_acc.set_tight_layout(True)
         self.canvas_imu_acc = FigureCanvas(self.fig_imu_acc)
-        self.toolbar_imu_acc = NavigationToolbar(self.canvas_imu_acc, self)
-        imu_acc_layout.addWidget(self.toolbar_imu_acc)
         imu_acc_layout.addWidget(self.canvas_imu_acc)
         splitter.addWidget(imu_acc_widget)
 
-        # IMU Gyr 图表
+        # ── IMU 陀螺仪 ──
         imu_gyr_widget = QWidget()
         imu_gyr_layout = QVBoxLayout(imu_gyr_widget)
         imu_gyr_layout.setContentsMargins(0, 0, 0, 0)
-        # Gyr offset control
-        gyr_ctrl = QHBoxLayout()
-        gyr_ctrl.addWidget(QLabel('Gyr Offset(deg/s):'))
+        # 中文标题 + offset 控件
+        gyr_title = QHBoxLayout()
+        gyr_title.addWidget(QLabel('🔄 左手 IMU 陀螺仪'))
+        gyr_title.addStretch()
+        gyr_title.addWidget(QLabel('Offset(deg/s):'))
         self.spin_imu_gyr_offset = QSpinBox()
         self.spin_imu_gyr_offset.setRange(10, 5000)
         self.spin_imu_gyr_offset.setValue(int(self.imu_gyr_offset))
         self.spin_imu_gyr_offset.setSingleStep(50)
         self.spin_imu_gyr_offset.valueChanged.connect(self.on_imu_offset_changed)
-        gyr_ctrl.addWidget(self.spin_imu_gyr_offset)
-        gyr_ctrl.addStretch()
-        imu_gyr_layout.addLayout(gyr_ctrl)
+        gyr_title.addWidget(self.spin_imu_gyr_offset)
+        gyr_title.addStretch()
+        gyr_title.addWidget(QLabel('🔄 右手 IMU 陀螺仪'))
+        gyr_title.setContentsMargins(0, 2, 0, 2)
+        imu_gyr_layout.addLayout(gyr_title)
         self.fig_imu_gyr = Figure(figsize=(16, 2.5), dpi=100)
+        self.fig_imu_gyr.set_tight_layout(True)
         self.canvas_imu_gyr = FigureCanvas(self.fig_imu_gyr)
-        self.toolbar_imu_gyr = NavigationToolbar(self.canvas_imu_gyr, self)
-        imu_gyr_layout.addWidget(self.toolbar_imu_gyr)
         imu_gyr_layout.addWidget(self.canvas_imu_gyr)
         splitter.addWidget(imu_gyr_widget)
 
@@ -532,8 +543,8 @@ class CalibrateWidget(QWidget):
                     ax2.set_xticklabels([])
                     ax2.spines['bottom'].set_visible(False)
                     ax2.tick_params(axis='x', length=0)
-            self.ax_emg1_channels[0].set_title('EMG1 (16通道)', fontsize=10, pad=5)
-            self.ax_emg2_channels[0].set_title('EMG2 (16通道)', fontsize=10, pad=5)
+            self.ax_emg1_channels[0].set_title('左手 EMG (16通道)', fontsize=10, pad=5)
+            self.ax_emg2_channels[0].set_title('右手 EMG (16通道)', fontsize=10, pad=5)
             self.ax_emg1_channels[-1].set_xlabel('时间 (秒)', fontsize=8)
             self.ax_emg2_channels[-1].set_xlabel('时间 (秒)', fontsize=8)
         self.canvas_emg.draw_idle()
@@ -1619,12 +1630,13 @@ class CalibrateWidget(QWidget):
             ax.set_yticklabels(y_labels, fontsize=6)
             total_height = 16 * offset
             ax.set_ylim(-offset * 0.3, total_height - offset * 0.7)
+            ax.set_autoscale_on(False)  # 禁止自动缩放，防止工具栏或 resize 改变视图
             title_suffix = '滤波后' if use_filter else '原始'
             ax.set_title(f'{label} — {title_suffix} (Offset={offset}uV)', fontsize=10, pad=5)
             self.draw_prompt_markers(ax, time_start, time_end, show_text=True)
 
-        _draw_device(ax1, self.emg1_data, self.emg1_lsb_uv, 'EMG1')
-        _draw_device(ax2, self.emg2_data, self.emg2_lsb_uv, 'EMG2')
+        _draw_device(ax1, self.emg1_data, self.emg1_lsb_uv, '左手 EMG')
+        _draw_device(ax2, self.emg2_data, self.emg2_lsb_uv, '右手 EMG')
         self.canvas_emg.draw_idle()
 
     def _draw_emg_subplots(self, fast_mode=False):
@@ -1817,7 +1829,7 @@ class CalibrateWidget(QWidget):
                 ax.set_ylim(ymin - margin, ymax + margin)
             else:
                 ax.set_ylim(-offset * 0.2, 3 * offset - offset * 0.2)
-            dev_label = f'设备{dev_id}'
+            dev_label = '左手' if dev_id == 1 else '右手'
             # 线型图例
             legend_lines = []
             legend_labels_list = []
