@@ -1046,6 +1046,8 @@ class CalibrateWidget(QWidget):
         self.imu2a_time = None
         self.imu2b_time = None
         self.imu2c_time = None
+        self._imu_diag_printed = False  # 每次加载文件时重置诊断标志
+        self._imu_diag_strike = 0        # 连续无数据绘制计数器
 
         # ── 1. 独立 dataset：100hz（同步后）> BLE 原始 > bare name ──
         imu_mapping = {
@@ -1127,36 +1129,54 @@ class CalibrateWidget(QWidget):
                 print(f'[CalibrateTool] 拆分 {all_name} imu_index={idx} 失败: {e}')
 
     def _infer_imu_counts(self):
-        """推断 IMU 数量：H5 attrs > all_ble imu_index > 已加载 c 数据"""
+        """推断 IMU 数量。
+        H5 attrs（硬件 BLE 检测值）为主要参考，但会与实际加载数据交叉验证。
+        如果 bin_sync 用了错误的 num_imus，加载的传感器数可能超过硬件检测值。
+        """
         for dev in (1, 2):
-            count = 2  # 默认 2 IMU
-            # 优先从 H5 attrs
+            # 1. 从实际已加载数据推断数量
+            count_from_data = 0
+            for label in ('c', 'b', 'a'):
+                d = getattr(self, f'imu{dev}{label}_data', None)
+                if d is not None and len(d) > 0:
+                    count_from_data = {'a': 1, 'b': 2, 'c': 3}[label]
+                    break
+
+            # 2. 从 all_ble imu_index 推断
+            count_from_all_ble = 0
+            all_name = f'imu{dev}_all_ble'
+            if all_name in self.h5_file:
+                ds = self.h5_file[all_name]
+                if hasattr(ds, 'dtype') and ds.dtype.names and 'imu_index' in ds.dtype.names:
+                    try:
+                        max_idx = int(ds['imu_index'][:].max())
+                        count_from_all_ble = max(1, min(4, max_idx + 1))
+                    except Exception:
+                        pass
+
+            # 3. 从 H5 attrs（硬件 BLE 检测值，最可靠）
+            count_from_attrs = 0
             for attr_key in (f'imu{dev}_num_imus', 'num_imus'):
                 val = self.h5_file.attrs.get(attr_key)
                 if val is not None:
                     try:
-                        count = max(1, min(4, int(val)))
+                        count_from_attrs = max(1, min(4, int(val)))
                         break
                     except (ValueError, TypeError):
                         pass
-            else:
-                # 从 all_ble imu_index 推断
-                all_name = f'imu{dev}_all_ble'
-                if all_name in self.h5_file:
-                    ds = self.h5_file[all_name]
-                    if hasattr(ds, 'dtype') and ds.dtype.names and 'imu_index' in ds.dtype.names:
-                        try:
-                            max_idx = int(ds['imu_index'][:].max())
-                            count = max(1, min(4, max_idx + 1))
-                        except Exception:
-                            pass
-                # fallback: 从 c 数据是否已加载推断
-                if count < 3:
-                    c_data = getattr(self, f'imu{dev}c_data', None)
-                    if c_data is not None and len(c_data) > 0:
-                        count = 3
+
+            # 综合：H5 attrs 优先（硬件检测），否则 all_ble，否则实际数据，兜底 2
+            count = count_from_attrs or count_from_all_ble or count_from_data or 2
+
+            # 交叉验证：已加载数据量与 attrs 不一致时发出警告
+            if count_from_data > 0 and count_from_attrs > 0 and count_from_data != count_from_attrs:
+                print(f'[CalibrateTool] ⚠️ IMU{dev}: 已加载{count_from_data}个传感器，'
+                      f'H5 attrs记录{count_from_attrs}个。可能是bin_sync的num_imus配置不正确。'
+                      f'当前显示{count}个传感器（以attrs为准）。')
+
             self.__dict__[f'imu{dev}_imu_count'] = count
-            print(f'[CalibrateTool] IMU{dev} imu_count={count}')
+            src = 'attrs' if count_from_attrs else ('all_ble' if count_from_all_ble else ('实际数据' if count_from_data else '默认'))
+            print(f'[CalibrateTool] IMU{dev} imu_count={count} (来源: {src})')
 
     def _extract_imu_acc(self, data):
         """从结构化数组或普通数组中提取IMU加速度数据；返回 (N, 3) 或 None"""
@@ -2030,18 +2050,58 @@ class CalibrateWidget(QWidget):
                 window_center = (time_start + time_end) / 2.0
                 ax.axvline(x=window_center, color='#e74c3c', linewidth=2.0, alpha=0.9, zorder=10)
             self.draw_prompt_markers(ax, time_start, time_end, show_text=True)
+            return any_drawn
 
         # ── Acc 图 ──
-        _draw_imu_device(getattr(self, 'ax_imu_acc_dev1', None), 1, self.imu1_imu_count, 'data', self.imu_acc_offset)
-        _draw_imu_device(getattr(self, 'ax_imu_acc_dev2', None), 2, self.imu2_imu_count, 'data', self.imu_acc_offset)
+        d1 = _draw_imu_device(getattr(self, 'ax_imu_acc_dev1', None), 1, self.imu1_imu_count, 'data', self.imu_acc_offset)
+        d2 = _draw_imu_device(getattr(self, 'ax_imu_acc_dev2', None), 2, self.imu2_imu_count, 'data', self.imu_acc_offset)
+        any_acc_drawn = d1 or d2
         self.fig_imu_acc.suptitle('加速度 (g)', fontsize=11, fontweight='bold')
         self.canvas_imu_acc.draw_idle()
 
         # ── Gyr 图 ──
-        _draw_imu_device(getattr(self, 'ax_imu_gyr_dev1', None), 1, self.imu1_imu_count, 'gyr_data', self.imu_gyr_offset)
-        _draw_imu_device(getattr(self, 'ax_imu_gyr_dev2', None), 2, self.imu2_imu_count, 'gyr_data', self.imu_gyr_offset)
+        d3 = _draw_imu_device(getattr(self, 'ax_imu_gyr_dev1', None), 1, self.imu1_imu_count, 'gyr_data', self.imu_gyr_offset)
+        d4 = _draw_imu_device(getattr(self, 'ax_imu_gyr_dev2', None), 2, self.imu2_imu_count, 'gyr_data', self.imu_gyr_offset)
+        any_gyr_drawn = d3 or d4
         self.fig_imu_gyr.suptitle('角速度 (deg/s)', fontsize=11, fontweight='bold')
         self.canvas_imu_gyr.draw_idle()
+
+        # 运行时诊断：连续多次无数据绘制时打印详情
+        if not any_acc_drawn and not any_gyr_drawn:
+            self._imu_diag_strike += 1
+        else:
+            self._imu_diag_strike = 0
+        if self._imu_diag_strike == 5:
+            # 连续 5 帧无 IMU 数据 → 诊断
+            labels = ['a', 'b', 'c']
+            loaded_attrs = []
+            for dev_id in [1, 2]:
+                for suffix in ['data', 'gyr_data']:
+                    for label in labels:
+                        attr = f'imu{dev_id}{label}_{suffix}'
+                        d = getattr(self, attr, None)
+                        if d is not None and len(d) > 0:
+                            loaded_attrs.append(f'{attr}({d.shape})')
+            print(f'[CalibrateTool] ⚠️ IMU无数据绘制(连续{self._imu_diag_strike}帧)')
+            print(f'  已加载属性: {loaded_attrs if loaded_attrs else "无"}')
+            print(f'  窗口: [{time_start:.2f}, {time_end:.2f}]s, start={start}, emg_rate={emg_sample_rate}')
+            print(f'  IMU计数: dev1={self.imu1_imu_count}, dev2={self.imu2_imu_count}')
+            if loaded_attrs:
+                # 对已加载的属性，检查它们的 time 属性
+                for attr_short in loaded_attrs[:3]:
+                    parts = attr_short.split('(')[0]  # e.g., 'imu1a_data'
+                    base = parts.rsplit('_', 1)[0] if '_data' in parts or '_gyr' in parts else parts
+                    # derive time attr name: imu1a_data -> imu1a_time, imu1a_gyr_data -> imu1a_time
+                    if base.endswith('_gyr'):
+                        time_key = base.replace('_gyr', '')
+                    else:
+                        time_key = base
+                    t_attr = f'{time_key}_time'
+                    t = getattr(self, t_attr, None)
+                    if t is not None and len(t) > 0:
+                        print(f'  {time_key}_time: [{t[0]:.2f}, {t[-1]:.2f}]s, len={len(t)}')
+                    else:
+                        print(f'  {time_key}_time: None (将使用fallback索引映射)')
 
     def draw_prompt_markers(self, ax, time_start, time_end, show_text=True):
         """在图表上绘制Prompt标签
