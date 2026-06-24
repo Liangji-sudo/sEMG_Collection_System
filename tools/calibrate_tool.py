@@ -1408,13 +1408,12 @@ class CalibrateWidget(QWidget):
             frame_idx, qimage = self._seek_video_frame(side, target_unix)
 
             if qimage is not None and frame_idx is not None:
-                # KeepAspectRatioByExpanding：填满标签、保持比例、多余裁切（无黑边无拉伸）
                 lbl_size = lbl.size()
                 if lbl_size.width() > 50 and lbl_size.height() > 50:
-                    scaled = qimage.scaled(lbl_size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                    scaled = qimage.scaled(lbl_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 else:
                     scaled = qimage.scaled(qimage.width()//2, qimage.height()//2,
-                                           Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                                           Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 lbl.setPixmap(QPixmap.fromImage(scaled))
 
                 # 更新时间标签
@@ -2042,11 +2041,11 @@ class CalibrateWidget(QWidget):
         qimage = QImage(frame_rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()
         self._video_current_frame[side] = qimage
 
-        # 更新该侧视频 QLabel（KeepAspectRatioByExpanding 填满无黑边无拉伸）
+        # 更新该侧视频 QLabel
         lbl = getattr(self, f'lbl_video_{side}')
         lbl_time = getattr(self, f'lbl_video_{side}_time')
         lbl_size = lbl.size()
-        scaled = qimage.scaled(lbl_size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        scaled = qimage.scaled(lbl_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         lbl.setPixmap(QPixmap.fromImage(scaled))
         fps = self.video_fps.get(side, 30.0)
         frame_time_sec = new_idx / fps if fps > 0 else 0
@@ -2077,7 +2076,7 @@ class CalibrateWidget(QWidget):
                 self._video_current_idx[other_side] = other_frame
                 lbl2 = getattr(self, f'lbl_video_{other_side}')
                 lbl2_size = lbl2.size()
-                scaled2 = q2.scaled(lbl2_size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                scaled2 = q2.scaled(lbl2_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 lbl2.setPixmap(QPixmap.fromImage(scaled2))
                 other_frame_time = other_frame / other_fps_val if other_fps_val > 0 else 0
                 om = int(other_frame_time // 60)
