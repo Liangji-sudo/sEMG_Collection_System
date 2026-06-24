@@ -1082,21 +1082,64 @@ class CalibrateWidget(QWidget):
     def _find_video_files(self):
         """根据 H5 attrs 定位视频文件路径。
 
-        查找逻辑: H5 attrs video_left / video_right → 文件名
-        视频放在 storage/ 目录下的 video/ 中，按相对路径查找。
+        查找策略（按优先级）：
+        1. 从 H5 所在目录向上遍历，查找每一层的 video/ 子目录
+        2. H5 同目录
+        3. 绝对路径
+        4. 同时尝试替换后缀（.avi ↔ .mp4 ↔ .mkv ↔ .mov）
         """
         video_files = {}
         if self.h5_file is None or self.h5_path is None:
             return video_files
 
         h5_dir = os.path.dirname(os.path.abspath(self.h5_path))
-        # 视频存储路径: storage/video/ (在项目根目录下)
-        search_dirs = [
-            os.path.join(h5_dir, 'video'),                    # tools/../storage/video/
-            os.path.join(h5_dir, '..', 'storage', 'video'),   # tools/../../storage/video/
-            os.path.join(h5_dir, '..', 'video'),              # tools/../video/
-            os.path.join(h5_dir),                              # 与 H5 同目录
-        ]
+
+        # 构建搜索目录：从 H5 目录向上逐层查找 video/ 子目录
+        search_dirs = []
+        cur = os.path.abspath(h5_dir)
+        project_root = None
+        for _ in range(6):  # 最多向上 6 层
+            # 当前层的 video/ 子目录
+            video_sub = os.path.join(cur, 'video')
+            if os.path.isdir(video_sub):
+                search_dirs.append(video_sub)
+            # 记录 storage/ 的上层目录作为项目根
+            if os.path.basename(cur) == 'storage':
+                project_root = os.path.dirname(cur)
+                storage_video = os.path.join(cur, 'video')
+                if os.path.isdir(storage_video) and storage_video not in search_dirs:
+                    search_dirs.append(storage_video)
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+        # H5 同目录作为兜底
+        if h5_dir not in search_dirs:
+            search_dirs.append(h5_dir)
+
+        # 备选视频后缀（用于替换不匹配的后缀）
+        ALT_EXTENSIONS = ['.avi', '.mp4', '.mkv', '.mov', '.AVI', '.MP4', '.MKV', '.MOV']
+
+        def _try_find_file(base_filename):
+            """在搜索目录中定位文件，支持后缀替换"""
+            base_name, base_ext = os.path.splitext(base_filename)
+            # 候选文件名：原文件名 + 替换后缀的版本
+            candidates = [base_filename]
+            for alt_ext in ALT_EXTENSIONS:
+                alt_name = base_name + alt_ext
+                if alt_name not in candidates:
+                    candidates.append(alt_name)
+
+            for search_dir in search_dirs:
+                for candidate in candidates:
+                    full_path = os.path.normpath(os.path.join(search_dir, candidate))
+                    if os.path.isfile(full_path):
+                        return full_path
+                    # 也尝试只用 basename
+                    full_path = os.path.normpath(os.path.join(search_dir, os.path.basename(candidate)))
+                    if os.path.isfile(full_path):
+                        return full_path
+            return None
 
         for side_key, attr_key in [('left', 'video_left'), ('right', 'video_right')]:
             filename = self.h5_file.attrs.get(attr_key)
@@ -1108,17 +1151,7 @@ class CalibrateWidget(QWidget):
             if not filename or filename == '-':
                 continue
 
-            # 在搜索目录中查找
-            found_path = None
-            for search_dir in search_dirs:
-                candidate = os.path.normpath(os.path.join(search_dir, filename))
-                if os.path.isfile(candidate):
-                    found_path = candidate
-                    break
-                # 也尝试直接使用文件名（不拼接目录）
-                if os.path.isfile(os.path.join(search_dir, os.path.basename(filename))):
-                    found_path = os.path.join(search_dir, os.path.basename(filename))
-                    break
+            found_path = _try_find_file(filename)
 
             # 如果文件路径本身就是绝对路径，直接使用
             if found_path is None and os.path.isabs(filename) and os.path.isfile(filename):
@@ -1128,7 +1161,8 @@ class CalibrateWidget(QWidget):
                 video_files[side_key] = found_path
                 print(f'[CalibrateTool] 找到视频文件 ({side_key}): {found_path}')
             else:
-                print(f'[CalibrateTool] 未找到视频文件 ({side_key}): {filename}')
+                print(f'[CalibrateTool] 未找到视频文件 ({side_key}): {filename} '
+                      f'(搜索目录: {[os.path.basename(d) or d for d in search_dirs[:3]]}...)')
 
         return video_files
 
