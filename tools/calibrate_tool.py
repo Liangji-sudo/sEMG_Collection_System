@@ -1983,12 +1983,12 @@ class CalibrateWidget(QWidget):
         # 获取prompt时间（秒）
         prompt_time = self.prompt_times[idx]
 
-        # 转换为采样点位置（EMG 2kHz）
+        # 转换为采样点位置
         sample_rate = self._active_emg_sample_rate()
         sample_pos = int(prompt_time * sample_rate)
 
-        # 将prompt放在窗口中间偏左的位置
-        target_pos = sample_pos - self.window_size // 4
+        # 将 prompt 放在窗口正中间，视频帧时间与 prompt 时间戳对齐
+        target_pos = sample_pos - self.window_size // 2
 
         # 限制范围
         max_pos = self.slider.maximum()
