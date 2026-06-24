@@ -1942,26 +1942,49 @@ class CalibrateWidget(QWidget):
                     fontsize=13, color='#c0392b', alpha=0.9, style='italic',
                     fontweight='bold')
 
-        # 窗口内 ≥2 个 prompt：标注 start/end 和间隔
-        if n >= 2 and show_text and last_t > first_t:
-            interval = last_t - first_t
-            # start 标注（在第一个 prompt 左下方）
-            ax.text(first_t, ylim[0] + y_range * 0.08, f'start: {first_t:.2f}s',
-                    fontsize=11, color='#e74c3c', alpha=0.9,
-                    fontweight='bold', style='italic')
-            # end 标注（在最后一个 prompt 右下方）
-            ax.text(last_t, ylim[0] + y_range * 0.08, f'end: {last_t:.2f}s',
-                    fontsize=11, color='#e74c3c', alpha=0.9,
-                    fontweight='bold', style='italic',
-                    horizontalalignment='right')
-            # 间隔标注（两线之间顶部）
-            mid_t = (first_t + last_t) / 2.0
-            ax.annotate(f'Δ {interval:.2f}s',
-                        xy=(mid_t, ylim[1] - y_range * 0.02),
-                        fontsize=12, color='#d63031', alpha=0.9,
-                        fontweight='bold',
-                        ha='center', va='bottom',
-                        bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffeaa7', alpha=0.85, edgecolor='#fdcb6e'))
+        # 仅当窗口内存在 start/end 配对时才标注间隔
+        if n >= 2 and show_text:
+            # 查找配对：相邻 prompt 中基础名称相同、仅 start/end 后缀不同
+            pair_start_idx = -1
+            pair_end_idx = -1
+            SUFFIX_PAIRS = [('start', 'end'), ('开始', '结束'), ('_s', '_e')]
+            for i in range(n - 1):
+                na = in_window[i][0].lower()
+                nb = in_window[i + 1][0].lower()
+                for sa, sb in SUFFIX_PAIRS:
+                    ba = na.replace(sa, '').rstrip('_')
+                    bb = nb.replace(sb, '').rstrip('_')
+                    if ba and ba == bb:
+                        pair_start_idx = i
+                        pair_end_idx = i + 1
+                        break
+                    ba2 = na.replace(sb, '').rstrip('_')
+                    bb2 = nb.replace(sa, '').rstrip('_')
+                    if ba2 and ba2 == bb2:
+                        pair_start_idx = i
+                        pair_end_idx = i + 1
+                        break
+                if pair_start_idx >= 0:
+                    break
+
+            if pair_start_idx >= 0:
+                interval = in_window[pair_end_idx][1] - in_window[pair_start_idx][1]
+                ax.text(in_window[pair_start_idx][1], ylim[0] + y_range * 0.08,
+                        f'start: {in_window[pair_start_idx][1]:.2f}s',
+                        fontsize=11, color='#e74c3c', alpha=0.9,
+                        fontweight='bold', style='italic')
+                ax.text(in_window[pair_end_idx][1], ylim[0] + y_range * 0.08,
+                        f'end: {in_window[pair_end_idx][1]:.2f}s',
+                        fontsize=11, color='#e74c3c', alpha=0.9,
+                        fontweight='bold', style='italic',
+                        horizontalalignment='right')
+                mid_t = (in_window[pair_start_idx][1] + in_window[pair_end_idx][1]) / 2.0
+                ax.annotate(f'Δ {interval:.2f}s',
+                            xy=(mid_t, ylim[1] - y_range * 0.02),
+                            fontsize=12, color='#d63031', alpha=0.9,
+                            fontweight='bold',
+                            ha='center', va='bottom',
+                            bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffeaa7', alpha=0.85, edgecolor='#fdcb6e'))
 
     def goto_prev_prompt(self):
         """跳转到上一个Prompt"""
