@@ -1130,19 +1130,18 @@ class CalibrateWidget(QWidget):
 
     def _infer_imu_counts(self):
         """推断 IMU 数量。
-        H5 attrs（硬件 BLE 检测值）为主要参考，但会与实际加载数据交叉验证。
-        如果 bin_sync 用了错误的 num_imus，加载的传感器数可能超过硬件检测值。
+
+        优先级（从高到低）：
+        1. all_ble imu_index —— 硬件实际发送的数据，不受 bin_sync 配置影响（最可靠）
+        2. H5 attrs —— 原始硬件 BLE 检测值，但可能被 bin_sync 覆写
+        3. 已加载数据 —— bin_sync 可能为不存在的传感器创建空洞数据集
+        4. 默认值 2
+
+        注意：bin_sync_tool 会将 UI spinbox 值写入 H5 attrs，
+        覆盖硬件检测的原始值。因此 all_ble 的 imu_index 才是最可靠的。
         """
         for dev in (1, 2):
-            # 1. 从实际已加载数据推断数量
-            count_from_data = 0
-            for label in ('c', 'b', 'a'):
-                d = getattr(self, f'imu{dev}{label}_data', None)
-                if d is not None and len(d) > 0:
-                    count_from_data = {'a': 1, 'b': 2, 'c': 3}[label]
-                    break
-
-            # 2. 从 all_ble imu_index 推断
+            # 1. 从 all_ble imu_index 推断 —— 硬件实际发送的传感器数量（最可靠）
             count_from_all_ble = 0
             all_name = f'imu{dev}_all_ble'
             if all_name in self.h5_file:
@@ -1154,7 +1153,15 @@ class CalibrateWidget(QWidget):
                     except Exception:
                         pass
 
-            # 3. 从 H5 attrs（硬件 BLE 检测值，最可靠）
+            # 2. 从实际已加载数据推断数量
+            count_from_data = 0
+            for label in ('c', 'b', 'a'):
+                d = getattr(self, f'imu{dev}{label}_data', None)
+                if d is not None and len(d) > 0:
+                    count_from_data = {'a': 1, 'b': 2, 'c': 3}[label]
+                    break
+
+            # 3. 从 H5 attrs 推断（可能已被 bin_sync 覆写）
             count_from_attrs = 0
             for attr_key in (f'imu{dev}_num_imus', 'num_imus'):
                 val = self.h5_file.attrs.get(attr_key)
@@ -1165,17 +1172,20 @@ class CalibrateWidget(QWidget):
                     except (ValueError, TypeError):
                         pass
 
-            # 综合：H5 attrs 优先（硬件检测），否则 all_ble，否则实际数据，兜底 2
-            count = count_from_attrs or count_from_all_ble or count_from_data or 2
+            # 综合：all_ble（硬件实测）优先 → attrs → 已加载数据 → 兜底 2
+            count = count_from_all_ble or count_from_attrs or count_from_data or 2
 
-            # 交叉验证：已加载数据量与 attrs 不一致时发出警告
-            if count_from_data > 0 and count_from_attrs > 0 and count_from_data != count_from_attrs:
+            # 交叉验证警告
+            if count_from_all_ble > 0 and count_from_attrs > 0 and count_from_all_ble != count_from_attrs:
+                print(f'[CalibrateTool] ⚠️ IMU{dev}: all_ble检测={count_from_all_ble}个传感器，'
+                      f'H5 attrs={count_from_attrs}个（可能被bin_sync覆写）。'
+                      f'以all_ble={count_from_all_ble}为准。')
+            elif count_from_data > 0 and count_from_attrs > 0 and count_from_data != count_from_attrs:
                 print(f'[CalibrateTool] ⚠️ IMU{dev}: 已加载{count_from_data}个传感器，'
-                      f'H5 attrs记录{count_from_attrs}个。可能是bin_sync的num_imus配置不正确。'
-                      f'当前显示{count}个传感器（以attrs为准）。')
+                      f'H5 attrs={count_from_attrs}个（可能被bin_sync覆写或num_imus配置不对）。')
 
             self.__dict__[f'imu{dev}_imu_count'] = count
-            src = 'attrs' if count_from_attrs else ('all_ble' if count_from_all_ble else ('实际数据' if count_from_data else '默认'))
+            src = 'all_ble' if count_from_all_ble else ('attrs' if count_from_attrs else ('实际数据' if count_from_data else '默认'))
             print(f'[CalibrateTool] IMU{dev} imu_count={count} (来源: {src})')
 
     def _extract_imu_acc(self, data):

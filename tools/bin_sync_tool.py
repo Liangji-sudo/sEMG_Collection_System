@@ -1531,7 +1531,7 @@ def _detect_num_imus_from_bin(imu_bin_path):
 
         # ---- 策略 1: 整除检测 ----
         candidates_exact = []
-        for n in [4, 3, 2]:
+        for n in [4, 3, 2, 1]:
             frame_size = 4 + n * BYTES_PER_IMU_CHIP
             if data_size % frame_size == 0:
                 candidates_exact.append(n)
@@ -1541,7 +1541,7 @@ def _detect_num_imus_from_bin(imu_bin_path):
         # ---- 策略 2: 帧解析验证 (多候选或有截断时) ----
         # 计算每个候选 num_imus 的最高帧数和最低帧数
         max_frames_by_n = {}
-        for n in [4, 3, 2]:
+        for n in [4, 3, 2, 1]:
             fs = 4 + n * BYTES_PER_IMU_CHIP
             max_f = data_size // fs
             if max_f >= 3:  # 至少需要 3 帧才能验证递增
@@ -1580,7 +1580,7 @@ def _detect_num_imus_from_bin(imu_bin_path):
 
         # ---- 策略 3: 最佳余数 (截断文件 fallback) ----
         remainders = {}
-        for n in [4, 3, 2]:
+        for n in [4, 3, 2, 1]:
             frame_size = 4 + n * BYTES_PER_IMU_CHIP
             rem = data_size % frame_size
             remainders[n] = (rem, frame_size)
@@ -1606,7 +1606,7 @@ def _detect_num_imus_from_bin(imu_bin_path):
         if candidates_exact:
             log(f"  ⚠️ bin 整除检测歧义 (均整除): {candidates_exact}，保守回退")
         else:
-            log(f"  ⚠️ bin 自动检测不确定: remainders={[(n, remainders[n][0]) for n in [4,3,2]]}")
+            log(f"  ⚠️ bin 自动检测不确定: remainders={[(n, remainders[n][0]) for n in [4,3,2,1]]}")
         return None
     except OSError:
         pass
@@ -2286,10 +2286,10 @@ def run_gui():
             # 【新增】IMU数量选择
             opt_layout.addWidget(QLabel("IMU数量:"))
             self.num_imus_spin = QSpinBox()
-            self.num_imus_spin.setMinimum(2)
-            self.num_imus_spin.setMaximum(3)
+            self.num_imus_spin.setMinimum(1)
+            self.num_imus_spin.setMaximum(4)
             self.num_imus_spin.setValue(3)  # 默认3个IMU
-            self.num_imus_spin.setToolTip("bin文件中IMU芯片的数量（通常为3个）")
+            self.num_imus_spin.setToolTip("bin文件中IMU芯片的数量（1-4个，默认3个）")
             opt_layout.addWidget(self.num_imus_spin)
 
             opt_layout.addStretch()
@@ -2395,12 +2395,29 @@ def run_gui():
 
             device_id = self.device_combo.currentIndex() + 1
             verify = self.verify_cb.isChecked()
-            num_imus = self.num_imus_spin.value()  # 【新增】获取IMU数量
+            ui_num_imus = self.num_imus_spin.value()  # UI 指定的 IMU 数量（手动兜底值）
 
             self.log(f"\n{'='*60}")
             self.log(f"开始批量同步 ({len(self.h5_paths)} 个文件)")
-            self.log(f"设备: {device_id}, 校验: {verify}, IMU数量: {num_imus}")
+            self.log(f"设备: {device_id}, 校验: {verify}")
             self.log(f"{'='*60}\n")
+
+            # 【IMU数量解析】优先 bin 自动检测 → 失败则用 UI spinbox 值
+            # bin 文件才是硬件真实数据结构，UI spinbox 只是兜底
+            resolved_num_imus = ui_num_imus
+            if self.imu_bin_path:
+                detected = _detect_num_imus_from_bin(self.imu_bin_path)
+                if detected is not None:
+                    resolved_num_imus = detected
+                    if detected != ui_num_imus:
+                        self.log(f"  ⚠️ IMU数量: bin自动检测={detected}，UI设置={ui_num_imus}，以bin检测为准")
+                    else:
+                        self.log(f"  IMU数量: bin自动检测={detected}（与UI设置一致）")
+                else:
+                    self.log(f"  IMU数量: bin自动检测失败，使用UI设置={ui_num_imus}")
+            else:
+                self.log(f"  IMU数量: 无IMU bin文件，使用UI设置={ui_num_imus}")
+            self.log(f"  最终使用 IMU 数量: {resolved_num_imus}")
             pending_files = []
             for path in self.h5_paths:
                 try:
@@ -2441,20 +2458,19 @@ def run_gui():
                 self.log(f"[{i+1}/{len(pending_files)}] {os.path.basename(h5_path)}")
 
                 try:
-                    # 【新增】在同步前设置IMU数量到H5文件属性中
+                    # 在同步前设置 IMU 数量到 H5 attrs（使用解析后的真实值，非 UI spinbox 默认值）
                     with h5py.File(h5_path, 'r+') as f:
-                        # 设置通用的 num_imus 属性
-                        f.attrs['num_imus'] = num_imus
-                        # 设置设备特定的 imu{device}_num_imus 属性（优先级更高）
-                        f.attrs[f'imu{device_id}_num_imus'] = num_imus
-                        self.log(f"  设置 IMU 数量: {num_imus}")
+                        f.attrs['num_imus'] = resolved_num_imus
+                        f.attrs[f'imu{device_id}_num_imus'] = resolved_num_imus
+                        self.log(f"  设置 IMU 数量: {resolved_num_imus}")
 
                     result = sync_h5_with_bin(
                         h5_path,
                         self.emg_bin_path,
                         self.imu_bin_path,
                         device_id=device_id,
-                        verify=verify
+                        verify=verify,
+                        manual_num_imus=resolved_num_imus,
                     )
 
                     if result['status'] == 'success':
@@ -2517,7 +2533,7 @@ def main():
     parser.add_argument("--imu-bin", help="IMU bin文件路径（可选）")
     parser.add_argument("--device", type=int, default=1, choices=[1, 2], help="设备ID (1或2)")
     parser.add_argument("--no-verify", action="store_true", help="跳过数据校验")
-    parser.add_argument("--num-imus", type=int, default=None, choices=[2, 3, 4],
+    parser.add_argument("--num-imus", type=int, default=None, choices=[1, 2, 3, 4],
                         help="手动指定 IMU 芯片数量 (默认: 自动检测 bin 文件)")
     parser.add_argument("--channel-map", type=str, default="V2", choices=["V1", "V2", "physical"],
                         help="通道映射模式 (默认 V2，V1/V2 将 bin 物理顺序映射到 H5 显示顺序)")
