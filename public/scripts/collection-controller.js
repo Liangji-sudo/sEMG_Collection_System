@@ -75,6 +75,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this._restBetweenSessions = 30;     // 轮次间休息时间（秒）
             this._restCountdownTimer = null;    // 休息倒计时定时器
 
+            // ===== 精确对齐同步状态 =====
+            this._sessionSyncDone = false;      // 当前session是否已完成同步prompt
+
             // ===== 录像同步相关状态 =====
             this._recordingSessionId = null;    // 录像会话ID，格式: rec_YYYYMMDD_HHMMSS_N
             this._spaceKeyEnabled = false;      // 是否启用空格键监听
@@ -786,11 +789,12 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             console.log('[Collection] 切换轮次:', sessionIndex + 1);
 
             this.currentSessionIndex = sessionIndex;
-            // 切换轮次时重置Stage为第一个
+            // 切换轮次时重置Stage为第一个 + 重置同步标记
             this.currentStageIndex = 0;
             this.currentGestureIndex = 0;
             this.gestureRepeatCount = 0;
             this.continualTrialCount = 0;
+            this._sessionSyncDone = false;  // 新session需要重新做同步
 
             // 重置动画模块的试次计数
             this.resetAnimationModules();
@@ -1014,6 +1018,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             // 【新增】保存测试模式状态
             this._isTestMode = isTestMode;
 
+            // 【精准对齐同步】每次开始新的采集任务时重置同步标记
+            this._sessionSyncDone = false;
+
             console.log('[Collection] ===== 开始采集任务 =====');
             console.log('[Collection] 任务类型:', this.currentTaskId);
             console.log('[Collection] 测试模式:', isTestMode ? '是（不保存H5文件）' : '否');
@@ -1212,6 +1219,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this.currentGestureIndex = 0;
             this.gestureRepeatCount = 0;
             this.continualTrialCount = 0;
+            this._sessionSyncDone = false;  // 新session需要重新做同步
 
             // 重置动画模块
             this.resetAnimationModules();
@@ -1960,6 +1968,37 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             });
             console.log(`[Collection] Stage "${currentStage?.name}" needMocap: ${needMocap}`);
 
+            // 【精准对齐同步】每个session的第一个stage有独立的同步阶段
+            if (!this._sessionSyncDone && this.currentTaskId === 'discrete_gesture') {
+                this._sessionSyncDone = true;
+                this._syncPhaseActive = true;
+
+                // 保存后续的真正手势库（去掉 sync prompt）
+                this._syncRemainingGestures = this.gestures.filter(g => !g._isSyncPrompt);
+
+                const syncGesture = {
+                    id: 'sync_alignment',
+                    name: 'sync_alignment',
+                    label: '精准对齐同步',
+                    icon: '🎯',
+                    color: '#ef4444',
+                    _isSyncPrompt: true
+                };
+
+                console.log('[Collection] ★★★ 同步阶段：独立运行精准对齐同步prompt ★★★');
+                console.log('[Collection] ★ 同步后剩余手势:', this._syncRemainingGestures.length, '个');
+
+                // Phase 1: 只播放同步prompt
+                this.currentPhase = 'sync_prepare';
+                this._showSyncPreparation(() => {
+                    this._startSyncAnimation(syncGesture);
+                });
+                return;  // 不执行后续的正常采集流程
+            }
+
+            // 清理：确保 gestures 中没有残留的 sync prompt
+            this.gestures = this.gestures.filter(g => !g._isSyncPrompt);
+
             this.currentPhase = 'prepare';
 
             // 【Bugfix】续采模式下传递 startIndex，从断点索引继续
@@ -1972,6 +2011,175 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 this.showPreparation(() => {
                     this.startNextGesture();
                 });
+            }
+        }
+
+        /**
+         * 【精准对齐同步】显示同步阶段准备倒计时
+         */
+        _showSyncPreparation(callback) {
+            console.log('[Collection] 🎯 同步阶段：准备中...');
+
+            // 显示同步水印
+            this._showSyncWatermark();
+
+            this.updateGestureDisplay({
+                name: '🎯 精准对齐同步',
+                instruction: '请观察光标！当到达采集线时，立即做出标定动作',
+                showCountdown: true,
+                countdownValue: 2
+            });
+
+            let countdown = 2;
+            const countdownEl = document.getElementById('countdown');
+
+            this.countdownTimer = setInterval(() => {
+                countdown--;
+                if (countdownEl) countdownEl.textContent = countdown;
+
+                if (countdown <= 0) {
+                    clearInterval(this.countdownTimer);
+                    this.countdownTimer = null;
+                    if (countdownEl) countdownEl.style.display = 'none';
+                    callback();
+                }
+            }, 1000);
+        }
+
+        /**
+         * 【精准对齐同步】启动同步prompt动画（单prompt）
+         * startGesture 内部已通过 onPromptTriggered 回调自动发送 prompt 到后端
+         */
+        _startSyncAnimation(syncGesture) {
+            console.log('[Collection] 🎯 同步动画开始');
+
+            this.currentPhase = 'sync';
+            this.currentGestureIndex = 0;
+
+            // 显示手势GIF
+            this.showGestureGif(syncGesture);
+
+            if (window.discreteGestureAnimation) {
+                // 使用 startGesture 播放单个手势（repeatPerGesture=1）
+                // 触发时自动发送 sync_alignment prompt 到 H5（由 startGesture 的 onPromptTriggered 回调处理）
+                window.discreteGestureAnimation.startGesture(
+                    syncGesture,
+                    { repeatPerGesture: 1, intervalBetweenRepeat: 1.0 },
+                    () => {
+                        // 单次重复完成 → 进入过渡阶段
+                        this._onSyncPhaseComplete();
+                    }
+                );
+            } else {
+                // 没有动画模块时直接过渡
+                console.warn('[Collection] 无动画模块，跳过同步动画');
+                this._onSyncPhaseComplete();
+            }
+        }
+
+        /**
+         * 【精准对齐同步】同步阶段完成 → 过渡到真正的手势采集
+         * 注意：sync_alignment prompt 已由 startGesture 动画的 onPromptTriggered 回调发送，
+         *       这里只做阶段过渡，不重复发送 prompt。
+         */
+        _onSyncPhaseComplete() {
+            console.log('[Collection] ✅ 同步阶段完成 — 开始过渡到手势采集');
+
+            // 隐藏同步水印
+            this._hideSyncWatermark();
+
+            // 停止同步动画
+            if (window.discreteGestureAnimation) {
+                window.discreteGestureAnimation.stop();
+            }
+
+            // 隐藏GIF
+            this.hideGestureGif();
+
+            // 恢复真正的手势库（不含 sync prompt）
+            this.gestures = this._syncRemainingGestures || this.gestures.filter(g => !g._isSyncPrompt);
+            this.currentGestureIndex = 0;
+            this._syncPhaseActive = false;
+
+            // 显示过渡信息
+            this.updateGestureDisplay({
+                name: '✅ 同步完成',
+                instruction: '即将开始手势采集...',
+                showCountdown: true,
+                countdownValue: 2
+            });
+
+            let transCountdown = 2;
+            const countdownEl = document.getElementById('countdown');
+
+            this.countdownTimer = setInterval(() => {
+                transCountdown--;
+                if (countdownEl) countdownEl.textContent = transCountdown;
+
+                if (transCountdown <= 0) {
+                    clearInterval(this.countdownTimer);
+                    this.countdownTimer = null;
+                    if (countdownEl) countdownEl.style.display = 'none';
+
+                    console.log('[Collection] ★ 开始真正的手势采集阶段');
+                    console.log('[Collection] gestures 数量:', this.gestures.length);
+
+                    // 进入正常的手势采集流程
+                    this.currentPhase = 'prepare';
+                    this.showPreparation(() => {
+                        if (this._shuffleMode) {
+                            this.startShuffleModeAnimation({ startIndex: 0 });
+                        } else {
+                            this.startNextGesture();
+                        }
+                    });
+                }
+            }, 1000);
+        }
+
+        /**
+         * 【精准对齐同步】显示"同步"半透明水印覆盖层
+         */
+        _showSyncWatermark() {
+            // 移除旧水印（防御）
+            this._hideSyncWatermark();
+
+            const watermark = document.createElement('div');
+            watermark.id = 'sync-watermark-overlay';
+            watermark.style.cssText = `
+                position: fixed;
+                top: 0; left: 0; right: 0; bottom: 0;
+                pointer-events: none;
+                z-index: 100;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                background: transparent;
+            `;
+
+            const text = document.createElement('div');
+            text.textContent = '同步';
+            text.style.cssText = `
+                font-size: 120px;
+                font-weight: 900;
+                color: rgba(239, 68, 68, 0.12);
+                letter-spacing: 40px;
+                user-select: none;
+                transform: rotate(-15deg);
+            `;
+            watermark.appendChild(text);
+            document.body.appendChild(watermark);
+            console.log('[Collection] 🎯 同步水印已显示');
+        }
+
+        /**
+         * 【精准对齐同步】移除"同步"水印
+         */
+        _hideSyncWatermark() {
+            const el = document.getElementById('sync-watermark-overlay');
+            if (el) {
+                el.remove();
+                console.log('[Collection] 🎯 同步水印已移除');
             }
         }
 

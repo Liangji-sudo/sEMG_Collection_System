@@ -85,6 +85,9 @@ const DISCRETE_GESTURE_CONFIG = {
         // 休息/空动作
         'rest': { label: '保持', icon: '⏸️', color: '#6b7280' },
         'ready': { label: '准备', icon: '✅', color: '#6b7280' },
+
+        // 精确对齐同步（每个session开头的标定prompt）
+        'sync_alignment': { label: '精准对齐同步', icon: '🎯', color: '#ef4444' },
     },
 
     // ==================== Stage定义 ====================

@@ -185,6 +185,10 @@ class CalibrateWidget(QWidget):
         self._video_update_throttle_static = 0.05 # 静止时更新间隔
         self.video_label_height = 200   # 视频预览区域高度
 
+        # 精确对齐标定偏移量（从 H5 attrs 读取，无标定时默认 0）
+        self.calib_offset = {}          # {'left': offset_sec, 'right': offset_sec}
+        self.calib_present = False      # 是否有标定数据
+
         # Prompt标签数据
         self.prompt_names = None
         self.prompt_times = None  # 相对时间（秒）
@@ -750,6 +754,7 @@ class CalibrateWidget(QWidget):
             self._load_status_attrs()
             self.load_prompt_data()
             self._load_videos()
+            self._load_calibration_offset()
 
             # 计算并保存全局的Y轴范围
             self.calculate_y_limits()
@@ -1493,6 +1498,45 @@ class CalibrateWidget(QWidget):
             if btn:
                 btn.setEnabled(False)
 
+    def _load_calibration_offset(self):
+        """从 H5 attrs 读取精确对齐标定偏移量。
+
+        H5 attrs 命名：
+        - calib_offset_left: float (秒), 左手视频偏移量
+        - calib_offset_right: float (秒), 右手视频偏移量
+        - calib_present: 是否有标定数据（任一 side 有值即为 True）
+
+        偏移量含义：calib_offset = video_frame_unix - prompt_unix
+        即：视频比 prompt 快/慢多少秒（负值 = 视频滞后，正值 = 视频超前）。
+        在校正时：corrected_video_unix = target_unix - calib_offset
+        """
+        self.calib_offset = {}
+        self.calib_present = False
+
+        if self.h5_file is None:
+            return
+
+        for side in ('left', 'right'):
+            key = f'calib_offset_{side}'
+            try:
+                val = self.h5_file.attrs.get(key)
+                if val is not None:
+                    self.calib_offset[side] = float(val)
+                    self.calib_present = True
+                else:
+                    self.calib_offset[side] = 0.0
+            except Exception:
+                self.calib_offset[side] = 0.0
+
+        if self.calib_present:
+            offset_info = ', '.join(
+                f'{side}={self.calib_offset.get(side, 0):+.3f}s'
+                for side in ('left', 'right')
+            )
+            print(f'[CalibrateTool] 🎯 精确对齐标定偏移量: {offset_info}')
+        else:
+            print('[CalibrateTool] 无精确对齐标定数据，偏移量默认=0')
+
     def _seek_video_frame(self, side, target_unix):
         """定位到指定 Unix 时间戳对应的视频帧，返回 (frame_idx, qimage)。
 
@@ -1524,8 +1568,12 @@ class CalibrateWidget(QWidget):
         else:
             effective_fps = self.video_fps.get(side, 30)
 
+        # 应用精确对齐标定偏移量
+        calib_offset = self.calib_offset.get(side, 0)
+        corrected_unix = target_unix + calib_offset
+
         # 从 Unix 时间戳映射到帧偏移（使用实际帧率消除漂移）
-        time_offset = target_unix - first_unix
+        time_offset = corrected_unix - first_unix
         frame_idx = int(round(time_offset * effective_fps))
         frame_idx = max(0, min(frame_idx, total_frames - 1))
 
@@ -1608,11 +1656,15 @@ class CalibrateWidget(QWidget):
                 minutes = int(frame_time_sec // 60)
                 seconds = int(frame_time_sec % 60)
                 ms = int((frame_time_sec % 1) * 100)
-                # EMG 相对时间（与 Prompt 时间戳对齐）
+                # EMG 相对时间（与 Prompt 时间戳对齐，含标定偏移）
                 if self.emg_start_time is not None:
                     first_unix = self.video_first_frame_unix.get(side, 0)
-                    emg_rel = first_unix + frame_idx / fps - float(self.emg_start_time)
-                    lbl_time.setText(f'Frame #{frame_idx} | 视频 {minutes:02d}:{seconds:02d}.{ms:02d} | EMG {emg_rel:.2f}s')
+                    calib = self.calib_offset.get(side, 0)
+                    emg_rel = first_unix + frame_idx / fps - float(self.emg_start_time) - calib
+                    if abs(calib) > 0.001:
+                        lbl_time.setText(f'Frame #{frame_idx} | 视频 {minutes:02d}:{seconds:02d}.{ms:02d} | EMG {emg_rel:.2f}s | 标定{calib:+.3f}s')
+                    else:
+                        lbl_time.setText(f'Frame #{frame_idx} | 视频 {minutes:02d}:{seconds:02d}.{ms:02d} | EMG {emg_rel:.2f}s')
                 else:
                     lbl_time.setText(f'Frame #{frame_idx} | 视频 {minutes:02d}:{seconds:02d}.{ms:02d}')
             else:
@@ -2377,11 +2429,15 @@ class CalibrateWidget(QWidget):
         frame_time_sec = new_idx / fps if fps > 0 else 0
         minutes = int(frame_time_sec // 60)
         seconds = int(frame_time_sec % 60)
-        # EMG 相对时间（与 Prompt 时间戳对齐）
+        # EMG 相对时间（与 Prompt 时间戳对齐，含标定偏移）
         if self.emg_start_time is not None:
             first_unix = self.video_first_frame_unix.get(side, 0)
-            emg_rel = first_unix + new_idx / fps - float(self.emg_start_time)
-            lbl_time.setText(f'Frame #{new_idx} | 视频 {minutes:02d}:{seconds:02d} | EMG {emg_rel:.2f}s')
+            calib = self.calib_offset.get(side, 0)
+            emg_rel = first_unix + new_idx / fps - float(self.emg_start_time) - calib
+            if abs(calib) > 0.001:
+                lbl_time.setText(f'Frame #{new_idx} | 视频 {minutes:02d}:{seconds:02d} | EMG {emg_rel:.2f}s | 标定{calib:+.3f}s')
+            else:
+                lbl_time.setText(f'Frame #{new_idx} | 视频 {minutes:02d}:{seconds:02d} | EMG {emg_rel:.2f}s')
         else:
             lbl_time.setText(f'Frame #{new_idx} | 视频 {minutes:02d}:{seconds:02d}')
 
@@ -2415,8 +2471,12 @@ class CalibrateWidget(QWidget):
                 os = int(other_frame_time % 60)
                 lbl_time2 = getattr(self, f'lbl_video_{other_side}_time')
                 if self.emg_start_time is not None:
-                    emg_rel2 = other_first + other_frame / other_fps_val - float(self.emg_start_time)
-                    lbl_time2.setText(f'Frame #{other_frame} | 视频 {om:02d}:{os:02d} | EMG {emg_rel2:.2f}s')
+                    calib2 = self.calib_offset.get(other_side, 0)
+                    emg_rel2 = other_first + other_frame / other_fps_val - float(self.emg_start_time) - calib2
+                    if abs(calib2) > 0.001:
+                        lbl_time2.setText(f'Frame #{other_frame} | 视频 {om:02d}:{os:02d} | EMG {emg_rel2:.2f}s | 标定{calib2:+.3f}s')
+                    else:
+                        lbl_time2.setText(f'Frame #{other_frame} | 视频 {om:02d}:{os:02d} | EMG {emg_rel2:.2f}s')
                 else:
                     lbl_time2.setText(f'Frame #{other_frame} | 视频 {om:02d}:{os:02d}')
 

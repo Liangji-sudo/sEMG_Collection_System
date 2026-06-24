@@ -21,8 +21,17 @@ from PyQt5.QtWidgets import (
     QMessageBox, QListWidget, QListWidgetItem, QProgressBar,
     QCheckBox, QSpinBox, QComboBox, QFrame, QScrollArea, QGridLayout
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSettings
-from PyQt5.QtGui import QFont, QColor, QPalette
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSettings, QTimer
+from PyQt5.QtGui import QFont, QColor, QPalette, QPixmap, QImage
+
+# cv2 用于视频帧读取（精确对齐标定功能）
+try:
+    import cv2
+    HAS_CV2 = True
+except ImportError:
+    HAS_CV2 = False
+
+import time as _time_module  # 避免与 calibrate_tool 中 time 冲突
 
 # 导入bin_sync_tool中的同步功能
 try:
@@ -2267,6 +2276,722 @@ class ViewerTab(QWidget):
         self.text_view.setText("\n".join(lines))
 
 
+# ==================== 精确对齐标定标签页 ====================
+
+class SyncCalibrationTab(QWidget):
+    """精确对齐标定标签页 — 人工视频帧标定，消除 EMG-视频系统性延迟
+
+    工作流程:
+    1. 选中 H5 文件（文件列表双击或选中+切换到此标签页）
+    2. 加载左右手视频
+    3. 播放视频，观察标定动作
+    4. 在动作出现时点击"标定打标"
+    5. 系统自动计算偏移量并保存到 H5 attrs
+    6. 数据可视化标签页会自动应用此偏移量
+    """
+
+    SYNC_PROMPT_NAME = 'sync_alignment'  # H5 中的同步 prompt 名称
+
+    def __init__(self):
+        super().__init__()
+        self.h5_path = None
+        self.h5_file = None
+        self.video_caps = {}
+        self.video_fps = {}
+        self.video_frame_count = {}
+        self.video_first_frame_unix = {}
+        self.video_last_frame_unix = {}
+        self.video_duration = {}
+        self._current_frame_idx = {'left': 0, 'right': 0}
+        self._is_playing = False
+        self._playback_timer = QTimer()
+        self._playback_timer.timeout.connect(self._on_playback_tick)
+        self._playback_speed = 1.0
+        self._sync_prompt_time = None
+        self._sync_prompt_idx = None
+        self._marked_frame = {'left': None, 'right': None}
+        self._marked_offset = {'left': 0.0, 'right': 0.0}
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        # 顶部标题栏
+        title_layout = QHBoxLayout()
+        title = QLabel('🎯 精确对齐标定')
+        title.setStyleSheet('font-size: 14pt; font-weight: bold; color: #ef4444;')
+        title_layout.addWidget(title)
+        title_layout.addStretch()
+
+        self.lbl_file = QLabel('未打开文件')
+        self.lbl_file.setStyleSheet('color: #666; font-style: italic;')
+        title_layout.addWidget(self.lbl_file)
+        layout.addLayout(title_layout)
+
+        # 提示信息
+        hint = QLabel(
+            '操作步骤:\n'
+            '  1. 播放视频，找到同步阶段中"精准对齐同步"prompt 触发时刻的标定动作\n'
+            '  2. 在动作发生的那一帧暂停，点击"标定打标"\n'
+            '  3. 系统自动计算视频偏移量→保存到 H5 →数据可视化自动应用'
+        )
+        hint.setStyleSheet('color: #888; font-size: 9pt; padding: 8px; '
+                           'background: #f8f9fa; border-radius: 4px;')
+        layout.addWidget(hint)
+
+        # 视频区域
+        video_layout = QHBoxLayout()
+
+        for side, title_text in [('left', '📹 左手相机'), ('right', '📹 右手相机')]:
+            group = QGroupBox(title_text)
+            group.setStyleSheet('QGroupBox { font-weight: bold; }')
+            vbox = QVBoxLayout(group)
+
+            lbl = QLabel('(等待加载视频...)')
+            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setMinimumSize(320, 240)
+            lbl.setMaximumSize(640, 480)
+            lbl.setScaledContents(False)
+            lbl.setSizePolicy(
+                lbl.sizePolicy().horizontalPolicy(),
+                lbl.sizePolicy().verticalPolicy()
+            )
+            lbl.setStyleSheet(
+                'background-color: #1a1a2e; border: 1px solid #333; '
+                'color: #666; font-size: 10pt;'
+            )
+            lbl_time = QLabel('--:--')
+            lbl_time.setStyleSheet('color: #ef4444; font-size: 9pt; font-weight: bold;')
+
+            vbox.addWidget(lbl)
+            vbox.addWidget(lbl_time)
+
+            setattr(self, f'lbl_video_{side}', lbl)
+            setattr(self, f'lbl_video_{side}_time', lbl_time)
+            video_layout.addWidget(group)
+
+        layout.addLayout(video_layout)
+
+        # 控制按钮栏
+        ctrl_layout = QHBoxLayout()
+
+        self.btn_play = QPushButton('▶ 播放')
+        self.btn_play.clicked.connect(self._toggle_play)
+        self.btn_play.setMinimumWidth(100)
+        ctrl_layout.addWidget(self.btn_play)
+
+        self.btn_reset = QPushButton('↺ 重置')
+        self.btn_reset.clicked.connect(self._reset_playback)
+        self.btn_reset.setMinimumWidth(80)
+        ctrl_layout.addWidget(self.btn_reset)
+
+        ctrl_layout.addWidget(QLabel('速度:'))
+        self.combo_speed = QComboBox()
+        self.combo_speed.addItems(['0.5x', '1x', '2x', '4x'])
+        self.combo_speed.setCurrentIndex(1)
+        self.combo_speed.currentIndexChanged.connect(self._on_speed_changed)
+        ctrl_layout.addWidget(self.combo_speed)
+
+        ctrl_layout.addStretch()
+
+        # 帧导航
+        self.btn_prev_frame = QPushButton('◀ 前一帧')
+        self.btn_prev_frame.clicked.connect(lambda: self._step_frame(-1))
+        ctrl_layout.addWidget(self.btn_prev_frame)
+
+        self.btn_next_frame = QPushButton('后一帧 ▶')
+        self.btn_next_frame.clicked.connect(lambda: self._step_frame(1))
+        ctrl_layout.addWidget(self.btn_next_frame)
+
+        ctrl_layout.addStretch()
+
+        # 同步 prompt 信息
+        self.lbl_prompt_info = QLabel('同步 Prompt: 未找到')
+        self.lbl_prompt_info.setStyleSheet('color: #f59e0b; font-size: 10pt;')
+        ctrl_layout.addWidget(self.lbl_prompt_info)
+
+        layout.addLayout(ctrl_layout)
+
+        # 标定按钮行
+        calib_layout = QHBoxLayout()
+        calib_layout.addStretch()
+
+        self.btn_mark = QPushButton('📍 标定打标')
+        self.btn_mark.clicked.connect(self._mark_calibration)
+        self.btn_mark.setMinimumWidth(200)
+        self.btn_mark.setMinimumHeight(45)
+        self.btn_mark.setStyleSheet(
+            'QPushButton {'
+            '  font-size: 14pt; font-weight: bold;'
+            '  background-color: #ef4444; color: white;'
+            '  border-radius: 8px; padding: 10px 20px;'
+            '}'
+            'QPushButton:hover { background-color: #dc2626; }'
+            'QPushButton:disabled { background-color: #666; }'
+        )
+        calib_layout.addWidget(self.btn_mark)
+
+        # 偏移量显示
+        self.lbl_offset = QLabel('')
+        self.lbl_offset.setStyleSheet('color: #10b981; font-size: 10pt; font-weight: bold; padding: 0 20px;')
+        calib_layout.addWidget(self.lbl_offset)
+
+        self.btn_save = QPushButton('💾 保存到 H5')
+        self.btn_save.clicked.connect(self._save_calibration)
+        self.btn_save.setEnabled(False)
+        self.btn_save.setMinimumWidth(150)
+        self.btn_save.setStyleSheet(
+            'QPushButton {'
+            '  font-size: 11pt; font-weight: bold;'
+            '  background-color: #10b981; color: white;'
+            '  border-radius: 6px; padding: 8px 16px;'
+            '}'
+            'QPushButton:hover { background-color: #059669; }'
+            'QPushButton:disabled { background-color: #666; }'
+        )
+        calib_layout.addWidget(self.btn_save)
+        calib_layout.addStretch()
+        layout.addLayout(calib_layout)
+
+        # 状态栏
+        self.lbl_status = QLabel('就绪')
+        self.lbl_status.setStyleSheet('color: #666; font-size: 9pt;')
+        layout.addWidget(self.lbl_status)
+
+        layout.addStretch()
+
+    def close_file(self):
+        """关闭 H5 文件句柄（避免 Windows 文件锁冲突）"""
+        self._stop_playback()
+        self._close_videos()
+        if self.h5_file:
+            try:
+                self.h5_file.close()
+            except Exception:
+                pass
+            self.h5_file = None
+
+    def load_file(self, file_path):
+        """加载 H5 文件及关联视频"""
+        self.close_file()
+
+        self.h5_path = file_path
+        self.h5_file = h5py.File(file_path, 'r')
+        self.lbl_file.setText(os.path.basename(file_path))
+        self.lbl_file.setStyleSheet('color: #333; font-weight: bold;')
+
+        # 读取同步 prompt 时间
+        self._load_sync_prompt()
+
+        # 加载视频
+        self._load_videos()
+
+        # 读取已有的标定数据（如果已标定过）
+        self._load_existing_calibration()
+
+        self.btn_mark.setEnabled(self._sync_prompt_time is not None)
+
+        if self._marked_frame.get('left') is not None or self._marked_frame.get('right') is not None:
+            self.btn_save.setEnabled(True)
+            self.lbl_status.setText(
+                '✅ 已有标定数据 — 可重新标定或直接使用现有偏移量')
+        else:
+            self.lbl_status.setText(
+                '就绪 — 点击"播放"查看视频，在标定动作帧处暂停并点击"标定打标"')
+
+    def _load_sync_prompt(self):
+        """从 H5 读取 sync_alignment prompt 的 Unix 时间"""
+        self._sync_prompt_time = None
+        self._sync_prompt_idx = None
+
+        if self.h5_file is None:
+            return
+
+        try:
+            if 'prompts' not in self.h5_file:
+                self.lbl_prompt_info.setText('同步 Prompt: 无 prompts 数据')
+                return
+
+            pg = self.h5_file['prompts']
+            if 'names' not in pg or 'times' not in pg:
+                self.lbl_prompt_info.setText('同步 Prompt: prompts 结构不完整')
+                return
+
+            names = pg['names'][:]
+            times = pg['times'][:]
+
+            # 查找 sync_alignment
+            for i, n in enumerate(names):
+                name = n.decode('utf-8') if isinstance(n, bytes) else str(n)
+                if name == self.SYNC_PROMPT_NAME:
+                    self._sync_prompt_idx = i
+                    self._sync_prompt_time = float(times[i])
+                    break
+
+            if self._sync_prompt_time is not None:
+                self.lbl_prompt_info.setText(
+                    f'🎯 同步 Prompt [{self._sync_prompt_idx}]: '
+                    f'sync_alignment @ {self._sync_prompt_time:.3f}s (Unix)'
+                )
+            else:
+                self.lbl_prompt_info.setText(
+                    '⚠️ 未找到 sync_alignment prompt — 此文件可能不是新版本采集的')
+                self.btn_mark.setEnabled(False)
+        except Exception as e:
+            self.lbl_prompt_info.setText(f'读取 prompts 失败: {e}')
+            self.btn_mark.setEnabled(False)
+
+    def _load_existing_calibration(self):
+        """读取 H5 attrs 中已有的标定数据"""
+        self._marked_frame = {'left': None, 'right': None}
+        self._marked_offset = {'left': 0.0, 'right': 0.0}
+
+        if self.h5_file is None:
+            return
+
+        try:
+            for side in ('left', 'right'):
+                offset_key = f'calib_offset_{side}'
+                frame_key = f'calib_marked_frame_{side}'
+                offset_val = self.h5_file.attrs.get(offset_key)
+                frame_val = self.h5_file.attrs.get(frame_key)
+                if offset_val is not None:
+                    self._marked_offset[side] = float(offset_val)
+                    self._marked_frame[side] = int(frame_val) if frame_val is not None else None
+        except Exception:
+            pass
+
+        self._update_offset_label()
+
+    # ─── 视频文件查找（复用 calibrate_tool 逻辑） ───
+
+    def _find_video_files(self):
+        """根据 H5 attrs 定位视频文件路径"""
+        video_files = {}
+        if self.h5_file is None or self.h5_path is None:
+            return video_files
+
+        h5_dir = os.path.dirname(os.path.abspath(self.h5_path))
+
+        # 构建搜索目录
+        search_dirs = []
+        cur = os.path.abspath(h5_dir)
+        for _ in range(6):
+            video_sub = os.path.join(cur, 'video')
+            if os.path.isdir(video_sub):
+                search_dirs.append(video_sub)
+            if os.path.basename(cur) == 'storage':
+                storage_video = os.path.join(cur, 'video')
+                if os.path.isdir(storage_video) and storage_video not in search_dirs:
+                    search_dirs.append(storage_video)
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+        if h5_dir not in search_dirs:
+            search_dirs.append(h5_dir)
+
+        ALT_EXTENSIONS = ['.avi', '.mp4', '.mkv', '.mov', '.AVI', '.MP4', '.MKV', '.MOV']
+
+        def _try_find(base_filename):
+            base_name, base_ext = os.path.splitext(base_filename)
+            for sd in search_dirs:
+                candidates = [os.path.join(sd, base_filename)]
+                candidates.extend(
+                    os.path.join(sd, f'{base_name}{ext}')
+                    for ext in ALT_EXTENSIONS
+                )
+                for c in candidates:
+                    if os.path.isfile(c):
+                        return c
+            return None
+
+        # 读取 H5 attrs 中的 video_left/video_right
+        for side, attr_key in [('left', 'video_left'), ('right', 'video_right')]:
+            video_name = None
+            try:
+                val = self.h5_file.attrs.get(attr_key)
+                if val is not None:
+                    video_name = val.decode('utf-8') if isinstance(val, bytes) else str(val)
+            except Exception:
+                pass
+
+            if video_name:
+                found = _try_find(video_name)
+                if found:
+                    video_files[side] = found
+                    continue
+                # 尝试 basename
+                basename = os.path.basename(video_name)
+                found = _try_find(basename)
+                if found:
+                    video_files[side] = found
+
+        return video_files
+
+    def _load_videos(self):
+        """加载左右手视频"""
+        if not HAS_CV2:
+            self.lbl_status.setText('⚠️ cv2 未安装，无法加载视频')
+            return
+
+        video_files = self._find_video_files()
+
+        for side in ('left', 'right'):
+            lbl = getattr(self, f'lbl_video_{side}')
+            lbl_time = getattr(self, f'lbl_video_{side}_time')
+            if side not in video_files:
+                lbl.setText('(无视频)')
+                lbl_time.setText('--:--')
+                continue
+
+            try:
+                cap = cv2.VideoCapture(video_files[side])
+                if not cap.isOpened():
+                    lbl.setText(f'(无法打开: {os.path.basename(video_files[side])})')
+                    continue
+
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                self.video_caps[side] = cap
+                self.video_fps[side] = fps if fps > 0 else 30.0
+                self.video_frame_count[side] = frame_count
+                self._current_frame_idx[side] = 0
+
+                # 读取 video_timing 获取首帧/末帧 Unix 时间
+                self._load_video_timing(side)
+
+                # 显示第一帧
+                self._seek_and_display(side, 0)
+
+                print(f'[SyncCalibration] 视频已加载 ({side}): '
+                      f'{os.path.basename(video_files[side])}, '
+                      f'fps={self.video_fps[side]:.1f}, '
+                      f'frames={frame_count}')
+
+            except Exception as e:
+                lbl.setText(f'(加载失败: {e})')
+                print(f'[SyncCalibration] 加载视频失败 ({side}): {e}')
+
+    def _load_video_timing(self, side):
+        """从 H5 video_timing 组读取首帧/末帧 Unix 时间"""
+        first_u = 0.0
+        last_u = 0.0
+        dur = 0.0
+
+        try:
+            if 'video_timing' in self.h5_file:
+                vt = self.h5_file['video_timing']
+                sides_raw = vt['sides'][()]
+                firsts = np.atleast_1d(vt['first_frame_unix'][()])
+                lasts = np.atleast_1d(vt['last_frame_unix'][()])
+                durs = np.atleast_1d(vt['duration'][()])
+                sides = [s.decode('utf-8') if isinstance(s, bytes) else str(s)
+                         for s in np.atleast_1d(sides_raw)]
+                for i, s in enumerate(sides):
+                    if s == side and i < len(firsts):
+                        first_u = float(firsts[i])
+                        last_u = float(lasts[i])
+                        dur = float(durs[i])
+                        break
+        except Exception as e:
+            print(f'[SyncCalibration] 读取 video_timing 失败: {e}')
+
+        self.video_first_frame_unix[side] = first_u
+        self.video_last_frame_unix[side] = last_u
+        self.video_duration[side] = dur
+
+    def _seek_and_display(self, side, frame_idx):
+        """seek 到指定帧并显示"""
+        cap = self.video_caps.get(side)
+        if cap is None:
+            return
+
+        total = self.video_frame_count.get(side, 0)
+        if total <= 0:
+            return
+        frame_idx = max(0, min(frame_idx, total - 1))
+
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        ret, frame = cap.read()
+
+        # MJPEG seek 回退
+        if not ret or frame is None:
+            fallback_start = max(0, frame_idx - 50)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, fallback_start)
+            for _ in range(frame_idx - fallback_start + 1):
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+        if ret and frame is not None:
+            self._current_frame_idx[side] = frame_idx
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, ch = frame_rgb.shape
+            qimage = QImage(frame_rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()
+
+            lbl = getattr(self, f'lbl_video_{side}')
+            # 使用最小尺寸作为固定显示区域，避免播放时画面漂移
+            target_w = max(320, lbl.minimumWidth())
+            target_h = max(240, lbl.minimumHeight())
+            from PyQt5.QtCore import QSize
+            scaled = qimage.scaled(QSize(target_w, target_h),
+                                   Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            lbl.setPixmap(QPixmap.fromImage(scaled))
+
+            # 更新时间标签
+            fps = self.video_fps.get(side, 30.0)
+            frame_time = frame_idx / fps if fps > 0 else 0
+            m = int(frame_time // 60)
+            s = int(frame_time % 60)
+            ms = int((frame_time % 1) * 100)
+            first_u = self.video_first_frame_unix.get(side, 0)
+            frame_unix = first_u + frame_time
+
+            lbl_time = getattr(self, f'lbl_video_{side}_time')
+            lbl_time.setText(
+                f'Frame #{frame_idx}/{total - 1} | '
+                f'{m:02d}:{s:02d}.{ms:02d} | '
+                f'Unix: {frame_unix:.3f}'
+            )
+
+    # ─── 播放控制 ───
+
+    def _toggle_play(self):
+        if self._is_playing:
+            self._stop_playback()
+        else:
+            self._start_playback()
+
+    def _start_playback(self):
+        if not self.video_caps:
+            self.lbl_status.setText('⚠️ 没有可播放的视频')
+            return
+        self._is_playing = True
+        self.btn_play.setText('⏸ 暂停')
+        interval = int(1000 / (30 * self._playback_speed))  # 30fps nominal
+        self._playback_timer.start(max(16, interval))
+        self.lbl_status.setText('▶ 播放中...')
+
+    def _stop_playback(self):
+        self._is_playing = False
+        self.btn_play.setText('▶ 播放')
+        self._playback_timer.stop()
+        self.lbl_status.setText('⏸ 已暂停')
+
+    def _reset_playback(self):
+        self._stop_playback()
+        for side in self.video_caps:
+            self._seek_and_display(side, 0)
+        self.lbl_status.setText('↺ 已重置到开头')
+
+    def _on_speed_changed(self, idx):
+        speeds = [0.5, 1.0, 2.0, 4.0]
+        self._playback_speed = speeds[idx]
+        if self._is_playing:
+            interval = int(1000 / (30 * self._playback_speed))
+            self._playback_timer.setInterval(max(16, interval))
+
+    def _step_frame(self, delta):
+        """单帧步进"""
+        self._stop_playback()
+        for side in self.video_caps:
+            new_idx = self._current_frame_idx.get(side, 0) + delta
+            self._seek_and_display(side, new_idx)
+
+    def _on_playback_tick(self):
+        """播放定时器回调 — 逐帧推进"""
+        if not self._is_playing:
+            return
+
+        all_at_end = True
+        for side in list(self.video_caps.keys()):
+            idx = self._current_frame_idx.get(side, 0)
+            total = self.video_frame_count.get(side, 0)
+            if total <= 0:
+                continue
+            next_idx = idx + 1
+            if next_idx < total:
+                all_at_end = False
+                self._seek_and_display(side, next_idx)
+            # 到末尾的保持最后一帧
+
+        if all_at_end:
+            self._stop_playback()
+            self.lbl_status.setText('⏹ 播放完毕')
+
+    # ─── 标定打标 ───
+
+    def _mark_calibration(self):
+        """记录当前帧作为标定点"""
+        if self._sync_prompt_time is None:
+            QMessageBox.warning(self, '无法标定', '未找到 sync_alignment prompt 时间')
+            return
+
+        if not self.video_caps:
+            QMessageBox.warning(self, '无法标定', '没有加载视频')
+            return
+
+        # 记录每侧的当前帧
+        for side in self.video_caps:
+            frame_idx = self._current_frame_idx.get(side, 0)
+            self._marked_frame[side] = frame_idx
+
+            # 计算视频帧的 Unix 时间
+            first_u = self.video_first_frame_unix.get(side, 0)
+            fps = self.video_fps.get(side, 30.0)
+            frame_unix = first_u + frame_idx / fps
+
+            # 计算偏移量: offset = video_frame_unix - prompt_unix
+            # 正值 = 视频超前于 prompt，负值 = 视频滞后于 prompt
+            offset = frame_unix - self._sync_prompt_time
+            self._marked_offset[side] = round(offset, 4)
+
+        self.btn_save.setEnabled(True)
+        self._update_offset_label()
+        self._stop_playback()
+
+        # 在视频帧上画红色标记框
+        for side in self.video_caps:
+            lbl = getattr(self, f'lbl_video_{side}')
+            if lbl.pixmap():
+                pixmap = lbl.pixmap()
+                # 简单方式：重新加载帧并带标记
+                self._seek_and_display(side, self._marked_frame[side])
+
+        self.lbl_status.setText(
+            f'📍 已打标 — 左手帧#{self._marked_frame.get("left", "?")}'
+            f', 右手帧#{self._marked_frame.get("right", "?")}'
+            f' — 点击"保存到 H5"写入')
+
+    def _update_offset_label(self):
+        """更新偏移量显示"""
+        parts = []
+        for side in ('left', 'right'):
+            offset = self._marked_offset.get(side, 0.0)
+            frame = self._marked_frame.get(side)
+            if frame is not None:
+                parts.append(f'{side}: {offset:+.4f}s (帧#{frame})')
+            else:
+                parts.append(f'{side}: --')
+        self.lbl_offset.setText(' | '.join(parts))
+
+    def _save_calibration(self):
+        """将标定偏移量写入 H5 attrs"""
+        if self.h5_file is None:
+            QMessageBox.warning(self, '保存失败', 'H5 文件未打开')
+            return
+
+        # 检查是否有已标定的数据
+        if all(self._marked_frame.get(s) is None for s in ('left', 'right')):
+            QMessageBox.warning(self, '保存失败', '请先点击"标定打标"')
+            return
+
+        # 确认对话框
+        msg = '即将写入以下标定偏移量到 H5:\n\n'
+        for side in ('left', 'right'):
+            offset = self._marked_offset.get(side, 0.0)
+            frame = self._marked_frame.get(side)
+            if frame is not None:
+                msg += f'  {side}: offset={offset:+.4f}s, frame=#{frame}\n'
+        msg += f'\n  prompt_time={self._sync_prompt_time:.3f}\n'
+        msg += '\n确认保存？'
+
+        reply = QMessageBox.question(
+            self, '确认保存标定', msg,
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            # 关闭只读文件 → 以读写模式重新打开
+            # Windows 文件锁需要确保所有引用释放
+            h5_path = self.h5_path
+
+            # 保存需要写入的数据（在释放引用之前）
+            save_offset = dict(self._marked_offset)
+            save_frame = dict(self._marked_frame)
+            save_prompt_idx = (int(self._sync_prompt_idx)
+                               if self._sync_prompt_idx is not None else 0)
+            save_prompt_time = float(self._sync_prompt_time)
+            save_marked_at = datetime.now().isoformat()
+
+            # 显式释放所有 H5 内部引用
+            self.video_first_frame_unix.clear()
+            self.video_last_frame_unix.clear()
+            self.video_duration.clear()
+
+            if self.h5_file:
+                self.h5_file.close()
+                self.h5_file = None
+
+            # 强制 GC 确保 Windows 释放文件锁
+            import gc
+            gc.collect()
+
+            # 短暂睡眠让 Windows 文件系统释放锁
+            _time_module.sleep(0.3)
+
+            with h5py.File(h5_path, 'r+') as f:
+                for side in ('left', 'right'):
+                    offset = save_offset.get(side, 0.0)
+                    frame = save_frame.get(side)
+                    if frame is not None:
+                        f.attrs[f'calib_offset_{side}'] = offset
+                        f.attrs[f'calib_marked_frame_{side}'] = int(frame)
+
+                # 元数据
+                f.attrs['calib_prompt_idx'] = save_prompt_idx
+                f.attrs['calib_prompt_time_unix'] = save_prompt_time
+                f.attrs['calib_marked_at'] = save_marked_at
+                f.attrs['calib_present'] = True
+
+                f.flush()
+
+            # 重新以只读模式打开
+            self.h5_file = h5py.File(h5_path, 'r')
+
+            # 恢复之前清空的数据
+            self._sync_prompt_time = save_prompt_time
+            self._sync_prompt_idx = save_prompt_idx
+            for side in ('left', 'right'):
+                self._load_video_timing(side)
+
+            self.lbl_status.setText(
+                f'✅ 标定已保存到 H5 — '
+                f'数据可视化标签页将自动应用偏移量'
+            )
+            QMessageBox.information(self, '保存成功',
+                                    '标定偏移量已写入 H5 文件。\n\n'
+                                    '请在"数据可视化"标签页重新加载该文件，'
+                                    '即可看到校准后的视频对齐效果。')
+
+        except Exception as e:
+            QMessageBox.critical(self, '保存失败', f'写入 H5 attrs 失败:\n{e}')
+            # 尝试恢复只读打开
+            try:
+                self.h5_file = h5py.File(h5_path, 'r')
+            except Exception:
+                self.h5_file = None
+
+    def _close_videos(self):
+        """关闭所有视频"""
+        for cap in self.video_caps.values():
+            try:
+                cap.release()
+            except Exception:
+                pass
+        self.video_caps.clear()
+        self.video_fps.clear()
+        self.video_frame_count.clear()
+        self.video_first_frame_unix.clear()
+        self.video_last_frame_unix.clear()
+        self.video_duration.clear()
+        self._current_frame_idx = {'left': 0, 'right': 0}
+
+
 class CalibrateTab(QWidget):
     """数据可视化标签页 — H5 信号预览与滤波（嵌入 calibrate_tool）"""
     def __init__(self):
@@ -2293,6 +3018,17 @@ class CalibrateTab(QWidget):
         """加载H5文件并可视化"""
         if HAS_CALIBRATE_TOOL:
             self.calibrate_widget.load_h5_file(file_path)
+
+    def close_file(self):
+        """关闭 H5 文件句柄（避免 Windows 文件锁冲突）"""
+        if HAS_CALIBRATE_TOOL and hasattr(self, 'calibrate_widget'):
+            cw = self.calibrate_widget
+            if cw.h5_file:
+                try:
+                    cw.h5_file.close()
+                except Exception:
+                    pass
+                cw.h5_file = None
 
 
 class SyncTab(QWidget):
@@ -3818,6 +4554,9 @@ class HDF5Tool(QMainWindow):
         self.breakpoint_tab = BreakpointTab()
         self.tabs.addTab(self.breakpoint_tab, "历史断点")
 
+        self.sync_calibration_tab = SyncCalibrationTab()
+        self.tabs.addTab(self.sync_calibration_tab, "🎯 精确对齐标定")
+
         self.calibrate_tab = CalibrateTab()
         self.tabs.addTab(self.calibrate_tab, "📊 数据可视化")
 
@@ -3947,17 +4686,33 @@ class HDF5Tool(QMainWindow):
             self.add_to_sync_btn.setText("添加到同步列表")
 
     def _on_tab_changed(self, index):
-        """标签页切换时自动加载当前选中文件到目标标签页"""
+        """标签页切换时自动加载当前选中文件到目标标签页，
+        同时关闭其他标签页的 H5 文件句柄，避免 Windows 文件锁冲突。
+        """
         calibrate_tab = getattr(self, 'calibrate_tab', None)
-        if calibrate_tab is None:
+        sync_calib_tab = getattr(self, 'sync_calibration_tab', None)
+
+        if calibrate_tab is None and sync_calib_tab is None:
             return
+
         widget = self.tabs.widget(index)
+        items = self.file_list.selectedItems()
+        if not items:
+            return
+        file_path = items[0].data(Qt.UserRole)
+        if not file_path:
+            return
+
         if widget is calibrate_tab and HAS_CALIBRATE_TOOL:
-            items = self.file_list.selectedItems()
-            if items:
-                file_path = items[0].data(Qt.UserRole)
-                if file_path:
-                    calibrate_tab.load_file(file_path)
+            # 关闭标定标签页的文件句柄（避免 Windows 锁冲突）
+            if sync_calib_tab:
+                sync_calib_tab.close_file()
+            calibrate_tab.load_file(file_path)
+        elif widget is sync_calib_tab:
+            # 关闭数据可视化标签页的文件句柄
+            if calibrate_tab and HAS_CALIBRATE_TOOL:
+                calibrate_tab.close_file()
+            sync_calib_tab.load_file(file_path)
 
     def on_file_double_clicked(self, item):
         file_path = item.data(Qt.UserRole)
