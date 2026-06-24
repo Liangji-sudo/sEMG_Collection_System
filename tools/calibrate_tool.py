@@ -190,6 +190,7 @@ class CalibrateWidget(QWidget):
         self.prompt_times = None  # 相对时间（秒）
         self.current_prompt_idx = 0  # 当前prompt索引
         self.emg_start_time = None  # EMG数据起始时间戳
+        self.session_start_unix = None  # 统一会话起始时间（Python时钟，来自H5 attrs start_time）
 
         # 滤波器（对齐供应商离线 Q=50）
         self.emg_filter_2k = EMGFilter(sample_rate=2000, notch_q=FILTER_NOTCH_Q_OFFLINE)
@@ -916,6 +917,7 @@ class CalibrateWidget(QWidget):
         self.emg1_sample_rate = None
         self.emg2_sample_rate = None
         self.emg_start_time = None
+        self.session_start_unix = None
         self.emg1_loaded_name = None
         self.emg2_loaded_name = None
 
@@ -976,6 +978,27 @@ class CalibrateWidget(QWidget):
             self.window_size = WINDOW_2KHZ
         self.spin_window.setValue(self.window_size)
         self._update_window_sec_label()
+
+        # 【统一时钟】读取会话起始时间（Python time.time()，由 realtimeEngine 在采集开始时
+        # 查询 camera_server 获取，与 EMG/视频数据时间戳同源）
+        # 向后兼容：旧 H5 文件无 start_time 属性时，fallback 到 emg_start_time
+        try:
+            st = self.h5_file.attrs.get('start_time')
+            if st is not None:
+                self.session_start_unix = float(st)
+                print(f'[CalibrateTool] 统一会话起始时间 (session_start_unix): {self.session_start_unix:.3f}')
+                if self.emg_start_time is not None:
+                    print(f'[CalibrateTool]   EMG首帧滞后会话起始: {self.emg_start_time - self.session_start_unix:+.3f}s')
+            else:
+                print('[CalibrateTool] H5无start_time属性，使用emg_start_time作为参考（旧文件兼容）')
+        except Exception as e:
+            print(f'[CalibrateTool] 读取session_start_unix失败: {e}（使用emg_start_time兜底）')
+
+    def _ref_time(self):
+        """对齐参考时间：优先统一会话起始，向后兼容 EMG 起始"""
+        if self.session_start_unix is not None:
+            return self.session_start_unix
+        return self.emg_start_time
 
     def _extract_emg_channels(self, data):
         """从结构化数组中提取EMG通道数据"""
@@ -1214,10 +1237,14 @@ class CalibrateWidget(QWidget):
                     # 读取times（绝对时间戳数组）
                     raw_times = prompts_group['times'][:]
 
-                    # 转换为相对时间（相对于EMG起始时间）
-                    if self.emg_start_time is not None:
-                        self.prompt_times = raw_times - self.emg_start_time
-                        print(f'[CalibrateTool] Prompt时间已转换为相对时间 (起始时间: {self.emg_start_time})')
+                    # 转换为相对时间（相对于统一会话起始时间，向后兼容 emg_start_time）
+                    ref_time = self._ref_time()
+                    if ref_time is not None:
+                        self.prompt_times = raw_times - float(ref_time)
+                        if self.session_start_unix is not None:
+                            print(f'[CalibrateTool] Prompt时间已转换为相对时间 (参考: session_start_unix={ref_time:.3f})')
+                        else:
+                            print(f'[CalibrateTool] Prompt时间已转换为相对时间 (参考: emg_start_time={ref_time:.3f})')
                     else:
                         self.prompt_times = raw_times
                         print(f'[CalibrateTool] 警告: 未找到EMG起始时间，使用原始时间戳')
@@ -1381,18 +1408,22 @@ class CalibrateWidget(QWidget):
                 self._video_current_frame[side] = None
                 self.video_enabled = True
 
-                # 诊断：打印视频对齐信息
+                # 诊断：打印视频对齐信息（统一时钟参考 + EMG偏移）
+                ref_time = self._ref_time()
                 nominal_fps = self.video_fps[side]
                 first_u = self.video_first_frame_unix[side]
                 last_u = self.video_last_frame_unix[side]
                 actual_dur = last_u - first_u
                 effective_fps = frame_count / actual_dur if actual_dur > 0 else nominal_fps
+                vid_ref_offset = first_u - float(ref_time) if ref_time else 0
                 emg_offset = first_u - self.emg_start_time if self.emg_start_time else 0
 
                 print(f'[CalibrateTool] 视频已加载 ({side}): {os.path.basename(video_path)}')
                 print(f'  名义FPS={nominal_fps:.1f}, 实际FPS={effective_fps:.2f}, 帧数={frame_count}')
                 print(f'  first_unix={first_u:.3f}, last_unix={last_u:.3f}, dur={actual_dur:.3f}s')
-                print(f'  EMG起始={self.emg_start_time}, 视频-EMG偏移={emg_offset:+.3f}s')
+                if self.session_start_unix is not None:
+                    print(f'  会话起始={self.session_start_unix:.3f}, EMG起始={self.emg_start_time}')
+                print(f'  视频-会话偏移={vid_ref_offset:+.3f}s, 视频-EMG偏移={emg_offset:+.3f}s')
             except Exception as e:
                 print(f'[CalibrateTool] 加载视频失败 ({side}): {e}')
 

@@ -788,6 +788,8 @@ class CameraServer:
             return self._cmd_get_preview_frame(data)  # 复用同一个实现（cache + oneshot回退）
         elif command == 'get_preview_frame':
             return self._cmd_get_preview_frame(data)
+        elif command == 'get_server_time':
+            return self._cmd_get_server_time()
         elif command == 'get_status':
             return self._cmd_get_status()
         elif command == 'start_recording':
@@ -1207,6 +1209,16 @@ class CameraServer:
                 'source': 'oneshot'
             }
         return {'success': False, 'error': error or f'{side}侧无可用预览帧'}
+
+    def _cmd_get_server_time(self):
+        """返回 Python time.time() 作为统一时钟源
+
+        realtimeEngine 在采集开始时调用此命令，获取与数据时间戳
+        （EMG: ble_server.py time.time(), 视频: camera_server.py time.time()）
+        同源的会话起始时间，消除 Node.js Date.now() 与 Python time.time()
+        之间的潜在时钟偏差。
+        """
+        return {'success': True, 'server_time': time.time()}
 
     def _cmd_get_status(self):
         """获取服务器状态"""

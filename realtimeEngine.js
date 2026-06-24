@@ -294,7 +294,24 @@ class RealtimeEngine extends EventEmitter {
         this.currentSessionIndex = sessionIndex ?? 0;
         this.currentSessionNumber = sessionNumber ?? 1;
         this.sessionCount = sessionCount ?? 3;
-        this.collectionDataStartTs = Date.now() / 1000;
+        // 【统一时钟】获取 Python time.time() 作为会话起始时间基准
+        // 与 EMG 数据时间戳（ble_server.py）和视频时间戳（camera_server.py）同源，
+        // 消除 Node.js Date.now() 与 Python time.time() 之间的潜在时钟偏差
+        let sessionStartUnix;
+        try {
+            if (this.camera_connected) {
+                const timeResult = await this.sendCameraCommand('get_server_time', {});
+                sessionStartUnix = timeResult.server_time;
+                console.log('[realtimeEngine] 🕐 Python统一时钟: session_start_unix =', sessionStartUnix);
+            } else {
+                sessionStartUnix = Date.now() / 1000;
+                console.log('[realtimeEngine] ⚠️ Camera未连接，使用JS时钟作为备选');
+            }
+        } catch (e) {
+            console.warn('[realtimeEngine] ⚠️ 获取Python时钟失败，回退到JS时钟:', e.message);
+            sessionStartUnix = Date.now() / 1000;
+        }
+        this.collectionDataStartTs = sessionStartUnix;
         this.collectionDroppedStaleBlePackets = 0;
         this.realtimeDataBuffer = [];
         if (this.realtimeDataTimer) {
@@ -620,7 +637,9 @@ class RealtimeEngine extends EventEmitter {
 
     async onStageStart(stageName, stageIndex, timestamp, needMocap = false) {
         this.currentStageName = stageName;
-        this.stage_start_time = timestamp || Date.now();
+        // 【统一时钟】优先使用 Python 时钟（来自 onCollectionStart 查询 camera_server），
+        // 确保 H5 中 start_time 属性与 EMG/视频数据时间戳同源
+        this.stage_start_time = this.collectionDataStartTs || timestamp || Date.now();
         // 【新增】保存当前stage是否需要动捕数据
         this.currentStageNeedMocap = needMocap;
         console.log(`[realtimeEngine] Stage开始: ${stageName}, needMocap: ${needMocap}`);
