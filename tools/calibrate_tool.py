@@ -219,14 +219,12 @@ class CalibrateWidget(QWidget):
         self.max_plot_points_fast = 800
         self.max_plot_points_normal = 2500
 
-        # 视频回放相关
-        self.is_playing = False           # 是否正在播放
-        self.playback_speed = 1.0         # 播放速度倍率 (0.5x / 1x / 2x)
-        self.playback_stop_frames = {}    # {'left': frame_idx, 'right': frame_idx} 播放停止帧
-        self.playback_auto_on_prompt = True  # 跳转 Prompt 后自动播放
-        self.playback_ticks = 0           # 已播放 tick 计数
-        self.playback_fps = 30.0          # 实际播放帧率
-        self._playback_plot_counter = 0   # 绘图更新计数器（降频）
+        # 视频 2s 预览相关
+        self.is_playing = False           # 是否正在播放 2s 预览
+        self._preview_side = None         # 当前预览的视频侧 ('left' / 'right')
+        self._preview_stop_frame = 0      # 预览停止帧
+        self._preview_fps = 30.0          # 预览帧率
+        self._preview_current_frame = 0   # 当前预览帧号
         self.playback_timer = QTimer()
         self.playback_timer.timeout.connect(self._on_playback_tick)
 
@@ -329,28 +327,6 @@ class CalibrateWidget(QWidget):
         self.btn_next_prompt.setEnabled(False)
         control_layout.addWidget(self.btn_next_prompt)
 
-        # 视频回放控制
-        control_layout.addWidget(QLabel('  |  '))
-        self.btn_play = QPushButton('▶ 播放')
-        self.btn_play.setToolTip('播放当前窗口的视频片段 (再次点击暂停)')
-        self.btn_play.clicked.connect(self.on_play_clicked)
-        self.btn_play.setEnabled(False)
-        control_layout.addWidget(self.btn_play)
-
-        control_layout.addWidget(QLabel(' 速度:'))
-        self.combo_speed = QComboBox()
-        self.combo_speed.addItems(['0.5x', '1x', '2x'])
-        self.combo_speed.setCurrentIndex(1)
-        self.combo_speed.currentIndexChanged.connect(self.on_speed_changed)
-        self.combo_speed.setToolTip('播放速度倍率')
-        control_layout.addWidget(self.combo_speed)
-
-        self.chk_auto_play = QCheckBox('跳转后播放')
-        self.chk_auto_play.setChecked(self.playback_auto_on_prompt)
-        self.chk_auto_play.stateChanged.connect(self.on_auto_play_changed)
-        self.chk_auto_play.setToolTip('跳转到 Prompt 后自动播放视频片段')
-        control_layout.addWidget(self.chk_auto_play)
-
         control_scroll = QScrollArea()
         control_scroll.setWidget(control_widget)
         control_scroll.setWidgetResizable(False)
@@ -388,6 +364,19 @@ class CalibrateWidget(QWidget):
         left_video_group = QGroupBox('📹 左手相机')
         left_video_inner = QVBoxLayout(left_video_group)
         left_video_inner.setContentsMargins(2, 2, 2, 2)
+        left_video_inner.setSpacing(2)
+        # 按钮栏（右上角 2s 预览按钮）
+        left_btn_bar = QHBoxLayout()
+        left_btn_bar.addStretch()
+        self.btn_preview_left = QPushButton('▶ 2s预览')
+        self.btn_preview_left.setFixedWidth(75)
+        self.btn_preview_left.setFixedHeight(22)
+        self.btn_preview_left.setToolTip('预览当前帧向后 2 秒视频')
+        self.btn_preview_left.clicked.connect(lambda: self._start_preview('left'))
+        self.btn_preview_left.setEnabled(False)
+        self.btn_preview_left.setStyleSheet('QPushButton { font-size: 10px; padding: 1px 6px; }')
+        left_btn_bar.addWidget(self.btn_preview_left)
+        left_video_inner.addLayout(left_btn_bar)
         self.lbl_video_left = QLabel()
         self.lbl_video_left.setAlignment(Qt.AlignCenter)
         self.lbl_video_left.setMinimumHeight(self.video_label_height)
@@ -406,6 +395,19 @@ class CalibrateWidget(QWidget):
         right_video_group = QGroupBox('📹 右手相机')
         right_video_inner = QVBoxLayout(right_video_group)
         right_video_inner.setContentsMargins(2, 2, 2, 2)
+        right_video_inner.setSpacing(2)
+        # 按钮栏（右上角 2s 预览按钮）
+        right_btn_bar = QHBoxLayout()
+        right_btn_bar.addStretch()
+        self.btn_preview_right = QPushButton('▶ 2s预览')
+        self.btn_preview_right.setFixedWidth(75)
+        self.btn_preview_right.setFixedHeight(22)
+        self.btn_preview_right.setToolTip('预览当前帧向后 2 秒视频')
+        self.btn_preview_right.clicked.connect(lambda: self._start_preview('right'))
+        self.btn_preview_right.setEnabled(False)
+        self.btn_preview_right.setStyleSheet('QPushButton { font-size: 10px; padding: 1px 6px; }')
+        right_btn_bar.addWidget(self.btn_preview_right)
+        right_video_inner.addLayout(right_btn_bar)
         self.lbl_video_right = QLabel()
         self.lbl_video_right.setAlignment(Qt.AlignCenter)
         self.lbl_video_right.setMinimumHeight(self.video_label_height)
@@ -653,9 +655,6 @@ class CalibrateWidget(QWidget):
             self.current_pos = 0
             self.slider.setValue(0)
             self.update_plots()
-
-            # 有数据即可启用播放按钮
-            self.btn_play.setEnabled(True)
 
             print(f'[CalibrateTool] 已加载文件: {file_path}')
 
@@ -1291,6 +1290,9 @@ class CalibrateWidget(QWidget):
                 if side in self.video_caps:
                     lbl = getattr(self, f'lbl_video_{side}')
                     lbl.setText('')
+                    btn = getattr(self, f'btn_preview_{side}', None)
+                    if btn:
+                        btn.setEnabled(True)
 
     def _close_videos(self):
         """关闭所有视频文件"""
@@ -1309,6 +1311,11 @@ class CalibrateWidget(QWidget):
         self._video_current_frame.clear()
         self._video_current_idx.clear()
         self.video_enabled = False
+        # 禁用预览按钮
+        for side in ('left', 'right'):
+            btn = getattr(self, f'btn_preview_{side}', None)
+            if btn:
+                btn.setEnabled(False)
 
     def _seek_video_frame(self, side, target_unix):
         """定位到指定 Unix 时间戳对应的视频帧，返回 (frame_idx, qimage)。
@@ -1932,11 +1939,6 @@ class CalibrateWidget(QWidget):
         # 更新prompt信息显示
         self._update_prompt_info()
 
-        # 自动播放（如果启用且有视频）
-        if self.playback_auto_on_prompt and self.video_enabled:
-            # 使用 QTimer.singleShot 确保 UI 先刷新再开始播放
-            QTimer.singleShot(100, self._start_playback)
-
     def _update_prompt_info(self):
         """更新Prompt信息显示"""
         if self.prompt_times is None or len(self.prompt_times) == 0:
@@ -1957,153 +1959,140 @@ class CalibrateWidget(QWidget):
         self.btn_prev_prompt.setEnabled(self.current_prompt_idx > 0)
         self.btn_next_prompt.setEnabled(self.current_prompt_idx < total - 1)
 
-    # ───────────────── 视频回放相关方法 ─────────────────
+    # ───────────────── 视频 2s 预览 ─────────────────
 
-    def on_play_clicked(self):
-        """播放/暂停按钮"""
+    def _start_preview(self, side):
+        """开始 2s 预览：仅播放指定侧视频当前帧向后 2 秒"""
         if self.is_playing:
             self._stop_playback()
-        else:
-            self._start_playback()
-
-    def _start_playback(self):
-        """开始播放：从当前视频帧开始，顺序播放 ~3 秒"""
-        if self.h5_file is None or not self.video_enabled:
+            return
+        cap = self.video_caps.get(side)
+        if cap is None or self.h5_file is None:
             return
 
-        # 用第一路可用视频的 FPS 作为播放帧率
-        fps = 30.0
-        for side in ('left', 'right'):
-            if side in self.video_fps:
-                fps = self.video_fps[side]
-                break
-        self.playback_fps = fps
+        # 先 seek 到当前显示帧，确保 cap 位置正确
+        current_idx = self._video_current_idx.get(side, -1)
+        if current_idx < 0:
+            return
+        cap.set(cv2.CAP_PROP_POS_FRAMES, current_idx)
+        # 丢弃可能不准的一帧，重新读取
+        cap.read()
 
-        # 播放时长：3 秒 × 速度倍率倒数（慢放更长，快放更短）
-        play_duration_frames = int(fps * 3.0 / self.playback_speed)
+        fps = self.video_fps.get(side, 30.0)
+        self._preview_fps = fps
+        self._preview_side = side
+        self._preview_current_frame = current_idx
+        # 向后 2 秒
+        self._preview_stop_frame = current_idx + int(fps * 2.0)
 
-        # 记录每路视频的停止帧
-        self.playback_stop_frames = {}
-        for side in ('left', 'right'):
-            if side in self.video_caps:
-                idx = self._video_current_idx.get(side, 0)
-                side_fps = self.video_fps.get(side, fps)
-                side_duration = int(side_fps * 3.0 / self.playback_speed)
-                self.playback_stop_frames[side] = max(0, idx + side_duration)
-
-        self.playback_ticks = 0
-        self._playback_plot_counter = 0
         self.is_playing = True
-        self.btn_play.setText('⏸ 暂停')
-        self.btn_play.setEnabled(True)
+        btn = getattr(self, f'btn_preview_{side}')
+        if btn:
+            btn.setText('⏹ 停止')
+            btn.setStyleSheet('QPushButton { font-size: 10px; padding: 1px 6px; background-color: #c0392b; color: white; }')
 
-        # 定时器间隔 = 1000ms / fps（按视频真实帧率播放）
-        interval = max(16, int(1000.0 / fps / self.playback_speed))
+        interval = max(16, int(1000.0 / fps))
         self.playback_timer.setInterval(interval)
         self.playback_timer.start()
 
-        print(f'[CalibrateTool] 开始播放: fps={fps:.1f}, speed={self.playback_speed}x, '
-              f'interval={interval}ms, duration={play_duration_frames}帧 ({3.0/self.playback_speed:.1f}s)')
+        print(f'[CalibrateTool] 2s预览 ({side}): frame {current_idx} → {self._preview_stop_frame}, '
+              f'fps={fps:.1f}, interval={interval}ms')
 
     def _stop_playback(self):
-        """停止播放"""
+        """停止预览，恢复按钮状态，全量刷新图表"""
         self.is_playing = False
         self.playback_timer.stop()
-        self.btn_play.setText('▶ 播放')
-        # 停止时刷新图表（正常精度）
+
+        # 恢复按钮样式
+        for s in ('left', 'right'):
+            btn = getattr(self, f'btn_preview_{s}', None)
+            if btn:
+                btn.setText('▶ 2s预览')
+                btn.setStyleSheet('QPushButton { font-size: 10px; padding: 1px 6px; }')
+
         self._last_video_update = 0
         self._do_update_plots()
-        print(f'[CalibrateTool] 播放停止: pos={self.current_pos}')
+        print(f'[CalibrateTool] 预览停止: pos={self.current_pos}')
 
     def _on_playback_tick(self):
-        """播放定时器触发：从视频读取下一帧（顺序读取，不 seek）"""
+        """预览定时器：逐帧顺序读取指定侧视频"""
         if not self.is_playing or self.h5_file is None:
             self._stop_playback()
             return
 
-        self.playback_ticks += 1
-        self._playback_plot_counter += 1
-        any_frame_read = False
-        target_unix = None
-
-        for side in ('left', 'right'):
-            cap = self.video_caps.get(side)
-            if cap is None:
-                continue
-
-            current_frame_idx = self._video_current_idx.get(side, -1)
-            stop_frame = self.playback_stop_frames.get(side, 0)
-            if current_frame_idx >= stop_frame:
-                continue
-
-            # 顺序读取下一帧（不 seek，视频按自然帧率推进）
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                continue
-
-            any_frame_read = True
-            new_idx = current_frame_idx + 1
-            self._video_current_idx[side] = new_idx
-
-            # BGR→RGB→QPixmap
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            h, w, ch = frame_rgb.shape
-            bytes_per_line = ch * w
-            qimage = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
-            self._video_current_frame[side] = qimage
-
-            # 从帧号反推 Unix 时间戳（用于同步 EMG 位置）
-            fps = self.video_fps.get(side, 30.0)
-            first_unix = self.video_first_frame_unix.get(side, 0)
-            target_unix = first_unix + new_idx / fps
-
-            # 更新 QLabel 显示
-            lbl = getattr(self, f'lbl_video_{side}')
-            lbl_time = getattr(self, f'lbl_video_{side}_time')
-            target_h = self.video_label_height
-            target_w = int(qimage.width() * target_h / qimage.height())
-            scaled = qimage.scaled(target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            lbl.setPixmap(QPixmap.fromImage(scaled))
-            # 更新时间标签
-            frame_time_sec = new_idx / fps if fps > 0 else 0
-            minutes = int(frame_time_sec // 60)
-            seconds = int(frame_time_sec % 60)
-            lbl_time.setText(f'Frame #{new_idx} | {minutes:02d}:{seconds:02d}')
-
-        if not any_frame_read:
+        side = self._preview_side
+        if side is None:
             self._stop_playback()
             return
 
-        # 播放期间只更新滑块位置，不重绘 EMG/IMU（避免 ax.clear() 导致图表错乱）
-        # 播放停止后 _stop_playback 会做一次完整重绘
-        if target_unix is not None and self.emg_start_time is not None:
-            emg_time = target_unix - float(self.emg_start_time)
-            sample_rate = self._active_emg_sample_rate()
-            new_pos = int(emg_time * sample_rate)
-            max_pos = self.slider.maximum()
-            self.current_pos = max(0, min(new_pos, max_pos))
-            self.slider.blockSignals(True)
-            self.slider.setValue(self.current_pos)
-            self.slider.blockSignals(False)
-            self.lbl_pos.setText(f'位置: {self.current_pos}')
+        cap = self.video_caps.get(side)
+        if cap is None:
+            self._stop_playback()
+            return
 
-    def on_speed_changed(self, idx):
-        """播放速度改变"""
-        speeds = [0.5, 1.0, 2.0]
-        if 0 <= idx < len(speeds):
-            self.playback_speed = speeds[idx]
-            # 如果正在播放，更新定时器间隔
-            if self.is_playing:
-                fps = self.playback_fps
-                interval = max(16, int(1000.0 / fps / self.playback_speed))
-                self.playback_timer.setInterval(interval)
-                print(f'[CalibrateTool] 播放速度切换: {self.playback_speed}x, interval={interval}ms')
+        if self._preview_current_frame >= self._preview_stop_frame:
+            self._stop_playback()
+            return
 
-    def on_auto_play_changed(self, state):
-        """自动播放选项改变"""
-        self.playback_auto_on_prompt = (state == Qt.Checked)
+        ret, frame = cap.read()
+        if not ret or frame is None:
+            self._stop_playback()
+            return
 
-    # ─────────── 回放方法结束 ───────────
+        self._preview_current_frame += 1
+        new_idx = self._preview_current_frame
+        self._video_current_idx[side] = new_idx
+
+        # BGR→RGB→QPixmap
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w, ch = frame_rgb.shape
+        qimage = QImage(frame_rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()
+        self._video_current_frame[side] = qimage
+
+        # 更新该侧视频 QLabel
+        lbl = getattr(self, f'lbl_video_{side}')
+        lbl_time = getattr(self, f'lbl_video_{side}_time')
+        target_h = self.video_label_height
+        target_w = int(qimage.width() * target_h / qimage.height())
+        scaled = qimage.scaled(target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        lbl.setPixmap(QPixmap.fromImage(scaled))
+        fps = self.video_fps.get(side, 30.0)
+        frame_time_sec = new_idx / fps if fps > 0 else 0
+        minutes = int(frame_time_sec // 60)
+        seconds = int(frame_time_sec % 60)
+        lbl_time.setText(f'Frame #{new_idx} | {minutes:02d}:{seconds:02d}')
+
+        # 同步另一侧视频（seek 到对应时间点）
+        first_unix = self.video_first_frame_unix.get(side, 0)
+        target_unix = first_unix + new_idx / fps
+        for other_side in ('left', 'right'):
+            if other_side == side:
+                continue
+            other_cap = self.video_caps.get(other_side)
+            if other_cap is None:
+                continue
+            other_first = self.video_first_frame_unix.get(other_side, 0)
+            other_fps_val = self.video_fps.get(other_side, 30.0)
+            other_frame = int((target_unix - other_first) * other_fps_val)
+            other_frame = max(0, min(other_frame, self.video_frame_count.get(other_side, 0) - 1))
+            other_cap.set(cv2.CAP_PROP_POS_FRAMES, other_frame)
+            ret2, frame2 = other_cap.read()
+            if ret2 and frame2 is not None:
+                frame2_rgb = cv2.cvtColor(frame2, cv2.COLOR_BGR2RGB)
+                h2, w2, ch2 = frame2_rgb.shape
+                q2 = QImage(frame2_rgb.data, w2, h2, ch2 * w2, QImage.Format_RGB888).copy()
+                self._video_current_frame[other_side] = q2
+                self._video_current_idx[other_side] = other_frame
+                lbl2 = getattr(self, f'lbl_video_{other_side}')
+                target_w2 = int(q2.width() * target_h / q2.height())
+                lbl2.setPixmap(QPixmap.fromImage(q2.scaled(target_w2, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
+                other_frame_time = other_frame / other_fps_val if other_fps_val > 0 else 0
+                om = int(other_frame_time // 60)
+                os = int(other_frame_time % 60)
+                lbl_time2 = getattr(self, f'lbl_video_{other_side}_time')
+                lbl_time2.setText(f'Frame #{other_frame} | {om:02d}:{os:02d}')
+
+    # ─────────── 2s 预览结束 ───────────
 
     def closeEvent(self, event):
         """关闭窗口时清理资源"""
