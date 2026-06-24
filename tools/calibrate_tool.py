@@ -380,7 +380,6 @@ class CalibrateWidget(QWidget):
         self.lbl_video_left = QLabel()
         self.lbl_video_left.setAlignment(Qt.AlignCenter)
         self.lbl_video_left.setMinimumHeight(self.video_label_height)
-        self.lbl_video_left.setScaledContents(True)  # 自动缩放填充，消除黑边
         self.lbl_video_left.setStyleSheet(
             'background-color: #1a1a2e; border: 1px solid #333; color: #666; font-size: 11px;'
         )
@@ -412,7 +411,6 @@ class CalibrateWidget(QWidget):
         self.lbl_video_right = QLabel()
         self.lbl_video_right.setAlignment(Qt.AlignCenter)
         self.lbl_video_right.setMinimumHeight(self.video_label_height)
-        self.lbl_video_right.setScaledContents(True)  # 自动缩放填充，消除黑边
         self.lbl_video_right.setStyleSheet(
             'background-color: #1a1a2e; border: 1px solid #333; color: #666; font-size: 11px;'
         )
@@ -1410,8 +1408,14 @@ class CalibrateWidget(QWidget):
             frame_idx, qimage = self._seek_video_frame(side, target_unix)
 
             if qimage is not None and frame_idx is not None:
-                # setScaledContents(True) 让 QLabel 自动缩放填充，无需手动 scale
-                lbl.setPixmap(QPixmap.fromImage(qimage))
+                # KeepAspectRatioByExpanding：填满标签、保持比例、多余裁切（无黑边无拉伸）
+                lbl_size = lbl.size()
+                if lbl_size.width() > 50 and lbl_size.height() > 50:
+                    scaled = qimage.scaled(lbl_size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                else:
+                    scaled = qimage.scaled(qimage.width()//2, qimage.height()//2,
+                                           Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                lbl.setPixmap(QPixmap.fromImage(scaled))
 
                 # 更新时间标签
                 fps = self.video_fps.get(side, 30)
@@ -2038,10 +2042,12 @@ class CalibrateWidget(QWidget):
         qimage = QImage(frame_rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()
         self._video_current_frame[side] = qimage
 
-        # 更新该侧视频 QLabel（setScaledContents 自动缩放填充）
+        # 更新该侧视频 QLabel（KeepAspectRatioByExpanding 填满无黑边无拉伸）
         lbl = getattr(self, f'lbl_video_{side}')
         lbl_time = getattr(self, f'lbl_video_{side}_time')
-        lbl.setPixmap(QPixmap.fromImage(qimage))
+        lbl_size = lbl.size()
+        scaled = qimage.scaled(lbl_size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        lbl.setPixmap(QPixmap.fromImage(scaled))
         fps = self.video_fps.get(side, 30.0)
         frame_time_sec = new_idx / fps if fps > 0 else 0
         minutes = int(frame_time_sec // 60)
@@ -2070,7 +2076,9 @@ class CalibrateWidget(QWidget):
                 self._video_current_frame[other_side] = q2
                 self._video_current_idx[other_side] = other_frame
                 lbl2 = getattr(self, f'lbl_video_{other_side}')
-                lbl2.setPixmap(QPixmap.fromImage(q2))
+                lbl2_size = lbl2.size()
+                scaled2 = q2.scaled(lbl2_size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                lbl2.setPixmap(QPixmap.fromImage(scaled2))
                 other_frame_time = other_frame / other_fps_val if other_fps_val > 0 else 0
                 om = int(other_frame_time // 60)
                 os = int(other_frame_time % 60)
