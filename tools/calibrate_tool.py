@@ -228,6 +228,12 @@ class CalibrateWidget(QWidget):
         self.playback_timer = QTimer()
         self.playback_timer.timeout.connect(self._on_playback_tick)
 
+        # 完整播放控制
+        self.is_full_playing = False       # 是否正在完整播放
+        self.full_playback_timer = QTimer()
+        self.full_playback_timer.timeout.connect(self._on_full_playback_tick)
+        self._full_playback_speed = 1.0    # 播放速度倍率 (1.0 = 实时)
+
         self.init_ui()
 
     def _active_emg_sample_rate(self):
@@ -366,6 +372,55 @@ class CalibrateWidget(QWidget):
         prompt_layout.addLayout(btn_row)
 
         control_layout.addWidget(prompt_widget)
+
+        # === 完整播放控制按钮 ===
+        control_layout.addWidget(QLabel('  |  '))
+        playback_widget = QWidget()
+        playback_layout = QHBoxLayout(playback_widget)
+        playback_layout.setContentsMargins(0, 0, 0, 0)
+        playback_layout.setSpacing(4)
+
+        playback_btn_style = (
+            'QPushButton {'
+            '  font-size: 18px; padding: 4px 6px;'
+            '  border-radius: 6px; border: none;'
+            '  color: #fff;'
+            '}'
+        )
+
+        self.btn_reset = QPushButton('⏮')
+        self.btn_reset.setFixedWidth(36)
+        self.btn_reset.setToolTip('回到数据起始位置')
+        self.btn_reset.clicked.connect(self.reset_progress)
+        self.btn_reset.setStyleSheet(
+            playback_btn_style +
+            'QPushButton { background-color: #636e72; }'
+        )
+        playback_layout.addWidget(self.btn_reset)
+
+        self.btn_play = QPushButton('▶')
+        self.btn_play.setFixedWidth(36)
+        self.btn_play.setToolTip('从头完整播放 EMG/IMU 信号与视频')
+        self.btn_play.clicked.connect(self.toggle_full_playback)
+        self.btn_play.setStyleSheet(
+            playback_btn_style +
+            'QPushButton { background-color: #27ae60; }'
+        )
+        playback_layout.addWidget(self.btn_play)
+
+        self.btn_pause = QPushButton('⏸')
+        self.btn_pause.setFixedWidth(36)
+        self.btn_pause.setToolTip('暂停播放')
+        self.btn_pause.clicked.connect(self.pause_playback)
+        self.btn_pause.setEnabled(False)
+        self.btn_pause.setStyleSheet(
+            playback_btn_style +
+            'QPushButton:enabled { background-color: #e67e22; }'
+            'QPushButton:disabled { background-color: #bdc3c7; color: #95a5a6; }'
+        )
+        playback_layout.addWidget(self.btn_pause)
+
+        control_layout.addWidget(playback_widget)
 
         control_scroll = QScrollArea()
         control_scroll.setWidget(control_widget)
@@ -672,6 +727,8 @@ class CalibrateWidget(QWidget):
             # 停止正在进行的播放
             if self.is_playing:
                 self._stop_playback()
+            if self.is_full_playing:
+                self._stop_full_playback()
 
             if self.h5_file:
                 self.h5_file.close()
@@ -1324,10 +1381,18 @@ class CalibrateWidget(QWidget):
                 self._video_current_frame[side] = None
                 self.video_enabled = True
 
-                print(f'[CalibrateTool] 视频已加载 ({side}): {os.path.basename(video_path)}, '
-                      f'fps={self.video_fps[side]:.1f}, frames={frame_count}, '
-                      f'dur={self.video_duration[side]:.1f}s, '
-                      f'first_frame_unix={self.video_first_frame_unix[side]:.3f}')
+                # 诊断：打印视频对齐信息
+                nominal_fps = self.video_fps[side]
+                first_u = self.video_first_frame_unix[side]
+                last_u = self.video_last_frame_unix[side]
+                actual_dur = last_u - first_u
+                effective_fps = frame_count / actual_dur if actual_dur > 0 else nominal_fps
+                emg_offset = first_u - self.emg_start_time if self.emg_start_time else 0
+
+                print(f'[CalibrateTool] 视频已加载 ({side}): {os.path.basename(video_path)}')
+                print(f'  名义FPS={nominal_fps:.1f}, 实际FPS={effective_fps:.2f}, 帧数={frame_count}')
+                print(f'  first_unix={first_u:.3f}, last_unix={last_u:.3f}, dur={actual_dur:.3f}s')
+                print(f'  EMG起始={self.emg_start_time}, 视频-EMG偏移={emg_offset:+.3f}s')
             except Exception as e:
                 print(f'[CalibrateTool] 加载视频失败 ({side}): {e}')
 
@@ -1370,6 +1435,9 @@ class CalibrateWidget(QWidget):
     def _seek_video_frame(self, side, target_unix):
         """定位到指定 Unix 时间戳对应的视频帧，返回 (frame_idx, qimage)。
 
+        使用视频文件自身的 timing 数据 (first/last_unix + frame_count)
+        计算实际帧率，避免名义帧率偏差导致的累积漂移。
+
         Args:
             side: 'left' 或 'right'
             target_unix: 目标 Unix 时间戳
@@ -1382,15 +1450,22 @@ class CalibrateWidget(QWidget):
             return None, None
 
         first_unix = self.video_first_frame_unix.get(side, 0)
-        fps = self.video_fps.get(side, 30)
+        last_unix = self.video_last_frame_unix.get(side, 0)
         total_frames = self.video_frame_count.get(side, 0)
 
-        if total_frames <= 0 or fps <= 0:
+        if total_frames <= 0:
             return None, None
 
-        # 从 Unix 时间戳映射到帧偏移
+        # 使用视频自身 timing 计算实际帧率（而非 OpenCV 名义值）
+        video_duration = last_unix - first_unix
+        if video_duration > 0:
+            effective_fps = total_frames / video_duration
+        else:
+            effective_fps = self.video_fps.get(side, 30)
+
+        # 从 Unix 时间戳映射到帧偏移（使用实际帧率消除漂移）
         time_offset = target_unix - first_unix
-        frame_idx = int(round(time_offset * fps))
+        frame_idx = int(round(time_offset * effective_fps))
         frame_idx = max(0, min(frame_idx, total_frames - 1))
 
         # 缓存检查：同一帧不需要重新 seek
@@ -1561,6 +1636,8 @@ class CalibrateWidget(QWidget):
         # 用户手动拖动时停止自动播放
         if self.is_playing:
             self._stop_playback()
+        if self.is_full_playing:
+            self._stop_full_playback()
         self.is_dragging = True
 
     def on_slider_released(self):
@@ -1686,6 +1763,10 @@ class CalibrateWidget(QWidget):
             total_height = 16 * offset
             ax.set_ylim(-offset * 0.3, total_height - offset * 0.7)
             ax.set_autoscale_on(False)  # 禁止自动缩放，防止工具栏或 resize 改变视图
+            # 播放红线：窗口中央 = 当前时间
+            if self.is_full_playing:
+                window_center = (time_start + time_end) / 2.0
+                ax.axvline(x=window_center, color='#e74c3c', linewidth=2.0, alpha=0.9, zorder=10)
             title_suffix = '滤波后' if use_filter else '原始'
             ax.set_title(f'{label} — {title_suffix} (Offset={offset}uV)', fontsize=10, pad=5)
             self.draw_prompt_markers(ax, time_start, time_end, show_text=True)
@@ -1768,6 +1849,11 @@ class CalibrateWidget(QWidget):
                 ax2.set_xticklabels([])
                 ax2.spines['bottom'].set_visible(False)
                 ax2.tick_params(axis='x', length=0)
+            # 播放红线（仅第一个通道显示，避免重复）
+            if self.is_full_playing and i == 0:
+                window_center = (time_start + time_end) / 2.0
+                ax1.axvline(x=window_center, color='#e74c3c', linewidth=2.0, alpha=0.9, zorder=10)
+                ax2.axvline(x=window_center, color='#e74c3c', linewidth=2.0, alpha=0.9, zorder=10)
             self.draw_prompt_markers(ax1, time_start, time_end, show_text=(i == 0))
             self.draw_prompt_markers(ax2, time_start, time_end, show_text=(i == 0))
 
@@ -1791,74 +1877,83 @@ class CalibrateWidget(QWidget):
         time_start = start / emg_sample_rate
         time_end = time_start + self.window_size / emg_sample_rate
         max_plot_points = self.max_plot_points_fast if fast_mode else self.max_plot_points_normal
+        imu_sample_rate = 100  # IMU 默认采样率，用于 fallback 时的索引映射
 
         axis_colors = ['#d62728', '#2ca02c', '#1f77b4']  # XYZ: 红绿蓝
         axis_names = ['X', 'Y', 'Z']
         # IMU 线型: solid / dashed / dotted
         imu_styles = ['-', '--', ':']
 
-        def _get_imu_window(data_attr):
-            """根据 time 字段获取当前窗口内的 IMU 数据切片。
-            优先用 IMU time 字段做 mask；无 time 字段时回退到 index 映射。"""
+        # 诊断: 打印当前已加载 IMU 数据的概要
+        _diag_printed = getattr(self, '_imu_diag_printed', False)
+        if not _diag_printed:
+            self._imu_diag_printed = True
             labels = ['a', 'b', 'c']
             for dev_id in [1, 2]:
-                for label in labels:
-                    time_attr = f'imu{dev_id}{label}_time'
-                    imu_time = getattr(self, time_attr, None)
-                    if imu_time is not None and len(imu_time) > 0:
-                        # 使用绝对时间字段
-                        mask = (imu_time >= time_start) & (imu_time <= time_end)
-                        indices = np.where(mask)[0]
-                        if len(indices) > 0:
-                            return indices, imu_time[indices]
-            # fallback: index 映射（无 time 字段时）
-            imu_sample_rate = 100
+                for suffix, data_type in [('data', 'Acc'), ('gyr_data', 'Gyr')]:
+                    for label in labels:
+                        attr = f'imu{dev_id}{label}_{suffix}'
+                        d = getattr(self, attr, None)
+                        time_attr = f'imu{dev_id}{label}_time'
+                        t = getattr(self, time_attr, None)
+                        if d is not None and len(d) > 0:
+                            print(f'[CalibrateTool] IMU诊断 {attr}: shape={d.shape}, '
+                                  f'range=[{np.min(d):.4f}, {np.max(d):.4f}], '
+                                  f'time_len={len(t) if t is not None else "N/A"}, '
+                                  f'time_range=[{t[0]:.2f}, {t[-1]:.2f}]' if t is not None and len(t) > 0 else 'time=N/A')
+
+        def _get_sensor_window(dev_id, label):
+            """根据单个 IMU 传感器的时间字段获取当前窗口内的数据切片索引。
+            每个传感器独立计算，避免不同传感器时间/长度差异导致的数据错位。"""
+            time_attr = f'imu{dev_id}{label}_time'
+            imu_time = getattr(self, time_attr, None)
+            if imu_time is not None and len(imu_time) > 0:
+                mask = (imu_time >= time_start) & (imu_time <= time_end)
+                indices = np.where(mask)[0]
+                if len(indices) > 0:
+                    return indices, imu_time[indices]
+                # 时间字段存在但窗口内无数据 —— 可能是时间未对齐，用 fallback
+            # fallback: 无 time 字段或时间不匹配时，用采样率比例映射
             imu_start = int(start * imu_sample_rate / emg_sample_rate)
             imu_end = int((start + self.window_size) * imu_sample_rate / emg_sample_rate)
+            imu_start = max(0, imu_start)
+            imu_end = max(imu_start + 1, imu_end)
             indices = np.arange(imu_start, imu_end)
             return indices, None
 
-        imu_indices, imu_times = _get_imu_window('data')
-        if len(imu_indices) == 0:
-            self.canvas_imu_acc.draw_idle()
-            self.canvas_imu_gyr.draw_idle()
-            return
-        imu_sample_rate = 100
-        # 诊断日志: 当前显示窗口信息
-        imu_t0 = imu_times[0] if imu_times is not None else imu_indices[0] / imu_sample_rate
-        imu_t1 = imu_times[-1] if imu_times is not None else imu_indices[-1] / imu_sample_rate
-        print(f'[CalibrateTool] IMU window: EMG pos={start} ({time_start:.1f}s-{time_end:.1f}s), '
-              f'IMU idx=[{imu_indices[0]}:{imu_indices[-1]}] ({imu_t0:.1f}s-{imu_t1:.1f}s), '
-              f'{len(imu_indices)} frames')
-
         def _draw_imu_device(ax, dev_id, imu_count, data_attr, offset):
-            """在 ax 上画 dev_id 的 acc 或 gyr 数据 (供应商堆叠，自动 Y 轴范围)"""
+            """在 ax 上画 dev_id 的 acc 或 gyr 数据 (供应商堆叠，自动 Y 轴范围)
+            每个 IMU 传感器独立计算时间窗口，避免跨传感器索引错位。"""
             if ax is None:
                 return
             labels = ['a', 'b', 'c']
             all_y_min = []
             all_y_max = []
+            any_drawn = False
             for imu_idx in range(imu_count):
                 label = labels[imu_idx]
                 attr = f'imu{dev_id}{label}_{data_attr}'
                 data = getattr(self, attr, None)
                 if data is None or len(data) == 0:
                     continue
-                # 过滤越界索引（不同 IMU 传感器数据长度可能不同）
-                valid_mask = imu_indices < len(data)
-                imu_idx_subset = imu_indices[valid_mask]
+                # 每个传感器独立获取时间窗口内的索引
+                sensor_indices, sensor_times = _get_sensor_window(dev_id, label)
+                if len(sensor_indices) == 0:
+                    continue
+                # 过滤越界索引
+                valid_mask = sensor_indices < len(data)
+                imu_idx_subset = sensor_indices[valid_mask]
                 if len(imu_idx_subset) == 0:
                     continue
-                # 同时裁剪 imu_times 保持一致
-                imu_t_subset = imu_times[valid_mask] if imu_times is not None else None
+                imu_t_subset = sensor_times[valid_mask] if sensor_times is not None else None
                 chunk = data[imu_idx_subset]
                 if len(chunk) == 0:
                     continue
                 chunk, step = self._downsample_for_plot(chunk, max_plot_points)
                 # X 轴：优先用 IMU time，否则线性插值
                 if imu_t_subset is not None and len(imu_t_subset) > 0:
-                    t = imu_t_subset[::step] if step > 1 else imu_t_subset
-                    x = t[:len(chunk)]
+                    t_sub = imu_t_subset[::step] if step > 1 else imu_t_subset
+                    x = t_sub[:len(chunk)]
                 else:
                     x = np.linspace(time_start, time_start + len(chunk) * step / imu_sample_rate, len(chunk))
                 num_axis = min(3, chunk.shape[1] if chunk.ndim > 1 else 1)
@@ -1869,6 +1964,11 @@ class CalibrateWidget(QWidget):
                             linestyle=imu_styles[imu_idx % 3], linewidth=0.8)
                     all_y_min.append(float(np.min(y)))
                     all_y_max.append(float(np.max(y)))
+                any_drawn = True
+
+            if not any_drawn:
+                # 无数据可画时，仍设好 x 轴范围避免空白图看起来像 bug
+                ax.set_xlim(time_start, time_end)
 
             ax.set_xlim(time_start, time_end)
             ax.set_xlabel('时间 (秒)', fontsize=8)
@@ -1894,6 +1994,10 @@ class CalibrateWidget(QWidget):
             if legend_lines:
                 ax.legend(legend_lines, legend_labels_list, fontsize=6, loc='upper right')
             ax.set_title(f'{dev_label} ({imu_count}IMU)', fontsize=9, pad=3)
+            # 播放红线
+            if self.is_full_playing:
+                window_center = (time_start + time_end) / 2.0
+                ax.axvline(x=window_center, color='#e74c3c', linewidth=2.0, alpha=0.9, zorder=10)
             self.draw_prompt_markers(ax, time_start, time_end, show_text=True)
 
         # ── Acc 图 ──
@@ -2043,6 +2147,8 @@ class CalibrateWidget(QWidget):
         # 先停止当前播放（如果有的话）
         if self.is_playing:
             self._stop_playback()
+        if self.is_full_playing:
+            self._stop_full_playback()
 
         # 更新滑块位置（会触发update_plots）
         self.slider.setValue(target_pos)
@@ -2215,10 +2321,161 @@ class CalibrateWidget(QWidget):
 
     # ─────────── 2s 预览结束 ───────────
 
+    # ═══════════════════════════════════════════
+    #  完整播放控制（从头到尾播放 EMG/IMU + 视频）
+    # ═══════════════════════════════════════════
+
+    def toggle_full_playback(self):
+        """切换完整播放：开始 / 停止"""
+        if self.is_full_playing:
+            self._stop_full_playback()
+            return
+        if self.is_playing:
+            # 先停止 2s 预览
+            self._stop_playback()
+        if self.h5_file is None:
+            return
+
+        # 如果已在数据末尾，自动回到开头
+        max_pos = self.slider.maximum()
+        if self.current_pos >= max_pos:
+            self.current_pos = 0
+            self.slider.setValue(0)
+
+        self._start_full_playback()
+
+    def _start_full_playback(self):
+        """开始完整播放（追钟模式：按真实时间计算位置，不受渲染速度影响）"""
+        self.is_full_playing = True
+        self._update_playback_buttons(playing=True)
+
+        self._playback_sample_rate = self._active_emg_sample_rate()
+        # 记录播放基准：起始位置 + 起始真实时间
+        self._playback_start_pos = self.current_pos
+        self._playback_start_time = time.time()
+        # 50ms 定时器用于刷新画面，但位置始终由真实时间决定
+        self.full_playback_timer.start(50)
+
+        print(f'[CalibrateTool] ▶ 完整播放开始: pos={self.current_pos}, '
+              f'sr={self._playback_sample_rate}Hz (实时追钟)')
+
+    def pause_playback(self):
+        """暂停完整播放"""
+        if not self.is_full_playing:
+            return
+        self.is_full_playing = False
+        self.full_playback_timer.stop()
+        # 记录已播放时间，以便恢复时继续
+        self._playback_elapsed = time.time() - self._playback_start_time
+        self._update_playback_buttons(playing=False, paused=True)
+        print(f'[CalibrateTool] ⏸ 播放已暂停: pos={self.current_pos}')
+
+    def _stop_full_playback(self):
+        """停止完整播放，恢复按钮状态"""
+        self.is_full_playing = False
+        self.full_playback_timer.stop()
+        self._update_playback_buttons(playing=False)
+        print(f'[CalibrateTool] ⏹ 播放已停止: pos={self.current_pos}')
+
+    def reset_progress(self):
+        """重置进度到数据起始位置"""
+        if self.is_full_playing:
+            self._stop_full_playback()
+        if self.is_playing:
+            self._stop_playback()
+        self.current_pos = 0
+        self.slider.setValue(0)
+        # 确保立即刷新
+        self._last_video_update = 0
+        self.update_timer.stop()
+        self._do_update_plots()
+        print('[CalibrateTool] ⏮ 进度已重置到起始位置')
+
+    def _on_full_playback_tick(self):
+        """完整播放定时器回调：追钟模式，位置 = 起始位置 + 真实时间 * 采样率"""
+        if not self.is_full_playing or self.h5_file is None:
+            self._stop_full_playback()
+            return
+
+        max_pos = self.slider.maximum()
+
+        # 计算应该播放到的位置（追钟）
+        elapsed = time.time() - self._playback_start_time
+        new_pos = self._playback_start_pos + int(elapsed * self._playback_sample_rate)
+
+        if new_pos >= max_pos:
+            # 播放到末尾，停在最后一帧
+            self.current_pos = max_pos
+            self.slider.blockSignals(True)
+            self.slider.setValue(max_pos)
+            self.slider.blockSignals(False)
+            self.lbl_pos.setText(f'位置: {max_pos}')
+            self.update_timer.stop()
+            self.update_plots()
+            self._stop_full_playback()
+            print(f'[CalibrateTool] ⏹ 播放完成（已到数据末尾，实际耗时 {elapsed:.1f}s）')
+            return
+
+        self.current_pos = new_pos
+
+        # 更新滑块
+        self.slider.blockSignals(True)
+        self.slider.setValue(new_pos)
+        self.slider.blockSignals(False)
+        self.lbl_pos.setText(f'位置: {new_pos}')
+
+        # 直接更新图表和视频（绕过 debounce timer）
+        self.update_timer.stop()
+        self.update_plots()
+
+    def _update_playback_buttons(self, playing=False, paused=False):
+        """更新播放控制按钮状态"""
+        btn_base = (
+            'QPushButton { font-size: 18px; padding: 4px 6px; border-radius: 6px;'
+            'border: none; color: #fff; }'
+        )
+        if playing:
+            self.btn_play.setText('⏹')
+            self.btn_play.setStyleSheet(
+                btn_base + 'QPushButton { background-color: #c0392b; }'
+                'QPushButton:hover { background-color: #e74c3c; }'
+            )
+            self.btn_pause.setEnabled(True)
+            self.btn_pause.setStyleSheet(
+                btn_base + 'QPushButton:enabled { background-color: #e67e22; }'
+                'QPushButton:enabled:hover { background-color: #f39c12; }'
+            )
+        elif paused:
+            self.btn_play.setText('▶')
+            self.btn_play.setStyleSheet(
+                btn_base + 'QPushButton { background-color: #27ae60; }'
+                'QPushButton:hover { background-color: #2ecc71; }'
+            )
+            self.btn_pause.setEnabled(False)
+            self.btn_pause.setStyleSheet(
+                'QPushButton:disabled { font-size: 18px; padding: 4px 6px; border-radius: 6px;'
+                'border: none; background-color: #bdc3c7; color: #95a5a6; }'
+            )
+        else:
+            self.btn_play.setText('▶')
+            self.btn_play.setStyleSheet(
+                btn_base + 'QPushButton { background-color: #27ae60; }'
+                'QPushButton:hover { background-color: #2ecc71; }'
+            )
+            self.btn_pause.setEnabled(False)
+            self.btn_pause.setStyleSheet(
+                'QPushButton:disabled { font-size: 18px; padding: 4px 6px; border-radius: 6px;'
+                'border: none; background-color: #bdc3c7; color: #95a5a6; }'
+            )
+
+    # ═══════════════════════════════════════════
+
     def closeEvent(self, event):
         """关闭窗口时清理资源"""
         if self.is_playing:
             self._stop_playback()
+        if self.is_full_playing:
+            self._stop_full_playback()
         self._close_videos()
         if self.h5_file:
             self.h5_file.close()

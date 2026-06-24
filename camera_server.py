@@ -304,6 +304,8 @@ class FrameRecorder:
         self.recording_started_at = None
         self.recording_stopped_at = None
         self.frame_count = 0
+        self.first_frame_real_time = None   # 第一帧实际到达的 wall-clock 时间
+        self.last_frame_real_time = None    # 最后一帧实际到达的 wall-clock 时间（每帧更新）
 
     def start(self, output_filename, start_timestamp=None):
         """开始录制 — 打开原始 MJPEG 文件
@@ -348,6 +350,11 @@ class FrameRecorder:
         """写入一帧 MJPEG 数据（由 CameraCapture._read_frames 线程调用）"""
         if self.recording and self.raw_file:
             try:
+                # 记录第一帧和最后一帧的实际到达时间（消除摄像头启动延迟 + 帧率偏差）
+                now = time.time()
+                if self.first_frame_real_time is None:
+                    self.first_frame_real_time = now
+                self.last_frame_real_time = now  # 每帧更新，停止时即为最后一帧的真实时间
                 self.raw_file.write(frame_bytes)
                 self.frame_count += 1
             except Exception as e:
@@ -429,15 +436,20 @@ class FrameRecorder:
         """
         rec_start = self.recording_started_at or 0
         rec_stop = self.recording_stopped_at or 0
-        wall_duration = max(0, rec_stop - rec_start)
+        # 优先使用实际帧到达时间（而非命令/停止时间），消除摄像头启动延迟 + 帧率偏差
+        first_frame_time = self.first_frame_real_time or rec_start
+        last_frame_time = self.last_frame_real_time or rec_stop
+        wall_duration = max(0, last_frame_time - first_frame_time)
 
         timing = {
             'recording_started_at': rec_start,
             'recording_stopped_at': rec_stop,
             'duration': round(wall_duration, 3),
             'first_pts': 0,
-            'first_frame_unix': round(rec_start, 3),
-            'last_frame_unix': round(rec_stop, 3),
+            'first_frame_real_time': round(first_frame_time, 3) if self.first_frame_real_time else None,
+            'last_frame_real_time': round(last_frame_time, 3) if self.last_frame_real_time else None,
+            'first_frame_unix': round(first_frame_time, 3),
+            'last_frame_unix': round(last_frame_time, 3),
             'frame_count': self.frame_count,
             'timing_source': 'wall_clock',
         }
@@ -555,17 +567,19 @@ class FrameRecorder:
             except ValueError:
                 pass
 
-        # 只有当 ffprobe 返回了有效 duration (>0) 时才用 PTS 精化值覆盖
-        if ffprobe_duration and ffprobe_duration > 0 and self.recording_started_at:
+        # 只有当 ffprobe 返回了有效 duration (>0) 时才用 PTS 元数据补充
+        # 关键：不覆盖 first_frame_unix / last_frame_unix！
+        # 这两个必须保持 wall-clock 值（来自真实帧到达时间），
+        # 否则 effective_fps 会被锁死在容器帧率 (30fps)，导致视频-EMG 漂移。
+        if ffprobe_duration and ffprobe_duration > 0:
             timing['duration'] = round(ffprobe_duration, 3)
             timing['first_pts'] = round(first_pts, 3)
-            timing['first_frame_unix'] = round(
-                self.recording_started_at + first_pts, 3)
-            timing['last_frame_unix'] = round(
-                self.recording_started_at + first_pts + ffprobe_duration, 3)
             timing['timing_source'] = 'ffprobe'
             print(f'[FrameRecorder] [{self.side}] ffprobe 精化: '
-                  f'duration={ffprobe_duration:.3f}s, first_pts={first_pts:.3f}s')
+                  f'container_dur={ffprobe_duration:.3f}s, first_pts={first_pts:.3f}s '
+                  f'(wall_clock first={timing["first_frame_unix"]:.3f}, '
+                  f'last={timing["last_frame_unix"]:.3f}, '
+                  f'wall_dur={timing["last_frame_unix"] - timing["first_frame_unix"]:.3f}s)')
         else:
             print(f'[FrameRecorder] [{self.side}] ffprobe 未返回有效 duration '
                   f'(dur={ffprobe_duration}, pts={first_pts}), '

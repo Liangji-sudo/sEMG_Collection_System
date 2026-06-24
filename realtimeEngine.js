@@ -491,16 +491,73 @@ class RealtimeEngine extends EventEmitter {
         console.log(`[realtimeEngine] 原因: ${reason || '未知'}`);
         console.log(`[realtimeEngine] 时间: ${interruptedAt || '未知'}`);
 
+        // 【修复】异常中断时也要停止摄像头录制并保存 AVI，传递 video 信息到 closeStageFile
+        if (this.videoRecordingStarted && this.camera_connected) {
+            console.log('[realtimeEngine] 🎥 异常中断：停止视频录制并保存 AVI...');
+
+            if (this.videoFileNames?.left) {
+                try {
+                    const saveResult = await this.sendCameraCommand('stop_and_save', { side: 'left' });
+                    if (saveResult.success) {
+                        console.log('[realtimeEngine] ✅ 左手摄像头 AVI 已保存:', saveResult.output_path);
+                        if (saveResult.timing) {
+                            this.videoTimingLeft = saveResult.timing;
+                        }
+                        if (saveResult.output_path) {
+                            this.videoPathLeft = saveResult.output_path;
+                        }
+                    } else {
+                        console.error('[realtimeEngine] ❌ 保存左手 AVI 失败:', saveResult.error);
+                        this.videoFileNames.left = null;
+                    }
+                } catch (err) {
+                    console.error('[realtimeEngine] 保存左手 AVI 异常:', err);
+                    this.videoFileNames.left = null;
+                }
+            }
+
+            if (this.videoFileNames?.right) {
+                try {
+                    const saveResult = await this.sendCameraCommand('stop_and_save', { side: 'right' });
+                    if (saveResult.success) {
+                        console.log('[realtimeEngine] ✅ 右手摄像头 AVI 已保存:', saveResult.output_path);
+                        if (saveResult.timing) {
+                            this.videoTimingRight = saveResult.timing;
+                        }
+                        if (saveResult.output_path) {
+                            this.videoPathRight = saveResult.output_path;
+                        }
+                    } else {
+                        console.error('[realtimeEngine] ❌ 保存右手 AVI 失败:', saveResult.error);
+                        this.videoFileNames.right = null;
+                    }
+                } catch (err) {
+                    console.error('[realtimeEngine] 保存右手 AVI 异常:', err);
+                    this.videoFileNames.right = null;
+                }
+            }
+
+            this.videoRecordingStarted = false;
+            this.videoFileNames = null;
+        }
+
         if (this.stageFileOpen && !this.isClosingStageFile) {
             // 关闭当前 H5，写入异常中断标记
             // 注意：不传 segment_index，保留 create_file 写入的值
             // （续采 H5 的 segment_index 由 create_file 写入，close 不覆盖）
+            // 【修复】传递 video_left/video_right 确保 H5 属性不丢失
             await this.closeStageFile({
                 collection_status: 'abnormal_interrupted',
                 interrupted_at: interruptedAt || new Date().toISOString(),
                 interrupt_reason: reason || '未知',
                 resume_progress: progress ? JSON.stringify(progress) : null,
-                breakpoint_state: breakpointState ? JSON.stringify(breakpointState) : null
+                breakpoint_state: breakpointState ? JSON.stringify(breakpointState) : null,
+                video_timing: {
+                    left: this.videoTimingLeft || null,
+                    right: this.videoTimingRight || null
+                },
+                video_left: this.videoPathLeft || null,
+                video_right: this.videoPathRight || null
             });
         } else {
             console.log('[realtimeEngine] 没有打开的 H5 文件，跳过关闭');
@@ -765,6 +822,21 @@ class RealtimeEngine extends EventEmitter {
             } catch (error) {
                 console.error(`[realtimeEngine] ${cameraSide}侧录制请求失败:`, error);
             }
+        }
+
+        // 【修复】录制启动成功后，立即通知 storage_server 写入 video_left/video_right 到 H5
+        // 避免因后续异常中断流程不传 video 信息导致 H5 属性缺失
+        if (this.videoFileNames && (this.videoFileNames.left || this.videoFileNames.right)) {
+            this.sendStorageCommand('video_recording_started', {
+                video_left: this.videoFileNames.left || null,
+                video_right: this.videoFileNames.right || null,
+                video_start_timestamp: timestamp,
+                h5_file_name: null
+            }).then(() => {
+                console.log('[realtimeEngine] ✅ 视频信息已写入H5（录制启动时）');
+            }).catch(err => {
+                console.error('[realtimeEngine] ❌ 写入视频信息到H5失败:', err);
+            });
         }
     }
 
