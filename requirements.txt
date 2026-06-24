@@ -14,6 +14,9 @@ pyzmq>=25.0.0
 # Signal processing (EMG filtering)
 scipy>=1.10.0
 
+# Video preview (calibrate_tool data visualization)
+opencv-python>=4.8.0
+
 # Mouse input (for mocap simulation)
 pynput>=1.7.0
 

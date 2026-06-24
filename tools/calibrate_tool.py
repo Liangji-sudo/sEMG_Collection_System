@@ -12,15 +12,23 @@ calibrate_tool.py - H5数据可视化与滤波工具
 
 import sys
 import os
+import time
 import h5py
 import numpy as np
 from scipy import signal as scipy_signal
+
+try:
+    import cv2
+    HAS_CV2 = True
+except ImportError:
+    HAS_CV2 = False
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFileDialog, QSlider, QSpinBox, QGroupBox,
     QSplitter, QComboBox, QCheckBox, QMessageBox, QScrollArea
 )
 from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QImage, QPixmap
 import matplotlib
 matplotlib.use('Qt5Agg')
 
@@ -161,6 +169,21 @@ class CalibrateWidget(QWidget):
         # IMU 供应商风格堆叠参数
         self.imu_acc_offset = 4.0       # Acc offset (g)
         self.imu_gyr_offset = 600.0     # Gyr offset (deg/s)
+
+        # 视频预览相关
+        self.video_caps = {}            # {'left': cv2.VideoCapture, 'right': cv2.VideoCapture}
+        self.video_fps = {}             # {'left': fps, 'right': fps}
+        self.video_first_frame_unix = {}  # {'left': unix_ts, 'right': unix_ts}
+        self.video_last_frame_unix = {}   # {'left': unix_ts, 'right': unix_ts}
+        self.video_duration = {}        # {'left': dur_sec, 'right': dur_sec}
+        self.video_frame_count = {}     # {'left': n_frames, 'right': n_frames}
+        self.video_enabled = False      # 是否有可用的视频
+        self._video_current_frame = {'left': None, 'right': None}   # 当前显示的 QPixmap
+        self._video_current_idx = {'left': -1, 'right': -1}         # 当前帧索引
+        self._last_video_update = 0     # 上次视频更新时间戳
+        self._video_update_throttle_drag = 0.15   # 拖动时节流间隔 (秒)
+        self._video_update_throttle_static = 0.05 # 静止时更新间隔
+        self.video_label_height = 200   # 视频预览区域高度
 
         # Prompt标签数据
         self.prompt_names = None
@@ -316,6 +339,50 @@ class CalibrateWidget(QWidget):
         emg_layout.addWidget(self.toolbar_emg)
         emg_layout.addWidget(self.canvas_emg)
         splitter.addWidget(emg_widget)
+
+        # 视频预览面板（左右视频并排）
+        video_widget = QWidget()
+        video_layout = QHBoxLayout(video_widget)
+        video_layout.setContentsMargins(2, 2, 2, 2)
+        video_layout.setSpacing(4)
+
+        # 左侧视频
+        left_video_group = QGroupBox('📹 左手视频 (Left)')
+        left_video_inner = QVBoxLayout(left_video_group)
+        left_video_inner.setContentsMargins(2, 2, 2, 2)
+        self.lbl_video_left = QLabel()
+        self.lbl_video_left.setAlignment(Qt.AlignCenter)
+        self.lbl_video_left.setMinimumHeight(self.video_label_height)
+        self.lbl_video_left.setStyleSheet(
+            'background-color: #1a1a2e; border: 1px solid #333; color: #666; font-size: 11px;'
+        )
+        self.lbl_video_left.setText('(无视频)')
+        left_video_inner.addWidget(self.lbl_video_left)
+        self.lbl_video_left_time = QLabel('--:--')
+        self.lbl_video_left_time.setAlignment(Qt.AlignCenter)
+        self.lbl_video_left_time.setStyleSheet('color: #888; font-size: 9px;')
+        left_video_inner.addWidget(self.lbl_video_left_time)
+        video_layout.addWidget(left_video_group)
+
+        # 右侧视频
+        right_video_group = QGroupBox('📹 右手视频 (Right)')
+        right_video_inner = QVBoxLayout(right_video_group)
+        right_video_inner.setContentsMargins(2, 2, 2, 2)
+        self.lbl_video_right = QLabel()
+        self.lbl_video_right.setAlignment(Qt.AlignCenter)
+        self.lbl_video_right.setMinimumHeight(self.video_label_height)
+        self.lbl_video_right.setStyleSheet(
+            'background-color: #1a1a2e; border: 1px solid #333; color: #666; font-size: 11px;'
+        )
+        self.lbl_video_right.setText('(无视频)')
+        right_video_inner.addWidget(self.lbl_video_right)
+        self.lbl_video_right_time = QLabel('--:--')
+        self.lbl_video_right_time.setAlignment(Qt.AlignCenter)
+        self.lbl_video_right_time.setStyleSheet('color: #888; font-size: 9px;')
+        right_video_inner.addWidget(self.lbl_video_right_time)
+        video_layout.addWidget(right_video_group)
+
+        splitter.addWidget(video_widget)
 
         # IMU Acc 图表
         imu_acc_widget = QWidget()
@@ -524,6 +591,7 @@ class CalibrateWidget(QWidget):
             # 读取 H5 attrs（依赖 emg*_loaded_name）
             self._load_status_attrs()
             self.load_prompt_data()
+            self._load_videos()
 
             # 计算并保存全局的Y轴范围
             self.calculate_y_limits()
@@ -1009,6 +1077,270 @@ class CalibrateWidget(QWidget):
         except Exception as e:
             print(f'[CalibrateTool] 加载Prompt数据失败: {e}')
 
+    # ───────────────── 视频预览相关方法 ─────────────────
+
+    def _find_video_files(self):
+        """根据 H5 attrs 定位视频文件路径。
+
+        查找逻辑: H5 attrs video_left / video_right → 文件名
+        视频放在 storage/ 目录下的 video/ 中，按相对路径查找。
+        """
+        video_files = {}
+        if self.h5_file is None or self.h5_path is None:
+            return video_files
+
+        h5_dir = os.path.dirname(os.path.abspath(self.h5_path))
+        # 视频存储路径: storage/video/ (在项目根目录下)
+        search_dirs = [
+            os.path.join(h5_dir, 'video'),                    # tools/../storage/video/
+            os.path.join(h5_dir, '..', 'storage', 'video'),   # tools/../../storage/video/
+            os.path.join(h5_dir, '..', 'video'),              # tools/../video/
+            os.path.join(h5_dir),                              # 与 H5 同目录
+        ]
+
+        for side_key, attr_key in [('left', 'video_left'), ('right', 'video_right')]:
+            filename = self.h5_file.attrs.get(attr_key)
+            if filename is None:
+                continue
+            if isinstance(filename, bytes):
+                filename = filename.decode('utf-8')
+            filename = str(filename).strip()
+            if not filename or filename == '-':
+                continue
+
+            # 在搜索目录中查找
+            found_path = None
+            for search_dir in search_dirs:
+                candidate = os.path.normpath(os.path.join(search_dir, filename))
+                if os.path.isfile(candidate):
+                    found_path = candidate
+                    break
+                # 也尝试直接使用文件名（不拼接目录）
+                if os.path.isfile(os.path.join(search_dir, os.path.basename(filename))):
+                    found_path = os.path.join(search_dir, os.path.basename(filename))
+                    break
+
+            # 如果文件路径本身就是绝对路径，直接使用
+            if found_path is None and os.path.isabs(filename) and os.path.isfile(filename):
+                found_path = filename
+
+            if found_path:
+                video_files[side_key] = found_path
+                print(f'[CalibrateTool] 找到视频文件 ({side_key}): {found_path}')
+            else:
+                print(f'[CalibrateTool] 未找到视频文件 ({side_key}): {filename}')
+
+        return video_files
+
+    def _load_videos(self):
+        """加载 H5 对应的视频文件"""
+        self._close_videos()
+        self.video_enabled = False
+
+        if not HAS_CV2:
+            print('[CalibrateTool] OpenCV (cv2) 未安装，跳过视频加载')
+            self.lbl_video_left.setText('(需安装 opencv-python)')
+            self.lbl_video_right.setText('(需安装 opencv-python)')
+            return
+
+        video_files = self._find_video_files()
+        if not video_files:
+            print('[CalibrateTool] 未找到关联视频文件')
+            self.lbl_video_left.setText('(无视频)')
+            self.lbl_video_right.setText('(无视频)')
+            return
+
+        # 读取 video_timing 组获取时间对齐信息
+        vt_first = {}
+        vt_last = {}
+        vt_dur = {}
+        if 'video_timing' in self.h5_file:
+            try:
+                vt = self.h5_file['video_timing']
+                sides_raw = vt['sides'][()]
+                firsts = np.atleast_1d(vt['first_frame_unix'][()])
+                lasts = np.atleast_1d(vt['last_frame_unix'][()])
+                durs = np.atleast_1d(vt['duration'][()])
+                sides = [s.decode('utf-8') if isinstance(s, bytes) else str(s)
+                         for s in np.atleast_1d(sides_raw)]
+                for i, side in enumerate(sides):
+                    if i < len(firsts):
+                        vt_first[side] = float(firsts[i])
+                        vt_last[side] = float(lasts[i])
+                        vt_dur[side] = float(durs[i])
+            except Exception as e:
+                print(f'[CalibrateTool] 读取 video_timing 失败: {e}')
+
+        for side, video_path in video_files.items():
+            try:
+                cap = cv2.VideoCapture(video_path)
+                if not cap.isOpened():
+                    print(f'[CalibrateTool] 无法打开视频 ({side}): {video_path}')
+                    continue
+
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                self.video_caps[side] = cap
+                self.video_fps[side] = fps if fps > 0 else 30.0
+                self.video_frame_count[side] = frame_count
+                self.video_first_frame_unix[side] = vt_first.get(side, 0)
+                self.video_last_frame_unix[side] = vt_last.get(side, 0)
+                self.video_duration[side] = vt_dur.get(side, frame_count / self.video_fps[side] if fps > 0 else 0)
+                self._video_current_idx[side] = -1
+                self._video_current_frame[side] = None
+                self.video_enabled = True
+
+                print(f'[CalibrateTool] 视频已加载 ({side}): {os.path.basename(video_path)}, '
+                      f'fps={self.video_fps[side]:.1f}, frames={frame_count}, '
+                      f'dur={self.video_duration[side]:.1f}s, '
+                      f'first_frame_unix={self.video_first_frame_unix[side]:.3f}')
+            except Exception as e:
+                print(f'[CalibrateTool] 加载视频失败 ({side}): {e}')
+
+        # 更新 UI 状态
+        if not self.video_enabled:
+            self.lbl_video_left.setText('(无法加载视频)')
+            self.lbl_video_right.setText('(无法加载视频)')
+        else:
+            for side in ('left', 'right'):
+                if side in self.video_caps:
+                    lbl = getattr(self, f'lbl_video_{side}')
+                    lbl.setText('')
+
+    def _close_videos(self):
+        """关闭所有视频文件"""
+        for side, cap in self.video_caps.items():
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+        self.video_caps.clear()
+        self.video_fps.clear()
+        self.video_first_frame_unix.clear()
+        self.video_last_frame_unix.clear()
+        self.video_duration.clear()
+        self.video_frame_count.clear()
+        self._video_current_frame.clear()
+        self._video_current_idx.clear()
+        self.video_enabled = False
+
+    def _seek_video_frame(self, side, target_unix):
+        """定位到指定 Unix 时间戳对应的视频帧，返回 (frame_idx, qimage)。
+
+        Args:
+            side: 'left' 或 'right'
+            target_unix: 目标 Unix 时间戳
+
+        Returns:
+            (frame_idx, QImage) 或 (None, None)
+        """
+        cap = self.video_caps.get(side)
+        if cap is None:
+            return None, None
+
+        first_unix = self.video_first_frame_unix.get(side, 0)
+        fps = self.video_fps.get(side, 30)
+        total_frames = self.video_frame_count.get(side, 0)
+
+        if total_frames <= 0 or fps <= 0:
+            return None, None
+
+        # 从 Unix 时间戳映射到帧偏移
+        time_offset = target_unix - first_unix
+        frame_idx = int(round(time_offset * fps))
+        frame_idx = max(0, min(frame_idx, total_frames - 1))
+
+        # 缓存检查：同一帧不需要重新 seek
+        if frame_idx == self._video_current_idx.get(side, -1):
+            cached = self._video_current_frame.get(side)
+            if cached is not None:
+                return frame_idx, cached
+
+        # seek 到目标帧
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        ret, frame = cap.read()
+
+        if not ret or frame is None:
+            # 回退：seek 到最近的关键帧后逐帧解码
+            # 先往回跳 50 帧，再逐帧前进
+            fallback_start = max(0, frame_idx - 50)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, fallback_start)
+            for _ in range(frame_idx - fallback_start + 1):
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+        if not ret or frame is None:
+            return None, None
+
+        # BGR → RGB 转换
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w, ch = frame_rgb.shape
+        bytes_per_line = ch * w
+        qimage = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
+
+        # 缓存
+        self._video_current_idx[side] = frame_idx
+        self._video_current_frame[side] = qimage
+
+        return frame_idx, qimage
+
+    def _update_video_frames(self, target_unix):
+        """更新左右视频 QLabel 显示。
+
+        Args:
+            target_unix: 当前 EMG/IMU 显示窗口对应的 Unix 时间戳（窗口中间位置）
+        """
+        if not self.video_enabled:
+            return
+
+        # 节流：拖动时减少视频更新频率
+        now = time.time()
+        throttle = (self._video_update_throttle_drag if self.is_dragging
+                    else self._video_update_throttle_static)
+        if now - self._last_video_update < throttle:
+            return
+        self._last_video_update = now
+
+        for side in ('left', 'right'):
+            lbl = getattr(self, f'lbl_video_{side}')
+            lbl_time = getattr(self, f'lbl_video_{side}_time')
+            if side not in self.video_caps:
+                continue
+
+            frame_idx, qimage = self._seek_video_frame(side, target_unix)
+
+            if qimage is not None and frame_idx is not None:
+                # 缩放到显示区域大小
+                lbl_size = lbl.size()
+                # 有效布局尺寸（宽度>50 且高度>50 才认为已布局）
+                if lbl_size.width() > 50 and lbl_size.height() > 50:
+                    target_w, target_h = lbl_size.width(), lbl_size.height()
+                else:
+                    # 未完成布局时使用默认高度，保持宽高比
+                    target_h = self.video_label_height
+                    target_w = int(qimage.width() * target_h / qimage.height())
+                scaled = qimage.scaled(
+                    target_w, target_h,
+                    Qt.KeepAspectRatio, Qt.SmoothTransformation
+                )
+                pixmap = QPixmap.fromImage(scaled)
+                lbl.setPixmap(pixmap)
+
+                # 更新时间标签
+                fps = self.video_fps.get(side, 30)
+                frame_time_sec = frame_idx / fps if fps > 0 else 0
+                minutes = int(frame_time_sec // 60)
+                seconds = int(frame_time_sec % 60)
+                ms = int((frame_time_sec % 1) * 100)
+                lbl_time.setText(f'Frame #{frame_idx} | {minutes:02d}:{seconds:02d}.{ms:02d}')
+            else:
+                lbl.setText('(无法定位帧)')
+                lbl_time.setText('--:--')
+
+    # ─────────── 视频方法结束 ───────────
+
     def calculate_y_limits(self):
         """计算全局Y轴范围（用于固定纵轴），使用 per-device LSB"""
         lsb_uv_1 = getattr(self, 'emg1_lsb_uv', calculate_lsb_uv())
@@ -1087,6 +1419,8 @@ class CalibrateWidget(QWidget):
     def on_slider_released(self):
         """滑块释放结束拖动，执行精确更新"""
         self.is_dragging = False
+        # 重置视频更新节流，确保释放时立即刷新视频帧
+        self._last_video_update = 0
         # 立即执行完整更新
         self.update_timer.stop()
         self._do_update_plots()
@@ -1118,6 +1452,14 @@ class CalibrateWidget(QWidget):
         fast_mode = self.is_dragging
         self.update_emg_plot(fast_mode)
         self.update_imu_plot(fast_mode)
+
+        # 视频帧同步更新
+        if self.video_enabled and self.emg_start_time is not None:
+            sample_rate = self._active_emg_sample_rate()
+            # 取窗口中间位置的时间
+            window_center_offset = (self.current_pos + self.window_size / 2) / sample_rate
+            target_unix = float(self.emg_start_time) + window_center_offset
+            self._update_video_frames(target_unix)
 
     def _downsample_for_plot(self, data, max_points):
         """降采样到最多 max_points 个点，返回 (data_downsampled, step)"""
@@ -1515,6 +1857,7 @@ class CalibrateWidget(QWidget):
 
     def closeEvent(self, event):
         """关闭窗口时清理资源"""
+        self._close_videos()
         if self.h5_file:
             self.h5_file.close()
         event.accept()
