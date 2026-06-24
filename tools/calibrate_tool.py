@@ -222,10 +222,12 @@ class CalibrateWidget(QWidget):
         # 视频回放相关
         self.is_playing = False           # 是否正在播放
         self.playback_speed = 1.0         # 播放速度倍率 (0.5x / 1x / 2x)
-        self.playback_stop_pos = 0        # 播放停止位置
+        self.playback_stop_frames = {}    # {'left': frame_idx, 'right': frame_idx} 播放停止帧
         self.playback_auto_on_prompt = True  # 跳转 Prompt 后自动播放
+        self.playback_ticks = 0           # 已播放 tick 计数
+        self.playback_fps = 30.0          # 实际播放帧率
+        self._playback_plot_counter = 0   # 绘图更新计数器（降频）
         self.playback_timer = QTimer()
-        self.playback_timer.setInterval(33)  # ~30fps 更新频率
         self.playback_timer.timeout.connect(self._on_playback_tick)
 
         self.init_ui()
@@ -1367,13 +1369,14 @@ class CalibrateWidget(QWidget):
         if not self.video_enabled:
             return
 
-        # 节流：拖动时减少视频更新频率；播放时不节流
-        now = time.time()
+        # 播放期间由 _on_playback_tick 直接驱动视频帧，跳过 seek 式更新
         if self.is_playing:
-            throttle = 0  # 播放时不节流，确保视频流畅
-        else:
-            throttle = (self._video_update_throttle_drag if self.is_dragging
-                        else self._video_update_throttle_static)
+            return
+
+        # 节流：拖动时减少视频更新频率
+        now = time.time()
+        throttle = (self._video_update_throttle_drag if self.is_dragging
+                    else self._video_update_throttle_static)
         if now - self._last_video_update < throttle:
             return
         self._last_video_update = now
@@ -1952,73 +1955,140 @@ class CalibrateWidget(QWidget):
             self._start_playback()
 
     def _start_playback(self):
-        """开始播放：从当前滑块位置播放到窗口末尾或数据末尾"""
-        if self.h5_file is None:
-            return
-        max_len = self.get_max_data_length()
-        if max_len == 0:
+        """开始播放：从当前视频帧开始，顺序播放 ~3 秒"""
+        if self.h5_file is None or not self.video_enabled:
             return
 
-        # 播放范围：当前窗口大小 × 2（给用户看到 prompt 前后足够内容）
-        # 如果从 prompt 跳转来，current_pos 已在 prompt 前 25% window 处
-        play_duration_samples = self.window_size * 2
-        self.playback_stop_pos = min(self.current_pos + play_duration_samples, max_len)
+        # 用第一路可用视频的 FPS 作为播放帧率
+        fps = 30.0
+        for side in ('left', 'right'):
+            if side in self.video_fps:
+                fps = self.video_fps[side]
+                break
+        self.playback_fps = fps
 
+        # 播放时长：3 秒 × 速度倍率倒数（慢放更长，快放更短）
+        play_duration_frames = int(fps * 3.0 / self.playback_speed)
+
+        # 记录每路视频的停止帧
+        self.playback_stop_frames = {}
+        for side in ('left', 'right'):
+            if side in self.video_caps:
+                idx = self._video_current_idx.get(side, 0)
+                side_fps = self.video_fps.get(side, fps)
+                side_duration = int(side_fps * 3.0 / self.playback_speed)
+                self.playback_stop_frames[side] = max(0, idx + side_duration)
+
+        self.playback_ticks = 0
+        self._playback_plot_counter = 0
         self.is_playing = True
         self.btn_play.setText('⏸ 暂停')
         self.btn_play.setEnabled(True)
+
+        # 定时器间隔 = 1000ms / fps（按视频真实帧率播放）
+        interval = max(16, int(1000.0 / fps / self.playback_speed))
+        self.playback_timer.setInterval(interval)
         self.playback_timer.start()
 
-        # 播放期间禁止视频节流（确保每帧都刷新）
-        self._last_video_update = 0
-
-        print(f'[CalibrateTool] 开始播放: pos={self.current_pos} → stop={self.playback_stop_pos}, '
-              f'speed={self.playback_speed}x')
+        print(f'[CalibrateTool] 开始播放: fps={fps:.1f}, speed={self.playback_speed}x, '
+              f'interval={interval}ms, duration={play_duration_frames}帧 ({3.0/self.playback_speed:.1f}s)')
 
     def _stop_playback(self):
         """停止播放"""
         self.is_playing = False
         self.playback_timer.stop()
         self.btn_play.setText('▶ 播放')
-        # 停止时精确刷新到最终位置
+        # 停止时刷新图表（正常精度）
         self._last_video_update = 0
         self._do_update_plots()
         print(f'[CalibrateTool] 播放停止: pos={self.current_pos}')
 
     def _on_playback_tick(self):
-        """播放定时器触发：推进滑块位置"""
+        """播放定时器触发：从视频读取下一帧（顺序读取，不 seek）"""
         if not self.is_playing or self.h5_file is None:
             self._stop_playback()
             return
 
-        sample_rate = self._active_emg_sample_rate()
-        # 每次 tick 推进的样本数 = 采样率 × 速度倍率 / 30fps
-        step = max(1, int(sample_rate * self.playback_speed / 30.0))
-        new_pos = self.current_pos + step
+        self.playback_ticks += 1
+        self._playback_plot_counter += 1
+        any_frame_read = False
+        target_unix = None
 
-        # 检查是否到达停止位置
-        if new_pos >= self.playback_stop_pos:
-            self.current_pos = self.playback_stop_pos
-            self.slider.setValue(min(self.current_pos, self.slider.maximum()))
+        for side in ('left', 'right'):
+            cap = self.video_caps.get(side)
+            if cap is None:
+                continue
+
+            current_frame_idx = self._video_current_idx.get(side, -1)
+            stop_frame = self.playback_stop_frames.get(side, 0)
+            if current_frame_idx >= stop_frame:
+                continue
+
+            # 顺序读取下一帧（不 seek，视频按自然帧率推进）
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                continue
+
+            any_frame_read = True
+            new_idx = current_frame_idx + 1
+            self._video_current_idx[side] = new_idx
+
+            # BGR→RGB→QPixmap
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, ch = frame_rgb.shape
+            bytes_per_line = ch * w
+            qimage = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
+            self._video_current_frame[side] = qimage
+
+            # 从帧号反推 Unix 时间戳（用于同步 EMG 位置）
+            fps = self.video_fps.get(side, 30.0)
+            first_unix = self.video_first_frame_unix.get(side, 0)
+            target_unix = first_unix + new_idx / fps
+
+            # 更新 QLabel 显示
+            lbl = getattr(self, f'lbl_video_{side}')
+            lbl_time = getattr(self, f'lbl_video_{side}_time')
+            target_h = self.video_label_height
+            target_w = int(qimage.width() * target_h / qimage.height())
+            scaled = qimage.scaled(target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            lbl.setPixmap(QPixmap.fromImage(scaled))
+            # 更新时间标签
+            frame_time_sec = new_idx / fps if fps > 0 else 0
+            minutes = int(frame_time_sec // 60)
+            seconds = int(frame_time_sec % 60)
+            lbl_time.setText(f'Frame #{new_idx} | {minutes:02d}:{seconds:02d}')
+
+        if not any_frame_read:
             self._stop_playback()
             return
 
-        self.current_pos = new_pos
-        # 阻塞信号避免重复触发 on_slider_changed
-        self.slider.blockSignals(True)
-        self.slider.setValue(min(self.current_pos, self.slider.maximum()))
-        self.slider.blockSignals(False)
-        self.lbl_pos.setText(f'位置: {self.current_pos}')
-
-        # 直接更新图表（绕过 update_timer 延迟）
-        self.update_plots()
+        # 每 5 个视频帧更新一次 EMG/IMU 图表（减轻绘制压力，视频保持流畅）
+        if self._playback_plot_counter >= 5 and target_unix is not None and self.emg_start_time is not None:
+            self._playback_plot_counter = 0
+            emg_time = target_unix - float(self.emg_start_time)
+            sample_rate = self._active_emg_sample_rate()
+            new_pos = int(emg_time * sample_rate)
+            max_pos = self.slider.maximum()
+            self.current_pos = max(0, min(new_pos, max_pos))
+            self.slider.blockSignals(True)
+            self.slider.setValue(self.current_pos)
+            self.slider.blockSignals(False)
+            self.lbl_pos.setText(f'位置: {self.current_pos}')
+            # 快速模式更新图表
+            self.update_emg_plot(fast_mode=True)
+            self.update_imu_plot(fast_mode=True)
 
     def on_speed_changed(self, idx):
         """播放速度改变"""
         speeds = [0.5, 1.0, 2.0]
         if 0 <= idx < len(speeds):
             self.playback_speed = speeds[idx]
-            print(f'[CalibrateTool] 播放速度: {self.playback_speed}x')
+            # 如果正在播放，更新定时器间隔
+            if self.is_playing:
+                fps = self.playback_fps
+                interval = max(16, int(1000.0 / fps / self.playback_speed))
+                self.playback_timer.setInterval(interval)
+                print(f'[CalibrateTool] 播放速度切换: {self.playback_speed}x, interval={interval}ms')
 
     def on_auto_play_changed(self, state):
         """自动播放选项改变"""
