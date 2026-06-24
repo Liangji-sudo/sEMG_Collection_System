@@ -315,8 +315,8 @@ class CalibrateWidget(QWidget):
         control_layout.addWidget(QLabel('  |  '))
         prompt_btn_style = (
             'QPushButton {'
-            '  font-size: 14px; font-weight: bold; padding: 8px 20px;'
-            '  border-radius: 6px; border: none;'
+            '  font-size: 16px; font-weight: bold; padding: 10px 24px;'
+            '  border-radius: 8px; border: none;'
             '}'
             'QPushButton:enabled {'
             '  color: #fff;'
@@ -337,11 +337,11 @@ class CalibrateWidget(QWidget):
         control_layout.addWidget(self.btn_prev_prompt)
 
         self.lbl_prompt_info = QLabel('Prompt: -/-')
-        self.lbl_prompt_info.setMinimumWidth(140)
+        self.lbl_prompt_info.setMinimumWidth(160)
         self.lbl_prompt_info.setAlignment(Qt.AlignCenter)
         self.lbl_prompt_info.setStyleSheet(
-            'font-size: 13px; font-weight: bold; color: #333;'
-            'padding: 4px 8px; background-color: #f0f0f0; border-radius: 4px;'
+            'font-size: 15px; font-weight: bold; color: #333;'
+            'padding: 6px 12px; background-color: #f0f0f0; border-radius: 6px;'
         )
         control_layout.addWidget(self.lbl_prompt_info)
 
@@ -398,12 +398,14 @@ class CalibrateWidget(QWidget):
         left_btn_bar = QHBoxLayout()
         left_btn_bar.addStretch()
         self.btn_preview_left = QPushButton('▶ 2s预览')
-        self.btn_preview_left.setFixedWidth(75)
-        self.btn_preview_left.setFixedHeight(22)
+        self.btn_preview_left.setFixedWidth(90)
+        self.btn_preview_left.setFixedHeight(28)
         self.btn_preview_left.setToolTip('预览当前帧向后 2 秒视频')
         self.btn_preview_left.clicked.connect(lambda: self._start_preview('left'))
         self.btn_preview_left.setEnabled(False)
-        self.btn_preview_left.setStyleSheet('QPushButton { font-size: 10px; padding: 1px 6px; }')
+        self.btn_preview_left.setStyleSheet(
+            'QPushButton { font-size: 12px; font-weight: bold; padding: 2px 10px; }'
+        )
         left_btn_bar.addWidget(self.btn_preview_left)
         left_video_inner.addLayout(left_btn_bar)
         self.lbl_video_left = QLabel()
@@ -429,12 +431,14 @@ class CalibrateWidget(QWidget):
         right_btn_bar = QHBoxLayout()
         right_btn_bar.addStretch()
         self.btn_preview_right = QPushButton('▶ 2s预览')
-        self.btn_preview_right.setFixedWidth(75)
-        self.btn_preview_right.setFixedHeight(22)
+        self.btn_preview_right.setFixedWidth(90)
+        self.btn_preview_right.setFixedHeight(28)
         self.btn_preview_right.setToolTip('预览当前帧向后 2 秒视频')
         self.btn_preview_right.clicked.connect(lambda: self._start_preview('right'))
         self.btn_preview_right.setEnabled(False)
-        self.btn_preview_right.setStyleSheet('QPushButton { font-size: 10px; padding: 1px 6px; }')
+        self.btn_preview_right.setStyleSheet(
+            'QPushButton { font-size: 12px; font-weight: bold; padding: 2px 10px; }'
+        )
         right_btn_bar.addWidget(self.btn_preview_right)
         right_video_inner.addLayout(right_btn_bar)
         self.lbl_video_right = QLabel()
@@ -2054,7 +2058,7 @@ class CalibrateWidget(QWidget):
         btn = getattr(self, f'btn_preview_{side}')
         if btn:
             btn.setText('⏹ 停止')
-            btn.setStyleSheet('QPushButton { font-size: 10px; padding: 1px 6px; background-color: #c0392b; color: white; }')
+            btn.setStyleSheet('QPushButton { font-size: 12px; font-weight: bold; padding: 2px 10px; background-color: #c0392b; color: white; }')
 
         interval = max(16, int(1000.0 / fps))
         self.playback_timer.setInterval(interval)
@@ -2073,7 +2077,7 @@ class CalibrateWidget(QWidget):
             btn = getattr(self, f'btn_preview_{s}', None)
             if btn:
                 btn.setText('▶ 2s预览')
-                btn.setStyleSheet('QPushButton { font-size: 10px; padding: 1px 6px; }')
+                btn.setStyleSheet('QPushButton { font-size: 12px; font-weight: bold; padding: 2px 10px; }')
 
         self._last_video_update = 0
         self._do_update_plots()
