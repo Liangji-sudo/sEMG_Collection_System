@@ -311,11 +311,28 @@ class CalibrateWidget(QWidget):
         self.chk_filter.stateChanged.connect(self.update_plots)
         control_layout.addWidget(self.chk_filter)
 
-        # Prompt跳转按钮
+        # Prompt跳转 — 上下布局，避免被挤掉
         control_layout.addWidget(QLabel('  |  '))
+        prompt_widget = QWidget()
+        prompt_layout = QVBoxLayout(prompt_widget)
+        prompt_layout.setContentsMargins(0, 0, 0, 0)
+        prompt_layout.setSpacing(4)
+
+        # 上方：Prompt 名称（独占一行，不被按钮遮挡）
+        self.lbl_prompt_info = QLabel('Prompt: -/-')
+        self.lbl_prompt_info.setAlignment(Qt.AlignCenter)
+        self.lbl_prompt_info.setStyleSheet(
+            'font-size: 13px; font-weight: bold; color: #333;'
+            'padding: 4px 10px; background-color: #f0f0f0; border-radius: 6px;'
+        )
+        prompt_layout.addWidget(self.lbl_prompt_info)
+
+        # 下方：按钮左右并排
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
         prompt_btn_style = (
             'QPushButton {'
-            '  font-size: 16px; font-weight: bold; padding: 10px 24px;'
+            '  font-size: 18px; padding: 8px 16px;'
             '  border-radius: 8px; border: none;'
             '}'
             'QPushButton:enabled {'
@@ -325,7 +342,7 @@ class CalibrateWidget(QWidget):
             '  color: #aaa; background-color: #e0e0e0;'
             '}'
         )
-        self.btn_prev_prompt = QPushButton('⏮  上一个Prompt')
+        self.btn_prev_prompt = QPushButton('⏮')
         self.btn_prev_prompt.clicked.connect(self.goto_prev_prompt)
         self.btn_prev_prompt.setEnabled(False)
         self.btn_prev_prompt.setStyleSheet(
@@ -334,18 +351,9 @@ class CalibrateWidget(QWidget):
             'QPushButton:enabled:hover { background-color: #5a4bd1; }'
             'QPushButton:enabled:pressed { background-color: #4a3db5; }'
         )
-        control_layout.addWidget(self.btn_prev_prompt)
+        btn_row.addWidget(self.btn_prev_prompt)
 
-        self.lbl_prompt_info = QLabel('Prompt: -/-')
-        self.lbl_prompt_info.setMinimumWidth(160)
-        self.lbl_prompt_info.setAlignment(Qt.AlignCenter)
-        self.lbl_prompt_info.setStyleSheet(
-            'font-size: 15px; font-weight: bold; color: #333;'
-            'padding: 6px 12px; background-color: #f0f0f0; border-radius: 6px;'
-        )
-        control_layout.addWidget(self.lbl_prompt_info)
-
-        self.btn_next_prompt = QPushButton('下一个Prompt  ⏭')
+        self.btn_next_prompt = QPushButton('⏭')
         self.btn_next_prompt.clicked.connect(self.goto_next_prompt)
         self.btn_next_prompt.setEnabled(False)
         self.btn_next_prompt.setStyleSheet(
@@ -354,7 +362,10 @@ class CalibrateWidget(QWidget):
             'QPushButton:enabled:hover { background-color: #00a381; }'
             'QPushButton:enabled:pressed { background-color: #008f6b; }'
         )
-        control_layout.addWidget(self.btn_next_prompt)
+        btn_row.addWidget(self.btn_next_prompt)
+        prompt_layout.addLayout(btn_row)
+
+        control_layout.addWidget(prompt_widget)
 
         control_scroll = QScrollArea()
         control_scroll.setWidget(control_widget)
@@ -508,6 +519,12 @@ class CalibrateWidget(QWidget):
         splitter.addWidget(imu_gyr_widget)
 
         main_layout.addWidget(splitter)
+
+        # 禁止面板拖拽拉伸
+        for i in range(splitter.count()):
+            handle = splitter.handle(i)
+            if handle:
+                handle.setEnabled(False)
 
         # === 底部滑块 ===
         slider_layout = QHBoxLayout()

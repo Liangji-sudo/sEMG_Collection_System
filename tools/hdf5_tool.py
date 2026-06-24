@@ -21,7 +21,7 @@ from PyQt5.QtWidgets import (
     QMessageBox, QListWidget, QListWidgetItem, QProgressBar,
     QCheckBox, QSpinBox, QComboBox, QFrame, QScrollArea, QGridLayout
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSettings
 from PyQt5.QtGui import QFont, QColor, QPalette
 
 # 导入bin_sync_tool中的同步功能
@@ -787,18 +787,16 @@ class StatisticsPanel(QFrame):
     # 字段分组定义 — 按设备类型分门别类
     SECTIONS = [
         ('H5 基础信息', [
-            ('文件名', '文件名'), ('文件大小', '文件大小'),
-            ('创建时间', '创建时间'), ('sync_status', '同步状态'),
-            ('collection_status', '采集状态'),
-            ('is_resumed', '续采段'), ('segment_index', 'Segment序号'),
-            ('collection_session_id', '采集会话ID'),
-            ('parent_segment_index', '父Segment'),
-            ('start_time', '开始时间'), ('end_time', '结束时间'),
-            ('duration', '持续(秒)'),
-            ('session_index', 'Session索引'), ('session_count', 'Session总数'),
-            ('session_number', '当前轮次'),
-            ('recording_session_id', '录制会话ID'), ('is_multi_session', '多Session'),
-            ('segment_device_count', '设备数'),
+            # 左列: 文件基本信息  |  右列: 采集内容
+            ('文件名', '文件名'),       ('start_time', '开始时间'),
+            ('文件大小', '文件大小'),   ('end_time', '结束时间'),
+            ('创建时间', '创建时间'),   ('duration', '持续(秒)'),
+            ('sync_status', '同步状态'), ('is_multi_session', '采集模式'),
+            ('collection_status', '采集状态'), ('session_number', '当前轮次'),
+            ('is_resumed', '是否断点续采'),   ('session_count', 'Session总数'),
+            ('segment_index', '断点逻辑子序号'), ('recording_session_id', '录制会话ID'),
+            ('parent_segment_index', '断点逻辑父序号'), ('collection_session_id', '采集会话ID'),
+            ('segment_device_count', '手环使用情况'), ('session_index', 'Session索引'),
         ]),
         ('受试者信息', [
             ('subject_name', '姓名'), ('subject_id', '编号'),
@@ -809,6 +807,8 @@ class StatisticsPanel(QFrame):
         ('任务配置', [
             ('user_id', '受试者编号'),
             ('task_id', '任务协议'),
+            ('category1', '大类'), ('category2', '大场景'),
+            ('category4', '人群'),
             ('stage_name', 'Stage名称'), ('stage_index', 'Stage序号'),
             ('template_name', '配置模板'),
         ]),
@@ -816,24 +816,22 @@ class StatisticsPanel(QFrame):
             ('ble_device_dev1', 'BLE设备名称'),
             ('sd_bin_dev1', 'SD Bin文件'),
             ('segment_has_dev1_bin', '含Bin数据'),
-            ('emg1_250hz', 'EMG 250Hz'), ('emg1_2khz', 'EMG 2kHz'),
-            ('emg1_frame_count', 'EMG采集帧数'), ('emg1_frame_range', 'EMG帧号范围'),
-            ('imu1a_ble', 'IMU-A BLE'), ('imu1a_100hz', 'IMU-A 100Hz'),
-            ('imu1b_ble', 'IMU-B BLE'), ('imu1b_100hz', 'IMU-B 100Hz'),
+            ('emg1_250hz', 'EMG(蓝牙250Hz)'), ('emg1_2khz', 'EMG(完整2kHz)'),
+            ('imu1a_100hz', 'IMU(完整A通道 100Hz)'),
+            ('imu1b_100hz', 'IMU(完整B通道 100Hz)'),
             ('imu1c_100hz', 'IMU-C 100Hz'),
-            ('imu1_all_ble', 'IMU All BLE'), ('total_imu1_all_frames', 'IMU总帧数'),
+            ('imu1_all_ble', 'IMU(蓝牙A+B通道)'),
             ('imu1_hw_version', '硬件版本'), ('imu1_num_imus', 'IMU传感器数'),
         ]),
         ('蓝牙手环 — 设备2', [
             ('ble_device_dev2', 'BLE设备名称'),
             ('sd_bin_dev2', 'SD Bin文件'),
             ('segment_has_dev2_bin', '含Bin数据'),
-            ('emg2_250hz', 'EMG 250Hz'), ('emg2_2khz', 'EMG 2kHz'),
-            ('emg2_frame_count', 'EMG采集帧数'), ('emg2_frame_range', 'EMG帧号范围'),
-            ('imu2a_ble', 'IMU-A BLE'), ('imu2a_100hz', 'IMU-A 100Hz'),
-            ('imu2b_ble', 'IMU-B BLE'), ('imu2b_100hz', 'IMU-B 100Hz'),
+            ('emg2_250hz', 'EMG(蓝牙250Hz)'), ('emg2_2khz', 'EMG(完整2kHz)'),
+            ('imu2a_100hz', 'IMU(完整A通道 100Hz)'),
+            ('imu2b_100hz', 'IMU(完整B通道 100Hz)'),
             ('imu2c_100hz', 'IMU-C 100Hz'),
-            ('imu2_all_ble', 'IMU All BLE'), ('total_imu2_all_frames', 'IMU总帧数'),
+            ('imu2_all_ble', 'IMU(蓝牙A+B通道)'),
             ('imu2_hw_version', '硬件版本'), ('imu2_num_imus', 'IMU传感器数'),
         ]),
         ('数据流信息', [
@@ -845,7 +843,7 @@ class StatisticsPanel(QFrame):
             ('video_left', '左手视频文件'), ('video_right', '右手视频文件'),
         ]),
         ('动捕', [
-            ('mocap', 'Mocap数据集'),
+            ('mocap', '动捕帧数'),
         ]),
         ('同步信息', [
             ('sync_mode', '同步模式'),
@@ -869,14 +867,15 @@ class StatisticsPanel(QFrame):
     _mocap_keys = {'mocap'}
     _subject_info_keys = {'subject_name', 'subject_id', 'subject_age', 'subject_gender',
                           'subject_hand', 'subject_height', 'subject_weight'}
-    _task_config_keys = {'user_id', 'task_id', 'stage_name', 'stage_index', 'template_name'}
-    _wristband_dev1_keys = {'ble_device_dev1', 'emg1_250hz', 'emg1_2khz', 'emg1_frame_count', 'emg1_frame_range',
-                            'imu1a_ble', 'imu1a_100hz', 'imu1b_ble', 'imu1b_100hz', 'imu1c_100hz',
-                            'imu1_all_ble', 'total_imu1_all_frames', 'imu1_hw_version', 'imu1_num_imus',
+    _task_config_keys = {'user_id', 'task_id', 'category1', 'category2', 'category4',
+                          'stage_name', 'stage_index', 'template_name'}
+    _wristband_dev1_keys = {'ble_device_dev1', 'emg1_250hz', 'emg1_2khz',
+                            'imu1a_100hz', 'imu1b_100hz', 'imu1c_100hz',
+                            'imu1_all_ble', 'imu1_hw_version', 'imu1_num_imus',
                             'segment_has_dev1_bin'}
-    _wristband_dev2_keys = {'ble_device_dev2', 'emg2_250hz', 'emg2_2khz', 'emg2_frame_count', 'emg2_frame_range',
-                            'imu2a_ble', 'imu2a_100hz', 'imu2b_ble', 'imu2b_100hz', 'imu2c_100hz',
-                            'imu2_all_ble', 'total_imu2_all_frames', 'imu2_hw_version', 'imu2_num_imus',
+    _wristband_dev2_keys = {'ble_device_dev2', 'emg2_250hz', 'emg2_2khz',
+                            'imu2a_100hz', 'imu2b_100hz', 'imu2c_100hz',
+                            'imu2_all_ble', 'imu2_hw_version', 'imu2_num_imus',
                             'segment_has_dev2_bin'}
 
     def __init__(self, parent=None):
@@ -1049,7 +1048,7 @@ class StatisticsPanel(QFrame):
 
                 is_multi_session = f.attrs.get('is_multi_session', None)
                 if is_multi_session is not None:
-                    self.labels['is_multi_session'].setText('是' if is_multi_session else '否')
+                    self.labels['is_multi_session'].setText('多轮采集' if is_multi_session else '单轮采集')
                 else:
                     self.labels['is_multi_session'].setText('-')
 
@@ -1069,6 +1068,23 @@ class StatisticsPanel(QFrame):
                     self.labels['user_id'].setText(str(user_id))
                 else:
                     self.labels['user_id'].setText('-')
+
+                # 读取分类信息（大类 / 大场景 / 人群）
+                CATEGORY_NAMES = {
+                    'category1': {'static': '静态采集', 'dynamic': '动态采集'},
+                    'category2': {'sitting': '坐姿'},
+                    'category4': {'normal': '正常状态'},
+                }
+                for cat_key in ('category1', 'category2', 'category4'):
+                    val = f.attrs.get(cat_key, None)
+                    if val:
+                        if isinstance(val, bytes):
+                            val = val.decode('utf-8')
+                        # 尝试映射中文名，回退到原始值
+                        display = CATEGORY_NAMES.get(cat_key, {}).get(val, val)
+                        self.labels[cat_key].setText(str(display))
+                    else:
+                        self.labels[cat_key].setText('-')
 
                 stage_name = f.attrs.get('stage_name', None)
                 if stage_name:
@@ -1240,10 +1256,8 @@ class StatisticsPanel(QFrame):
                 else:
                     self.labels['sync_250hz_anchor_position'].setText('-')
 
-                # 读取数据集形状
-                for key in ['emg1_250hz', 'emg1_2khz', 'emg2_250hz', 'emg2_2khz',
-                           'imu1a_ble', 'imu1a_100hz', 'imu1b_ble', 'imu1b_100hz', 'imu1c_100hz',
-                           'imu2a_ble', 'imu2a_100hz', 'imu2b_ble', 'imu2b_100hz', 'imu2c_100hz']:
+                # EMG 数据集：250Hz 显示形状，2kHz 显示帧数
+                for key in ['emg1_250hz', 'emg2_250hz']:
                     adc_key = key.replace('hz', 'hz_adc')
                     if adc_key in f:
                         self.labels[key].setText(str(f[adc_key].shape))
@@ -1252,7 +1266,29 @@ class StatisticsPanel(QFrame):
                     else:
                         self.labels[key].setText('-')
 
-                # V1/V2 通用IMU数据集形状
+                for key in ['emg1_2khz', 'emg2_2khz']:
+                    # EMG(完整2kHz) — 显示帧数而非形状
+                    frame_count = f.attrs.get(key.replace('2khz', 'frame_count'), None)
+                    if frame_count is not None:
+                        self.labels[key].setText(f"{frame_count} 帧")
+                    else:
+                        adc_key = key.replace('hz', 'hz_adc')
+                        if adc_key in f:
+                            self.labels[key].setText(f"{f[adc_key].shape[0]} 帧")
+                        elif key in f:
+                            self.labels[key].setText(f"{f[key].shape[0]} 帧")
+                        else:
+                            self.labels[key].setText('-')
+
+                # IMU 100Hz 数据集形状（不再显示 imu*a_ble / imu*b_ble）
+                for key in ['imu1a_100hz', 'imu1b_100hz', 'imu1c_100hz',
+                           'imu2a_100hz', 'imu2b_100hz', 'imu2c_100hz']:
+                    if key in f:
+                        self.labels[key].setText(str(f[key].shape))
+                    else:
+                        self.labels[key].setText('-')
+
+                # IMU(蓝牙A+B通道) 形状
                 for key in ['imu1_all_ble', 'imu2_all_ble']:
                     if key in f:
                         self.labels[key].setText(str(f[key].shape))
@@ -1270,16 +1306,8 @@ class StatisticsPanel(QFrame):
                     else:
                         self.labels[attr_name].setText('-')
 
-                # V2 统计信息
-                for attr_name in ['total_imu1_all_frames', 'total_imu2_all_frames']:
-                    val = f.attrs.get(attr_name, None)
-                    if val is not None:
-                        self.labels[attr_name].setText(str(val))
-                    else:
-                        self.labels[attr_name].setText('-')
-
                 if 'mocap' in f:
-                    self.labels['mocap'].setText(str(f['mocap'].shape))
+                    self.labels['mocap'].setText(f"{f['mocap'].shape[0]} 帧")
                 else:
                     self.labels['mocap'].setText('-')
 
@@ -1302,9 +1330,9 @@ class StatisticsPanel(QFrame):
 
                 self.labels['is_resumed'].setText('是' if meta['is_resumed'] else '否')
                 if meta['is_resumed']:
-                    self.labels['is_resumed'].setStyleSheet('color: #7c3aed; font-weight: bold;')
+                    self.labels['is_resumed'].setStyleSheet('color: #f97316; font-weight: bold; font-size: 10pt;')
                 else:
-                    self.labels['is_resumed'].setStyleSheet('color: #0066cc;')
+                    self.labels['is_resumed'].setStyleSheet('color: #16a34a; font-weight: bold; font-size: 10pt;')
 
                 seg_idx = meta['segment_index']
                 self.labels['segment_index'].setText(str(seg_idx))
@@ -1332,21 +1360,11 @@ class StatisticsPanel(QFrame):
                 # session
                 si = meta['session_info']
                 self.labels['session_number'].setText(
-                    f"{si['session_number']}/{si['session_count']}" if si['session_number'] is not None else '-'
+                    f"Session{si['session_number']}" if si['session_number'] is not None else '-'
                 )
                 self.labels['stage_index'].setText(str(meta['stage_info']['stage_index']) if meta['stage_info']['stage_index'] is not None else '-')
 
-                # EMG frame range
-                for dev in ('emg1', 'emg2'):
-                    r = meta[f'{dev}_range']
-                    count = r.get('frame_count', 0)
-                    self.labels[f'{dev}_frame_count'].setText(str(count))
-                    if count > 0:
-                        self.labels[f'{dev}_frame_range'].setText(
-                            f"[{r['frame_id_min']}, {r['frame_id_max']}]"
-                        )
-                    else:
-                        self.labels[f'{dev}_frame_range'].setText('-')
+
 
                 # bin has
                 self.labels['segment_has_dev1_bin'].setText(
@@ -1355,7 +1373,10 @@ class StatisticsPanel(QFrame):
                 self.labels['segment_has_dev2_bin'].setText(
                     '✅' if meta['bin_info']['dev2']['has_bin'] else '❌'
                 )
-                self.labels['segment_device_count'].setText(str(meta['segment_device_count']))
+                # 手环使用情况：左（id）| 右（id）
+                dev1_name = meta['bin_info']['dev1'].get('ble_device') or '-'
+                dev2_name = meta['bin_info']['dev2'].get('ble_device') or '-'
+                self.labels['segment_device_count'].setText(f"左（{dev1_name}）| 右（{dev2_name}）")
 
                 # ===== Phase 5: segment 链路 =====
                 chain = scan_segment_chain(file_path)
@@ -3559,6 +3580,15 @@ class HDF5Tool(QMainWindow):
         self.h5_files = []
         self.init_ui()
 
+        # 恢复上次打开的目录
+        settings = QSettings("sEMG", "HDF5Tool")
+        last_dir = settings.value("last_directory", "")
+        if last_dir and os.path.isdir(last_dir):
+            self.current_directory = last_dir
+            self.dir_label.setText(last_dir)
+            self.dir_label.setStyleSheet("color: #0066cc; font-size: 10px; padding: 5px; background: #e6f3ff;")
+            self.scan_h5_files()
+
     def init_ui(self):
         self.setWindowTitle("HDF5整合工具 - 查看与同步")
         self.setMinimumSize(1300, 800)
@@ -3776,9 +3806,6 @@ class HDF5Tool(QMainWindow):
         self.viewer_tab = ViewerTab()
         self.tabs.addTab(self.viewer_tab, "查看")
 
-        self.calibrate_tab = CalibrateTab()
-        self.tabs.addTab(self.calibrate_tab, "📊 数据可视化")
-
         self.sync_tab = SyncTab()
         self.tabs.addTab(self.sync_tab, "同步（新版本）")
 
@@ -3790,6 +3817,9 @@ class HDF5Tool(QMainWindow):
 
         self.breakpoint_tab = BreakpointTab()
         self.tabs.addTab(self.breakpoint_tab, "历史断点")
+
+        self.calibrate_tab = CalibrateTab()
+        self.tabs.addTab(self.calibrate_tab, "📊 数据可视化")
 
         main_splitter.addWidget(self.tabs)
         main_splitter.setSizes([250, 1000])
@@ -3804,9 +3834,21 @@ class HDF5Tool(QMainWindow):
             self.dir_label.setStyleSheet("color: #0066cc; font-size: 10px; padding: 5px; background: #e6f3ff;")
             self.scan_h5_files()
 
+            # 记住本次选择的目录
+            QSettings("sEMG", "HDF5Tool").setValue("last_directory", dir_path)
+
     def refresh_files(self):
         if self.current_directory:
             self.scan_h5_files()
+
+    @staticmethod
+    def _get_sync_status(h5_path):
+        """快速读取 H5 文件的 sync_status 属性"""
+        try:
+            with h5py.File(h5_path, 'r') as f:
+                return f.attrs.get('sync_status', 'unknown')
+        except Exception:
+            return 'error'
 
     def scan_h5_files(self):
         self.file_list.clear()
@@ -3815,18 +3857,50 @@ class HDF5Tool(QMainWindow):
         if not self.current_directory:
             return
 
+        # 同步状态对应的背景色
+        STATUS_COLORS = {
+            'synced':      QColor('#d4edda'),  # 绿色 - 已完成
+            'sync_failed': QColor('#f8d7da'),  # 红色 - 同步失败
+            'pending':     QColor('#fff3cd'),  # 黄色 - 未同步
+            'syncing':     QColor('#fff3cd'),  # 黄色 - 同步中
+            'unknown':     QColor('#fff3cd'),  # 黄色 - 未知（未同步）
+            'error':       QColor('#e2e3e5'),  # 灰色 - 读取失败
+        }
+
+        synced_count = 0
+        failed_count = 0
+        pending_count = 0
+
         for root, dirs, files in os.walk(self.current_directory):
             for file in files:
                 if file.endswith(('.h5', '.hdf5')):
                     full_path = os.path.join(root, file)
                     self.h5_files.append(full_path)
 
+                    status = self._get_sync_status(full_path)
+                    if status == 'synced':
+                        synced_count += 1
+                    elif status == 'sync_failed':
+                        failed_count += 1
+                    else:
+                        pending_count += 1
+
                     item = QListWidgetItem(file)
                     item.setData(Qt.UserRole, full_path)
-                    item.setToolTip(full_path)
+                    item.setToolTip(f"{full_path}\n同步状态: {status}")
+                    bg_color = STATUS_COLORS.get(status, STATUS_COLORS['unknown'])
+                    item.setBackground(bg_color)
                     self.file_list.addItem(item)
 
-        self.file_count_label.setText(f"共 {len(self.h5_files)} 个文件")
+        # 汇总显示
+        parts = [f"共 {len(self.h5_files)} 个文件"]
+        if synced_count > 0:
+            parts.append(f"已同步 {synced_count}")
+        if pending_count > 0:
+            parts.append(f"未同步 {pending_count}")
+        if failed_count > 0:
+            parts.append(f"失败 {failed_count}")
+        self.file_count_label.setText(" | ".join(parts))
 
     def on_file_selected(self, item):
         self.view_btn.setEnabled(True)
