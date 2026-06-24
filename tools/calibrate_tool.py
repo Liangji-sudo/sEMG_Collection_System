@@ -219,6 +219,15 @@ class CalibrateWidget(QWidget):
         self.max_plot_points_fast = 800
         self.max_plot_points_normal = 2500
 
+        # 视频回放相关
+        self.is_playing = False           # 是否正在播放
+        self.playback_speed = 1.0         # 播放速度倍率 (0.5x / 1x / 2x)
+        self.playback_stop_pos = 0        # 播放停止位置
+        self.playback_auto_on_prompt = True  # 跳转 Prompt 后自动播放
+        self.playback_timer = QTimer()
+        self.playback_timer.setInterval(33)  # ~30fps 更新频率
+        self.playback_timer.timeout.connect(self._on_playback_tick)
+
         self.init_ui()
 
     def _active_emg_sample_rate(self):
@@ -317,6 +326,28 @@ class CalibrateWidget(QWidget):
         self.btn_next_prompt.clicked.connect(self.goto_next_prompt)
         self.btn_next_prompt.setEnabled(False)
         control_layout.addWidget(self.btn_next_prompt)
+
+        # 视频回放控制
+        control_layout.addWidget(QLabel('  |  '))
+        self.btn_play = QPushButton('▶ 播放')
+        self.btn_play.setToolTip('播放当前窗口的视频片段 (再次点击暂停)')
+        self.btn_play.clicked.connect(self.on_play_clicked)
+        self.btn_play.setEnabled(False)
+        control_layout.addWidget(self.btn_play)
+
+        control_layout.addWidget(QLabel(' 速度:'))
+        self.combo_speed = QComboBox()
+        self.combo_speed.addItems(['0.5x', '1x', '2x'])
+        self.combo_speed.setCurrentIndex(1)
+        self.combo_speed.currentIndexChanged.connect(self.on_speed_changed)
+        self.combo_speed.setToolTip('播放速度倍率')
+        control_layout.addWidget(self.combo_speed)
+
+        self.chk_auto_play = QCheckBox('跳转后播放')
+        self.chk_auto_play.setChecked(self.playback_auto_on_prompt)
+        self.chk_auto_play.stateChanged.connect(self.on_auto_play_changed)
+        self.chk_auto_play.setToolTip('跳转到 Prompt 后自动播放视频片段')
+        control_layout.addWidget(self.chk_auto_play)
 
         control_scroll = QScrollArea()
         control_scroll.setWidget(control_widget)
@@ -573,6 +604,10 @@ class CalibrateWidget(QWidget):
     def load_h5_file(self, file_path):
         """加载H5文件数据"""
         try:
+            # 停止正在进行的播放
+            if self.is_playing:
+                self._stop_playback()
+
             if self.h5_file:
                 self.h5_file.close()
 
@@ -605,6 +640,9 @@ class CalibrateWidget(QWidget):
             self.current_pos = 0
             self.slider.setValue(0)
             self.update_plots()
+
+            # 有数据即可启用播放按钮
+            self.btn_play.setEnabled(True)
 
             print(f'[CalibrateTool] 已加载文件: {file_path}')
 
@@ -1329,10 +1367,13 @@ class CalibrateWidget(QWidget):
         if not self.video_enabled:
             return
 
-        # 节流：拖动时减少视频更新频率
+        # 节流：拖动时减少视频更新频率；播放时不节流
         now = time.time()
-        throttle = (self._video_update_throttle_drag if self.is_dragging
-                    else self._video_update_throttle_static)
+        if self.is_playing:
+            throttle = 0  # 播放时不节流，确保视频流畅
+        else:
+            throttle = (self._video_update_throttle_drag if self.is_dragging
+                        else self._video_update_throttle_static)
         if now - self._last_video_update < throttle:
             return
         self._last_video_update = now
@@ -1448,6 +1489,9 @@ class CalibrateWidget(QWidget):
 
     def on_slider_pressed(self):
         """滑块按下开始拖动"""
+        # 用户手动拖动时停止自动播放
+        if self.is_playing:
+            self._stop_playback()
         self.is_dragging = True
 
     def on_slider_released(self):
@@ -1863,11 +1907,20 @@ class CalibrateWidget(QWidget):
         max_pos = self.slider.maximum()
         target_pos = max(0, min(target_pos, max_pos))
 
+        # 先停止当前播放（如果有的话）
+        if self.is_playing:
+            self._stop_playback()
+
         # 更新滑块位置（会触发update_plots）
         self.slider.setValue(target_pos)
 
         # 更新prompt信息显示
         self._update_prompt_info()
+
+        # 自动播放（如果启用且有视频）
+        if self.playback_auto_on_prompt and self.video_enabled:
+            # 使用 QTimer.singleShot 确保 UI 先刷新再开始播放
+            QTimer.singleShot(100, self._start_playback)
 
     def _update_prompt_info(self):
         """更新Prompt信息显示"""
@@ -1889,8 +1942,94 @@ class CalibrateWidget(QWidget):
         self.btn_prev_prompt.setEnabled(self.current_prompt_idx > 0)
         self.btn_next_prompt.setEnabled(self.current_prompt_idx < total - 1)
 
+    # ───────────────── 视频回放相关方法 ─────────────────
+
+    def on_play_clicked(self):
+        """播放/暂停按钮"""
+        if self.is_playing:
+            self._stop_playback()
+        else:
+            self._start_playback()
+
+    def _start_playback(self):
+        """开始播放：从当前滑块位置播放到窗口末尾或数据末尾"""
+        if self.h5_file is None:
+            return
+        max_len = self.get_max_data_length()
+        if max_len == 0:
+            return
+
+        # 播放范围：当前窗口大小 × 2（给用户看到 prompt 前后足够内容）
+        # 如果从 prompt 跳转来，current_pos 已在 prompt 前 25% window 处
+        play_duration_samples = self.window_size * 2
+        self.playback_stop_pos = min(self.current_pos + play_duration_samples, max_len)
+
+        self.is_playing = True
+        self.btn_play.setText('⏸ 暂停')
+        self.btn_play.setEnabled(True)
+        self.playback_timer.start()
+
+        # 播放期间禁止视频节流（确保每帧都刷新）
+        self._last_video_update = 0
+
+        print(f'[CalibrateTool] 开始播放: pos={self.current_pos} → stop={self.playback_stop_pos}, '
+              f'speed={self.playback_speed}x')
+
+    def _stop_playback(self):
+        """停止播放"""
+        self.is_playing = False
+        self.playback_timer.stop()
+        self.btn_play.setText('▶ 播放')
+        # 停止时精确刷新到最终位置
+        self._last_video_update = 0
+        self._do_update_plots()
+        print(f'[CalibrateTool] 播放停止: pos={self.current_pos}')
+
+    def _on_playback_tick(self):
+        """播放定时器触发：推进滑块位置"""
+        if not self.is_playing or self.h5_file is None:
+            self._stop_playback()
+            return
+
+        sample_rate = self._active_emg_sample_rate()
+        # 每次 tick 推进的样本数 = 采样率 × 速度倍率 / 30fps
+        step = max(1, int(sample_rate * self.playback_speed / 30.0))
+        new_pos = self.current_pos + step
+
+        # 检查是否到达停止位置
+        if new_pos >= self.playback_stop_pos:
+            self.current_pos = self.playback_stop_pos
+            self.slider.setValue(min(self.current_pos, self.slider.maximum()))
+            self._stop_playback()
+            return
+
+        self.current_pos = new_pos
+        # 阻塞信号避免重复触发 on_slider_changed
+        self.slider.blockSignals(True)
+        self.slider.setValue(min(self.current_pos, self.slider.maximum()))
+        self.slider.blockSignals(False)
+        self.lbl_pos.setText(f'位置: {self.current_pos}')
+
+        # 直接更新图表（绕过 update_timer 延迟）
+        self.update_plots()
+
+    def on_speed_changed(self, idx):
+        """播放速度改变"""
+        speeds = [0.5, 1.0, 2.0]
+        if 0 <= idx < len(speeds):
+            self.playback_speed = speeds[idx]
+            print(f'[CalibrateTool] 播放速度: {self.playback_speed}x')
+
+    def on_auto_play_changed(self, state):
+        """自动播放选项改变"""
+        self.playback_auto_on_prompt = (state == Qt.Checked)
+
+    # ─────────── 回放方法结束 ───────────
+
     def closeEvent(self, event):
         """关闭窗口时清理资源"""
+        if self.is_playing:
+            self._stop_playback()
         self._close_videos()
         if self.h5_file:
             self.h5_file.close()
