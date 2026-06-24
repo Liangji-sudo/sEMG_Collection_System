@@ -315,17 +315,17 @@ class CalibrateWidget(QWidget):
         control_layout.addWidget(QLabel('  |  '))
         prompt_btn_style = (
             'QPushButton {'
-            '  font-size: 12px; font-weight: bold; padding: 6px 16px;'
-            '  border-radius: 5px; border: none;'
+            '  font-size: 14px; font-weight: bold; padding: 8px 20px;'
+            '  border-radius: 6px; border: none;'
             '}'
             'QPushButton:enabled {'
             '  color: #fff;'
             '}'
             'QPushButton:disabled {'
-            '  color: #999; background-color: #ddd;'
+            '  color: #aaa; background-color: #e0e0e0;'
             '}'
         )
-        self.btn_prev_prompt = QPushButton('◀ 上一个Prompt')
+        self.btn_prev_prompt = QPushButton('⏮  上一个Prompt')
         self.btn_prev_prompt.clicked.connect(self.goto_prev_prompt)
         self.btn_prev_prompt.setEnabled(False)
         self.btn_prev_prompt.setStyleSheet(
@@ -337,11 +337,15 @@ class CalibrateWidget(QWidget):
         control_layout.addWidget(self.btn_prev_prompt)
 
         self.lbl_prompt_info = QLabel('Prompt: -/-')
-        self.lbl_prompt_info.setMinimumWidth(130)
-        self.lbl_prompt_info.setStyleSheet('font-size: 12px; font-weight: bold; color: #333;')
+        self.lbl_prompt_info.setMinimumWidth(140)
+        self.lbl_prompt_info.setAlignment(Qt.AlignCenter)
+        self.lbl_prompt_info.setStyleSheet(
+            'font-size: 13px; font-weight: bold; color: #333;'
+            'padding: 4px 8px; background-color: #f0f0f0; border-radius: 4px;'
+        )
         control_layout.addWidget(self.lbl_prompt_info)
 
-        self.btn_next_prompt = QPushButton('下一个Prompt ▶')
+        self.btn_next_prompt = QPushButton('下一个Prompt  ⏭')
         self.btn_next_prompt.clicked.connect(self.goto_next_prompt)
         self.btn_next_prompt.setEnabled(False)
         self.btn_next_prompt.setStyleSheet(
@@ -1880,34 +1884,71 @@ class CalibrateWidget(QWidget):
     def draw_prompt_markers(self, ax, time_start, time_end, show_text=True):
         """在图表上绘制Prompt标签
 
-        Args:
-            ax: matplotlib axes对象
-            time_start: 显示窗口开始时间（秒）
-            time_end: 显示窗口结束时间（秒）
-            show_text: 是否显示文字标签
+        - 红线上方：prompt 名称
+        - 红线下方：时间戳 (s)
+        - 窗口内 ≥2 个 prompt：标注 start/end 时间 + 间隔
         """
         if self.prompt_names is None or self.prompt_times is None:
             return
 
-        # 获取当前Y轴范围
         ylim = ax.get_ylim()
+        y_range = ylim[1] - ylim[0]
 
-        # 遍历所有prompt，绘制在当前时间窗口内的
-        for name, time in zip(self.prompt_names, self.prompt_times):
-            if time_start <= time <= time_end:
-                # 绘制垂直线
-                ax.axvline(x=time, color='red', linestyle='--', linewidth=1, alpha=0.7)
-                # 在顶部添加标签文字
-                if show_text:
-                    # 长文本换行处理（每8个字符换行）
-                    max_chars = 8
-                    if len(name) > max_chars:
-                        wrapped_name = '\n'.join([name[i:i+max_chars] for i in range(0, len(name), max_chars)])
-                    else:
-                        wrapped_name = name
-                    ax.text(time, ylim[1], wrapped_name, rotation=0, verticalalignment='bottom',
-                           horizontalalignment='left', fontsize=11, color='red', alpha=0.9,
-                           fontweight='bold')
+        # 收集当前窗口内的 prompt
+        in_window = []
+        for name, t in zip(self.prompt_names, self.prompt_times):
+            if time_start <= t <= time_end:
+                in_window.append((name, float(t)))
+
+        if not in_window:
+            return
+
+        n = len(in_window)
+        first_t = in_window[0][1]
+        last_t = in_window[-1][1]
+
+        for name, t in in_window:
+            # 红色虚线
+            ax.axvline(x=t, color='red', linestyle='--', linewidth=1, alpha=0.7)
+
+            if not show_text:
+                continue
+
+            # 上方：名称（换行处理）
+            max_chars = 8
+            if len(name) > max_chars:
+                wrapped_name = '\n'.join([name[i:i+max_chars] for i in range(0, len(name), max_chars)])
+            else:
+                wrapped_name = name
+            ax.text(t, ylim[1] - y_range * 0.02, wrapped_name,
+                    rotation=0, verticalalignment='bottom', horizontalalignment='left',
+                    fontsize=11, color='red', alpha=0.9, fontweight='bold')
+
+            # 下方：时间戳
+            ax.text(t, ylim[0] + y_range * 0.02, f'{t:.2f}s',
+                    rotation=0, verticalalignment='top', horizontalalignment='left',
+                    fontsize=8, color='#c0392b', alpha=0.8, style='italic')
+
+        # 窗口内 ≥2 个 prompt：标注 start/end 和间隔
+        if n >= 2 and show_text and last_t > first_t:
+            interval = last_t - first_t
+            # start 标注（在第一个 prompt 左下方）
+            ax.text(first_t, ylim[0] + y_range * 0.08, f'start: {first_t:.2f}s',
+                    fontsize=8, color='#e74c3c', alpha=0.85,
+                    fontweight='bold', style='italic')
+            # end 标注（在最后一个 prompt 右下方）
+            ax.text(last_t, ylim[0] + y_range * 0.08, f'end: {last_t:.2f}s',
+                    fontsize=8, color='#e74c3c', alpha=0.85,
+                    fontweight='bold', style='italic',
+                    horizontalalignment='right')
+            # 间隔标注（两线之间顶部）
+            mid_t = (first_t + last_t) / 2.0
+            ax.annotate(f'Δ {interval:.2f}s',
+                        xy=(mid_t, ylim[1] - y_range * 0.02),
+                        fontsize=9, color='#d63031', alpha=0.85,
+                        fontweight='bold',
+                        ha='center', va='bottom',
+                        bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffeaa7', alpha=0.8, edgecolor='#fdcb6e'))
 
     def goto_prev_prompt(self):
         """跳转到上一个Prompt"""
