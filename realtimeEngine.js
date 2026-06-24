@@ -366,9 +366,10 @@ class RealtimeEngine extends EventEmitter {
         // sd_filenames_updated 事件作为兜底（见 onSdFilenamesUpdated）
 
         // 自动启动摄像头录制（无需按空格触发）
+        // 使用 collectionDataStartTs（采集会话起始时间），与 EMG 共用同一时间基准
         if (!this.isTestMode && !this.videoRecordingStarted) {
-            const startTs = Date.now() / 1000;
-            console.log('[realtimeEngine] 🎥 自动启动摄像头录制...');
+            const startTs = this.collectionDataStartTs;
+            console.log('[realtimeEngine] 🎥 自动启动摄像头录制（t=', startTs, '）...');
             this._markVideoRecordingStart(startTs, stageName).catch(err => {
                 console.error('[realtimeEngine] 自动启动摄像头录制失败:', err);
             });
@@ -727,7 +728,8 @@ class RealtimeEngine extends EventEmitter {
             try {
                 const startResult = await this.sendCameraCommand('start_continuous_recording', {
                     side: cameraSide,
-                    output_filename: videoFileName
+                    output_filename: videoFileName,
+                    start_timestamp: timestamp
                 });
                 if (startResult.success) {
                     console.log(`[realtimeEngine] ✅ ${cameraSide}侧录制已启动`);
@@ -751,7 +753,8 @@ class RealtimeEngine extends EventEmitter {
             try {
                 const startResult = await this.sendCameraCommand('start_continuous_recording', {
                     side: cameraSide,
-                    output_filename: videoFileName
+                    output_filename: videoFileName,
+                    start_timestamp: timestamp
                 });
                 if (startResult.success) {
                     console.log(`[realtimeEngine] ✅ ${cameraSide}侧录制已启动`);

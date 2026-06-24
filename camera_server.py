@@ -305,8 +305,14 @@ class FrameRecorder:
         self.recording_stopped_at = None
         self.frame_count = 0
 
-    def start(self, output_filename):
-        """开始录制 — 打开原始 MJPEG 文件"""
+    def start(self, output_filename, start_timestamp=None):
+        """开始录制 — 打开原始 MJPEG 文件
+
+        Args:
+            output_filename: 输出文件名
+            start_timestamp: 可选，前端传入的统一时间戳（Unix秒）。
+                             如果提供，优先使用；否则使用本地 time.time()。
+        """
         if self.recording:
             print(f'[FrameRecorder] [{self.side}] 已在录制中')
             return True
@@ -328,7 +334,11 @@ class FrameRecorder:
             return False
 
         self.recording = True
-        self.recording_started_at = time.time()
+        # 优先使用传入的统一时间戳，保证与 EMG 时间基准一致
+        if start_timestamp is not None:
+            self.recording_started_at = float(start_timestamp)
+        else:
+            self.recording_started_at = time.time()
         self.frame_count = 0
         print(f'[FrameRecorder] [{self.side}] \u25B6 开始录制: {self.output_path}')
         print(f'[FrameRecorder] [{self.side}]   原始MJPEG: {self.raw_path}')
@@ -1001,9 +1011,11 @@ class CameraServer:
         if not output_filename:
             return {'success': False, 'error': '缺少 output_filename 参数'}
 
+        start_timestamp = data.get('start_timestamp')  # 前端传入的统一时间戳
+
         # 创建帧录制器（复用MJPEG管道，不创建新的ffmpeg进程）
         recorder = FrameRecorder(side, self.ffmpeg_path, self.output_dir)
-        success = recorder.start(output_filename)
+        success = recorder.start(output_filename, start_timestamp=start_timestamp)
 
         if success:
             self.recorders[side] = recorder
