@@ -1976,6 +1976,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 // 保存后续的真正手势库（去掉 sync prompt）
                 this._syncRemainingGestures = this.gestures.filter(g => !g._isSyncPrompt);
 
+                // 【Bugfix】续采模式下保存当前手势索引，防止同步阶段覆盖
+                this._resumeGestureStartIndex = this._isResumeMode ? this.currentGestureIndex : 0;
+
                 const syncGesture = {
                     id: 'sync_alignment',
                     name: 'sync_alignment',
@@ -1987,6 +1990,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
                 console.log('[Collection] ★★★ 同步阶段：独立运行精准对齐同步prompt ★★★');
                 console.log('[Collection] ★ 同步后剩余手势:', this._syncRemainingGestures.length, '个');
+                if (this._isResumeMode) {
+                    console.log('[Collection] ★ 续采模式：同步后将从手势索引', this._resumeGestureStartIndex, '继续');
+                }
 
                 // Phase 1: 只播放同步prompt
                 this.currentPhase = 'sync_prepare';
@@ -2098,8 +2104,15 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             // 恢复真正的手势库（不含 sync prompt）
             this.gestures = this._syncRemainingGestures || this.gestures.filter(g => !g._isSyncPrompt);
-            this.currentGestureIndex = 0;
+
+            // 【Bugfix】续采模式下恢复断点手势索引，不为0
+            const resumeStartIndex = this._resumeGestureStartIndex || 0;
+            this.currentGestureIndex = this._isResumeMode ? resumeStartIndex : 0;
             this._syncPhaseActive = false;
+
+            if (this._isResumeMode && resumeStartIndex > 0) {
+                console.log('[Collection] ★ 续采模式：恢复手势索引到', resumeStartIndex);
+            }
 
             // 显示过渡信息
             this.updateGestureDisplay({
@@ -2128,7 +2141,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                     this.currentPhase = 'prepare';
                     this.showPreparation(() => {
                         if (this._shuffleMode) {
-                            this.startShuffleModeAnimation({ startIndex: 0 });
+                            this.startShuffleModeAnimation({ startIndex: resumeStartIndex });
                         } else {
                             this.startNextGesture();
                         }
@@ -2214,6 +2227,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 console.log('[Collection] 续采从手势索引', startIndex, '开始');
             }
 
+            this.updateProgress();  // 【Bugfix】乱序模式启动时初始化底部进度条
+
             this.currentPhase = 'gesture';
             this.updateGestureList();
 
@@ -2251,6 +2266,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             // 更新计数
             this.currentGestureIndex = index;
             this.gestureRepeatCount = 1;
+            this.updateProgress();  // 【Bugfix】乱序模式下同步更新底部进度条
 
             // 获取原始手势名称（去除shuffle_前缀）
             const gesture = this.gestures[index];
@@ -3084,7 +3100,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
         updateProgress() {
             const total = this.gestures.length;
             const current = this.currentGestureIndex;
-            const percent = total > 0 ? (current / total) * 100 : 0;
+            // 1-based 显示，与 labjs 动画右下角进度一致
+            const displayCurrent = Math.min(current + 1, total);
+            const percent = total > 0 ? (displayCurrent / total) * 100 : 0;
 
             const progressFill = document.getElementById('progressFill');
             const progressText = document.getElementById('progressText');
@@ -3092,7 +3110,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             if (progressFill) progressFill.style.width = `${percent}%`;
             if (progressText) {
-                progressText.textContent = `${current} / ${total} 手势`;
+                progressText.textContent = `${displayCurrent} / ${total} 手势`;
             }
 
             // 乱序模式：显示阶段标签 + 变色
