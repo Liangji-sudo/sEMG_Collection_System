@@ -3672,6 +3672,7 @@ class SyncTab(QWidget):
         self.log_text.append("=" * 50)
         if success:
             QMessageBox.information(self, "完成", message)
+            self.clear_h5_files()
         else:
             QMessageBox.warning(self, "错误", message)
         # 刷新主窗口文件列表颜色（sync_status 可能已变更）
@@ -4147,6 +4148,8 @@ class OneToManySyncTab(QWidget):
         for r in results:
             if r.get('status') != 'success' and r.get('status') != 'skipped':
                 self.log(f"  FAIL {r['file']}: {r.get('reason','?')}")
+        if success_count > 0:
+            self.clear_h5_list()
         # 刷新主窗口文件列表颜色
         main_win = self.window()
         if hasattr(main_win, 'refresh_file_list_colors'):
@@ -4377,6 +4380,8 @@ class SyncToolsTab(QWidget):
         self.log(f"\n=== 擦除结束: {success_count}/{total} 成功 ===")
         for e in errors:
             self.log(f"  ERROR: {e}")
+        if success_count > 0:
+            self.clear_h5_list()
         # 刷新主窗口文件列表颜色（sync_status 已重置回 pending）
         main_win = self.window()
         if hasattr(main_win, 'refresh_file_list_colors'):
@@ -4815,7 +4820,6 @@ class HDF5Tool(QMainWindow):
     def _on_tab_changed(self, index):
         """标签页切换时自动加载当前选中文件到目标标签页，
         同时关闭其他标签页的 H5 文件句柄，避免 Windows 文件锁冲突。
-        切换到查看页时刷新文件列表颜色；离开同步/擦除页时清空文件列表。
         """
         calibrate_tab = getattr(self, 'calibrate_tab', None)
         sync_calib_tab = getattr(self, 'sync_calibration_tab', None)
@@ -4823,16 +4827,6 @@ class HDF5Tool(QMainWindow):
         # 切换到查看页时刷新主文件列表颜色（同步/擦除操作可能改变了 sync_status）
         if index == 0:
             self.refresh_file_list_colors()
-
-        # 离开同步/擦除标签页时清空其文件列表（避免下次使用时残留旧记录）
-        prev_index = getattr(self, '_prev_tab_index', -1)
-        if prev_index in (1, 2, 3):
-            tab = self.tabs.widget(prev_index)
-            if hasattr(tab, 'clear_h5_files'):
-                tab.clear_h5_files()
-            elif hasattr(tab, 'clear_h5_list'):
-                tab.clear_h5_list()
-        self._prev_tab_index = index
 
         if calibrate_tab is None and sync_calib_tab is None:
             return
