@@ -257,7 +257,10 @@ class RealtimeEngine extends EventEmitter {
                 case 'mocap_sdk_disconnect': this.onMocapSdkDisconnect(); break;
                 case 'mocap_sdk_get_status': this.onMocapSdkGetStatus(); break;
 
-                default: console.log(`[realtimeEngine] 未知命令: ${action}`);
+                default:
+                    console.warn(`[realtimeEngine] 未知命令: ${action}`);
+                    // 【修复】向前端发送错误响应，避免前端 Promise 永久挂起
+                    this.broadcast({ type: 'command_error', action, error: `未知命令: ${action}` });
             }
 
         } catch (error) {

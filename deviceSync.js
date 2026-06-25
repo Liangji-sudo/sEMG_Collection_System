@@ -237,7 +237,8 @@ class DeviceSync extends EventEmitter {
         return {
             isConnected: this.isConnected,
             source: '蓝牙设备',
-            deviceMac: 'dc:b4:d9:1f:52:be',
+            // 【修复】从全局状态获取实际 MAC 地址，替代硬编码调试值
+            deviceMac: (this.bleMacAddress) || '',
             scriptName: 'scan-connect.py',
             dataFormat: 'JSON格式，包含5组16通道数据'
         };
