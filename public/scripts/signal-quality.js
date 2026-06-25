@@ -231,8 +231,13 @@
     function _startFlashTimer() {
         if (_flashTimer) return;
         _flashTimer = setInterval(function() {
-            _flashState = !_flashState;
+            // 【修复 M21】仅在存在削波通道时执行闪烁，否则停止定时器节省 CPU
             var clippedDots = document.querySelectorAll('.channel-status-dot[data-clipped="1"]');
+            if (clippedDots.length === 0) {
+                _stopFlashTimer();
+                return;
+            }
+            _flashState = !_flashState;
             for (var i = 0; i < clippedDots.length; i++) {
                 clippedDots[i].style.border = _flashState ? '2px solid red' : 'none';
             }

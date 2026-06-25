@@ -390,12 +390,13 @@
          */
         startRealtime() {
             if (this.isRunning) return;
-            
-            this.isRunning = true;
-            
+
+            // 【修复 M18】先连接再设置 isRunning，避免连接失败时 isRunning 保持 true
             // 连接WebSocket接收真实数据
             this.dataReceiver.connect();
-            
+
+            this.isRunning = true;
+
             console.log('[Waveform] 启动实时数据显示');
         }
 

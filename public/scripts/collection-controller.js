@@ -107,6 +107,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this._syncRemainingGestures = null;     // 同步阶段剩余手势列表
             this._resumeGestureStartIndex = 0;      // 续采模式下手势起始索引
             this._calibrationDelayTimer = null;     // 标定完成延迟定时器
+            this._repeatTimer = null;               // 手势重复间隔定时器（独立于 phaseTimer）
 
             console.log('[Collection] 构造函数结束');
         }
@@ -1408,6 +1409,10 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 clearInterval(this.countdownTimer);
                 this.countdownTimer = null;
             }
+            if (this._repeatTimer) {
+                clearTimeout(this._repeatTimer);
+                this._repeatTimer = null;
+            }
             if (this.continualProgressTimer) {
                 clearInterval(this.continualProgressTimer);
                 this.continualProgressTimer = null;
@@ -1600,6 +1605,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             if (this.continualProgressTimer) { clearInterval(this.continualProgressTimer); this.continualProgressTimer = null; }
             if (this.calibrationTimer) { clearInterval(this.calibrationTimer); this.calibrationTimer = null; }
             if (this._restCountdownTimer) { clearInterval(this._restCountdownTimer); this._restCountdownTimer = null; }
+            if (this._repeatTimer) { clearTimeout(this._repeatTimer); this._repeatTimer = null; }
 
             // 停止动画
             if (window.discreteGestureAnimation) {
@@ -2526,14 +2532,17 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             const displayTime = this.currentExecutionParams.gestureDisplayTime * 1000;
             const intervalTime = this.currentExecutionParams.intervalBetweenRepeat * 1000;
             
+            // 【修复 M5】使用独立 timer 引用，避免 stopTask 只能清除其中一个
             this.phaseTimer = setTimeout(() => {
+                if (!this._isRunning) return; // 防止停止后继续执行
                 this.updateGestureDisplay({
                     name: '准备下一次',
                     instruction: '...',
                     showCountdown: false
                 });
-                
-                this.phaseTimer = setTimeout(() => {
+
+                this._repeatTimer = setTimeout(() => {
+                    if (!this._isRunning) return;
                     this.doGestureRepeatSimple();
                 }, intervalTime);
             }, displayTime);
