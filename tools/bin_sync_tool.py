@@ -965,148 +965,9 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
         log(f"同步完成！2kHz数据已写入 {ds_2khz_name}")
 
         # ============================================================
-        # == IMU 100Hz 同步：利用 EMG 2kHz SD帧号作为锚点 ==
+        # == IMU 100Hz 同步：委托给 _sync_imu_100hz（支持 1-4 动态数量）==
         # ============================================================
-        imu_result = {'imu_status': 'skipped'}
-
-        if imu_parser is not None:
-            log("正在同步IMU 100Hz数据...")
-
-            # 从EMG 2kHz数据中提取所有SD帧号，映射到IMU帧号
-            emg_sd_frame_ids = data_2khz['sd_frame_id']
-            imu_frame_ids_all = emg_sd_frame_ids // EMG_IMU_RATIO  # EMG帧号/20 = IMU帧号
-
-            # 去重并排序，得到需要的IMU帧号列表
-            imu_frame_ids_unique = np.unique(imu_frame_ids_all)
-            num_imu_frames = len(imu_frame_ids_unique)
-
-            log(f"EMG SD帧号范围: [{emg_sd_frame_ids[0]}, {emg_sd_frame_ids[-1]}]")
-            log(f"对应IMU帧号范围: [{imu_frame_ids_unique[0]}, {imu_frame_ids_unique[-1]}], 共 {num_imu_frames} 帧")
-
-            # 构建IMU 100Hz数据
-            imu_100hz_dtype = np.dtype([
-                ("acc", "<f4", (3,)),
-                ("gyr", "<f4", (3,)),
-                ("mag", "<f4", (3,)),
-                ("sd_frame_id", "<u4"),
-                ("time", "<f8")
-            ])
-
-            data_imu_100hz = np.empty(num_imu_frames, dtype=imu_100hz_dtype)
-            imu_filled = 0
-            imu_missing = 0
-
-            for idx, imu_fid in enumerate(imu_frame_ids_unique):
-                imu_fid = int(imu_fid)
-                imu_data = imu_parser.frames.get(imu_fid)
-
-                if imu_data is not None:
-                    imu1, imu2 = imu_data
-                    # 使用第一个IMU芯片的数据（与BLE上报一致）
-                    data_imu_100hz[idx]['acc'] = np.array(imu1['acc'], dtype=np.float32)
-                    data_imu_100hz[idx]['gyr'] = np.array(imu1['gyr'], dtype=np.float32)
-                    data_imu_100hz[idx]['mag'] = np.array(imu1['mag'], dtype=np.float32)
-                    imu_filled += 1
-                else:
-                    # IMU帧丢失，用零填充
-                    data_imu_100hz[idx]['acc'] = np.zeros(3, dtype=np.float32)
-                    data_imu_100hz[idx]['gyr'] = np.zeros(3, dtype=np.float32)
-                    data_imu_100hz[idx]['mag'] = np.zeros(3, dtype=np.float32)
-                    imu_missing += 1
-
-                data_imu_100hz[idx]['sd_frame_id'] = imu_fid
-
-                # 插值时间戳：根据EMG时间戳推算
-                # 找到对应EMG帧的时间戳（该IMU帧对应的第一个EMG帧）
-                emg_idx = idx * EMG_IMU_RATIO
-                if emg_idx < len(data_2khz):
-                    data_imu_100hz[idx]['time'] = data_2khz[emg_idx]['time']
-                elif len(data_2khz) > 0:
-                    data_imu_100hz[idx]['time'] = data_2khz[-1]['time'] + (idx - num_imu_frames + 1) * 0.01
-                else:
-                    data_imu_100hz[idx]['time'] = idx * 0.01
-
-            log(f"IMU 100Hz数据构建完成: {imu_filled} 帧来自bin, {imu_missing} 帧缺失填零")
-
-            # 【修改】写入 2 个 IMU 100Hz 数据集（每设备有 2 个 IMU 传感器：a 和 b）
-            # imu1a_100hz / imu1b_100hz 或 imu2a_100hz / imu2b_100hz
-            ds_imu_a_name = f"imu{device_id}a_100hz"
-            ds_imu_b_name = f"imu{device_id}b_100hz"
-            ds_imu_name_legacy = f"imu{device_id}_100hz"  # 兼容旧版单一数据集
-
-            # 构建 IMU_B 的数据（与 IMU_A 类似，但使用 imu2 的数据）
-            data_imu_b_100hz = np.empty(num_imu_frames, dtype=imu_100hz_dtype)
-            imu_b_filled = 0
-            imu_b_missing = 0
-
-            for idx, imu_fid in enumerate(imu_frame_ids_unique):
-                imu_fid = int(imu_fid)
-                imu_data = imu_parser.frames.get(imu_fid)
-
-                if imu_data is not None:
-                    imu1, imu2 = imu_data
-                    # IMU_B 使用第二个 IMU 芯片的数据
-                    data_imu_b_100hz[idx]['acc'] = np.array(imu2['acc'], dtype=np.float32)
-                    data_imu_b_100hz[idx]['gyr'] = np.array(imu2['gyr'], dtype=np.float32)
-                    data_imu_b_100hz[idx]['mag'] = np.array(imu2['mag'], dtype=np.float32)
-                    imu_b_filled += 1
-                else:
-                    data_imu_b_100hz[idx]['acc'] = np.zeros(3, dtype=np.float32)
-                    data_imu_b_100hz[idx]['gyr'] = np.zeros(3, dtype=np.float32)
-                    data_imu_b_100hz[idx]['mag'] = np.zeros(3, dtype=np.float32)
-                    imu_b_missing += 1
-
-                data_imu_b_100hz[idx]['sd_frame_id'] = imu_fid
-                data_imu_b_100hz[idx]['time'] = data_imu_100hz[idx]['time']  # 使用相同的时间戳
-
-            # 写入 IMU_A 数据集
-            if ds_imu_a_name in f:
-                ds_imu_a = f[ds_imu_a_name]
-                ds_imu_a.resize(num_imu_frames, axis=0)
-                ds_imu_a[:] = data_imu_100hz
-                ds_imu_a.attrs["sample_rate"] = 100
-                ds_imu_a.attrs["source_bin"] = os.path.basename(imu_bin_path)
-                ds_imu_a.attrs["sync_time"] = datetime.now().isoformat()
-                ds_imu_a.attrs["filled_frames"] = imu_filled
-                ds_imu_a.attrs["missing_frames"] = imu_missing
-                log(f"IMU_A 同步完成！100Hz数据已写入 {ds_imu_a_name}")
-            elif ds_imu_name_legacy in f:
-                # 兼容旧版：如果只有旧版数据集，则只写入 IMU_A
-                ds_imu = f[ds_imu_name_legacy]
-                ds_imu.resize(num_imu_frames, axis=0)
-                ds_imu[:] = data_imu_100hz
-                ds_imu.attrs["sample_rate"] = 100
-                ds_imu.attrs["source_bin"] = os.path.basename(imu_bin_path)
-                ds_imu.attrs["sync_time"] = datetime.now().isoformat()
-                ds_imu.attrs["filled_frames"] = imu_filled
-                ds_imu.attrs["missing_frames"] = imu_missing
-                log(f"使用旧版数据集名 {ds_imu_name_legacy}")
-            else:
-                log(f"警告: 数据集 {ds_imu_a_name} 不存在，跳过 IMU_A 写入")
-
-            # 写入 IMU_B 数据集
-            if ds_imu_b_name in f:
-                ds_imu_b = f[ds_imu_b_name]
-                ds_imu_b.resize(num_imu_frames, axis=0)
-                ds_imu_b[:] = data_imu_b_100hz
-                ds_imu_b.attrs["sample_rate"] = 100
-                ds_imu_b.attrs["source_bin"] = os.path.basename(imu_bin_path)
-                ds_imu_b.attrs["sync_time"] = datetime.now().isoformat()
-                ds_imu_b.attrs["filled_frames"] = imu_b_filled
-                ds_imu_b.attrs["missing_frames"] = imu_b_missing
-                log(f"IMU_B 同步完成！100Hz数据已写入 {ds_imu_b_name}")
-            else:
-                log(f"数据集 {ds_imu_b_name} 不存在，跳过 IMU_B 写入")
-
-            log(f"IMU同步完成！A: {imu_filled}帧, B: {imu_b_filled}帧")
-            imu_result = {
-                'imu_status': 'success',
-                'imu_frames': num_imu_frames,
-                'imu_filled': imu_filled,
-                'imu_missing': imu_missing,
-                'imu_b_filled': imu_b_filled,
-                'imu_b_missing': imu_b_missing
-            }
+        imu_result = _sync_imu_100hz(f, emg_parser, imu_parser, data_2khz, device_id)
 
         # 更新sync_status（仅当set_synced=True时）
         if set_synced:
@@ -1507,6 +1368,118 @@ def _verify_imu_frame_ids(imu_bin_path, num_imus, max_frames=100):
     return result
 
 
+def _verify_imu_count_fits_bin(imu_bin_path, num_imus, min_consecutive=5):
+    """快速验证：给定的 num_imus 能否正确解析 bin 文件的帧结构。
+
+    用于交叉验证：当 bin 自动检测与 BLE 数据冲突时，
+    分别验证两个候选值，选择帧 ID 递增序列更长的一方。
+
+    Returns:
+        dict: _verify_imu_frame_ids 的完整结果（包含 score, longest_run 等）
+    """
+    return _verify_imu_frame_ids(imu_bin_path, num_imus, max_frames=200)
+
+
+def _validate_imu_sensor_data(all_data, num_imus, sample_size=500):
+    """校验每个 IMU 传感器的数据质量，标记疑似损坏的传感器。
+
+    检测指标：
+    1. 非零率 < 10% → 疑似损坏（正常 IMU 数据几乎不会精确为零）
+    2. Acc 范围超过 ±8g → 疑似字节错位（正常 ±2g 传感器 + 余量）
+    3. 方差接近 0 → 传感器卡死（输出恒定值）
+    4. 含 NaN/Inf → 数据损坏
+
+    Args:
+        all_data: list of np.ndarray, 每个元素是一个传感器的 100hz 数据
+        num_imus: 传感器总数
+        sample_size: 抽样校验的帧数（取均匀分布的样本）
+
+    Returns:
+        dict: {
+            'active': [0, 1, ...],      # 正常工作的传感器索引
+            'inactive': [2, ...],        # 疑似损坏的传感器索引
+            'sensors': [                 # 每个传感器的详细统计
+                {'idx': 0, 'non_zero_rate': 0.98, 'acc_range': [-1.5, 1.5],
+                 'gyr_range': [-200, 200], 'issue': None},
+                {'idx': 1, 'non_zero_rate': 0.02, 'acc_range': [0, 0],
+                 'gyr_range': [0, 0], 'issue': 'near_zero'},
+            ]
+        }
+    """
+    if num_imus == 0 or not all_data:
+        return {'active': [], 'inactive': [], 'sensors': []}
+
+    result = {'active': [], 'inactive': [], 'sensors': []}
+
+    for k in range(num_imus):
+        data = all_data[k]
+        n_frames = len(data)
+        if n_frames == 0:
+            result['sensors'].append({
+                'idx': k, 'non_zero_rate': 0.0,
+                'acc_range': [0, 0], 'gyr_range': [0, 0],
+                'issue': 'empty_dataset'
+            })
+            result['inactive'].append(k)
+            continue
+
+        # 均匀抽样
+        indices = np.linspace(0, n_frames - 1, min(sample_size, n_frames), dtype=int)
+        sample = data[indices]
+
+        acc = sample['acc']
+        gyr = sample['gyr']
+
+        # 指标 1: 非零率
+        acc_nonzero = np.count_nonzero(acc)
+        gyr_nonzero = np.count_nonzero(gyr)
+        total_vals = acc.size + gyr.size
+        non_zero_rate = (acc_nonzero + gyr_nonzero) / total_vals if total_vals > 0 else 0.0
+
+        # 指标 2: 值范围
+        acc_min, acc_max = (float(np.min(acc)), float(np.max(acc))) if acc.size > 0 else (0, 0)
+        gyr_min, gyr_max = (float(np.min(gyr)), float(np.max(gyr))) if gyr.size > 0 else (0, 0)
+
+        # 指标 3: 方差（防止恒定值）
+        acc_var = float(np.var(acc)) if acc.size > 0 else 0.0
+        gyr_var = float(np.var(gyr)) if gyr.size > 0 else 0.0
+
+        # 指标 4: NaN/Inf
+        has_nan_inf = bool(np.any(np.isnan(acc)) or np.any(np.isinf(acc)) or
+                          np.any(np.isnan(gyr)) or np.any(np.isinf(gyr)))
+
+        # 诊断
+        issues = []
+        if non_zero_rate < 0.10:
+            issues.append(f'near_zero({non_zero_rate:.1%})')
+        if abs(acc_min) > 8.0 or abs(acc_max) > 8.0:
+            issues.append(f'acc_range_abnormal([{acc_min:.1f}, {acc_max:.1f}]g)')
+        if abs(gyr_min) > 4000 or abs(gyr_max) > 4000:
+            issues.append(f'gyr_range_abnormal([{gyr_min:.0f}, {gyr_max:.0f}]dps)')
+        if acc_var < 1e-8 and gyr_var < 1e-8:
+            issues.append('constant_signal')
+        if has_nan_inf:
+            issues.append('nan_inf')
+
+        sensor_info = {
+            'idx': k,
+            'non_zero_rate': round(non_zero_rate, 4),
+            'acc_range': [round(acc_min, 4), round(acc_max, 4)],
+            'gyr_range': [round(gyr_min, 4), round(gyr_max, 4)],
+            'acc_var': round(acc_var, 6),
+            'gyr_var': round(gyr_var, 6),
+            'issue': '; '.join(issues) if issues else None,
+        }
+        result['sensors'].append(sensor_info)
+
+        if issues:
+            result['inactive'].append(k)
+        else:
+            result['active'].append(k)
+
+    return result
+
+
 def _detect_num_imus_from_bin(imu_bin_path):
     """通过 IMU bin 文件自动检测 IMU 芯片数量。
 
@@ -1614,66 +1587,126 @@ def _detect_num_imus_from_bin(imu_bin_path):
 
 
 def _resolve_num_imus(h5_file, device_id, imu_bin_path=None, manual_num_imus=None):
-    """从 bin 文件 / H5 attrs 推断用于同步的 IMU 数量。
+    """多源融合推断 IMU 数量，鲁棒处理 1~3 传感器任意损坏/截断场景。
 
-    优先级:
-    1. bin 自动检测（最高 — bin 是 SD 卡真实数据源）
-    2. 用户手动指定 manual_num_imus（bin 检测失败时的兜底）
-    3. H5 attrs: imu{device}_num_imus（GUI 设置的设备特定值）
-    4. H5 attrs: num_imus（通用值）
-    5. dataset 推断（BLE 数据集中出现的 IMU 数量）
-    6. 默认 2
+    数据源（按可靠性排序）：
+    A. BLE 实测数据 — imu_all_ble 中实际出现的 imu_index（硬件真实工作的传感器）
+    B. BLE 握手报告 — imu{dev}_num_imus attr（硬件固件报告的物理传感器数）
+    C. bin 结构检测 — SD 卡 bin 文件的帧大小整除/帧ID验证
 
-    H5 attr 由 BLE 包数量决定（BLE 通常只传 2 个 IMU），
-    但 bin 文件才是 SD 卡数据的真实来源，可能有 3 个 IMU。
+    冲突解决策略：
+    - bin 检测 vs BLE 实测：以「帧 ID 验证」为裁判，对两个候选值分别验证，
+      选择帧 ID 递增序列更长（即能正确解析 bin 帧结构）的一方
+    - 若双方都通过验证 → 取较小值（避免写入无数据传感器的全零/垃圾数据）
+    - 若仅一方通过验证 → 取通过方
+    - 若都未通过 → 取较小值 + 记录警告
+
+    这种策略能同时处理：
+    - bin 截断误判（bin=2, BLE=1 → 验证 n=1 通过、n=2 也通过 → 取 1）
+    - BLE 带宽限制漏传（bin=3, BLE=2 → 验证 n=3 通过、n=2 也通过 → 取 2，保守）
+    - 传感器损坏（bin=3, BLE=3，但有一个传感器全零 → 后续数据质量校验会标记）
     """
-    # 1. bin 自动检测（最高优先级 — bin 是 SD 卡真实数据）
-    if imu_bin_path:
-        detected = _detect_num_imus_from_bin(imu_bin_path)
-        if detected is not None:
-            h5_val = h5_file.attrs.get(f'imu{device_id}_num_imus')
-            if h5_val is not None:
-                h5_val = int(h5_val)
-            if h5_val is None:
-                h5_val = h5_file.attrs.get('num_imus')
-                if h5_val is not None:
-                    h5_val = int(h5_val)
-            if h5_val and detected != h5_val:
-                log(f"  自动检测 IMU 数量: {detected} (来自 bin)，"
-                    f"H5 attr 记录为 {h5_val} (BLE 仅传 {h5_val} 个)，以 bin 为准")
-            else:
-                log(f"  自动检测 IMU 数量: {detected} (来自 bin 文件)")
-            return detected
-
-    # 2. 用户手动指定（bin 自动检测失败时的兜底）
+    # 0. 手动指定（最高优先级）
     if manual_num_imus is not None:
         n = max(1, min(4, int(manual_num_imus)))
-        log(f"  IMU 数量由用户指定: {n} (bin 自动检测未成功)")
+        log(f"  IMU 数量由用户指定: {n}")
         return n
 
-    # 3. H5 attrs — 设备特定
-    val = h5_file.attrs.get(f'imu{device_id}_num_imus')
-    if val is not None:
-        n = max(1, min(4, int(val)))
-        log(f"  IMU 数量来自 H5 attr imu{device_id}_num_imus: {n}")
-        return n
+    # ── 收集各数据源的 IMU 数量 ──
 
-    # 4. H5 attrs — 通用
-    val = h5_file.attrs.get('num_imus')
-    if val is not None:
-        n = max(1, min(4, int(val)))
-        log(f"  IMU 数量来自 H5 attr num_imus: {n}")
-        return n
+    # A. BLE 实测数据（imu_all_ble 中实际出现的 imu_index 范围）
+    ble_data_count = None
+    all_ds_name = f'imu{device_id}_all_ble'
+    if all_ds_name in h5_file and h5_file[all_ds_name].shape[0] > 0:
+        ds = h5_file[all_ds_name]
+        if hasattr(ds, 'dtype') and ds.dtype.names and 'imu_index' in ds.dtype.names:
+            try:
+                max_idx = int(ds['imu_index'][:].max())
+                ble_data_count = max(1, min(4, max_idx + 1))
+            except Exception:
+                pass
 
-    # 5. 从 imu*_all_ble dataset 推断
-    all_ds = f'imu{device_id}_all_ble'
-    if all_ds in h5_file and 'imu_index' in h5_file[all_ds].dtype.names:
-        max_idx = int(h5_file[all_ds][:]['imu_index'].max())
-        n = max(1, min(4, max_idx + 1))
-        log(f"  IMU 数量推断自 BLE 数据: {n} (imu_index max={max_idx})")
-        return n
+    # B. BLE 握手报告（H5 attrs 中存储的硬件配置值）
+    ble_hw_count = None
+    for attr_key in (f'imu{device_id}_num_imus', 'num_imus'):
+        val = h5_file.attrs.get(attr_key)
+        if val is not None:
+            try:
+                ble_hw_count = max(1, min(4, int(val)))
+                break
+            except (ValueError, TypeError):
+                pass
 
-    # 6. 从 imu*{a,b,c}_ble dataset 存在性推断
+    # C. bin 文件结构检测
+    bin_count = None
+    if imu_bin_path:
+        bin_count = _detect_num_imus_from_bin(imu_bin_path)
+
+    # ── 多源融合决策 ──
+
+    # 有效 BLE 参考值：实测数据优先，握手报告兜底
+    ble_ref = ble_data_count or ble_hw_count
+
+    if bin_count is not None and ble_ref is not None:
+        if bin_count == ble_ref:
+            # 一致 → 高置信度
+            log(f"  IMU 数量: {bin_count} (bin检测=BLE数据={ble_ref}，一致)")
+            return bin_count
+
+        # 冲突 → 帧 ID 验证裁判
+        log(f"  ⚠️ IMU 数量冲突: bin检测={bin_count}, BLE参考={ble_ref}")
+        log(f"     来源: BLE实测={ble_data_count}, BLE握手={ble_hw_count}, bin检测={bin_count}")
+        log(f"     启动帧ID验证裁决...")
+
+        # 分别验证两个候选值
+        candidates = sorted(set([bin_count, ble_ref]))
+        best_n = None
+        best_score = -1
+
+        for n in candidates:
+            vr = _verify_imu_count_fits_bin(imu_bin_path, n, min_consecutive=10)
+            passed = vr['score'] >= 0.90 and vr['longest_run'] >= 10
+            log(f"     n={n}: score={vr['score']:.1%}, "
+                f"longest_run={vr['longest_run']}/{vr['total']}, "
+                f"first_fid={vr.get('first_fid')}, {'✓ PASS' if passed else '✗ FAIL'}")
+            if passed and vr['score'] > best_score:
+                best_score = vr['score']
+                best_n = n
+
+        if best_n is not None:
+            log(f"     裁决结果: n={best_n} (帧ID验证得分={best_score:.1%})")
+            return best_n
+
+        # 双方都未通过帧ID验证 → 取较小值（保守）
+        conservative = min(bin_count, ble_ref)
+        log(f"     ⚠️ 双方均未通过帧ID验证，保守取较小值: {conservative}")
+        return conservative
+
+    # ── 单一数据源回退 ──
+    if bin_count is not None:
+        log(f"  IMU 数量来自 bin 检测: {bin_count}")
+        return bin_count
+    if ble_ref is not None:
+        log(f"  IMU 数量来自 BLE 参考: {ble_ref}")
+        return ble_ref
+
+    # ── 无 bin 且无 BLE attr → 数据集推断 ──
+    # 从 imu*_all_ble dataset 推断（即使为空也尝试）
+    if all_ds_name in h5_file:
+        # 尝试从 imu_index 推断
+        ds = h5_file[all_ds_name]
+        if hasattr(ds, 'dtype') and ds.dtype.names and 'imu_index' in ds.dtype.names:
+            try:
+                data = ds[:]
+                if len(data) > 0:
+                    max_idx = int(data['imu_index'].max())
+                    n = max(1, min(4, max_idx + 1))
+                    log(f"  IMU 数量推断自 BLE 数据: {n} (imu_index max={max_idx})")
+                    return n
+            except Exception:
+                pass
+
+    # 从 imu*{a,b,c}_ble dataset 存在性推断
     for candidate in [3, 2]:
         ds = f'imu{device_id}{chr(ord("a") + candidate - 1)}_ble'
         if ds in h5_file:
@@ -2028,7 +2061,8 @@ def _sync_imu_100hz(h5_file, emg_parser, imu_parser, data_2khz, device_id):
     ])
 
     # 为每个 IMU 分配独立的 data array
-    all_data = [np.empty(num_imu_frames, dtype=imu_100hz_dtype) for _ in range(num_imus)]
+    # 用 np.zeros 初始化，避免未初始化内存泄露为垃圾数据
+    all_data = [np.zeros(num_imu_frames, dtype=imu_100hz_dtype) for _ in range(num_imus)]
     imu_filled = 0
     imu_missing = 0
 
@@ -2041,6 +2075,11 @@ def _sync_imu_100hz(h5_file, emg_parser, imu_parser, data_2khz, device_id):
                     all_data[k][idx]['acc'] = np.array(imu_data[k]['acc'], dtype=np.float32)
                     all_data[k][idx]['gyr'] = np.array(imu_data[k]['gyr'], dtype=np.float32)
                     all_data[k][idx]['mag'] = np.array(imu_data[k]['mag'], dtype=np.float32)
+                else:
+                    # 防御性：k 超出实际数据范围（bin 帧截断/损坏），填零
+                    all_data[k][idx]['acc'] = np.zeros(3, dtype=np.float32)
+                    all_data[k][idx]['gyr'] = np.zeros(3, dtype=np.float32)
+                    all_data[k][idx]['mag'] = np.zeros(3, dtype=np.float32)
             imu_filled += 1
         else:
             for k in range(num_imus):
@@ -2078,6 +2117,47 @@ def _sync_imu_100hz(h5_file, emg_parser, imu_parser, data_2khz, device_id):
         ds_name = f"imu{device_id}{label}_100hz"
         write_or_create_dataset(ds_name, all_data[k], imu_filled, imu_missing, imu_index=k)
 
+    # ── 数据质量校验：标记疑似损坏的传感器 ──
+    validation = _validate_imu_sensor_data(all_data, num_imus)
+    active_count = len(validation['active'])
+    inactive_indices = validation['inactive']
+
+    # 对每个传感器打印诊断信息
+    for s in validation['sensors']:
+        status = '✓ ACTIVE' if s['idx'] in validation['active'] else '⚠️ INACTIVE'
+        issue_str = f' ({s["issue"]})' if s['issue'] else ''
+        log(f"  IMU sensor {chr(ord('a') + s['idx'])} [{s['idx']}]: {status}{issue_str}")
+        log(f"    non_zero_rate={s['non_zero_rate']:.1%}, "
+            f"acc_range={s['acc_range']}, gyr_range={s['gyr_range']}")
+
+    if inactive_indices:
+        log(f"  ⚠️ 检测到 {len(inactive_indices)} 个疑似损坏传感器: "
+            f"{[chr(ord('a') + i) for i in inactive_indices]}")
+        # 截断损坏传感器的数据集（避免加载时读到垃圾/全零数据）
+        for idx in inactive_indices:
+            label = chr(ord('a') + idx)
+            ds_name = f"imu{device_id}{label}_100hz"
+            if ds_name in h5_file:
+                ds_inactive = h5_file[ds_name]
+                if ds_inactive.shape[0] > 0:
+                    ds_inactive.resize(0, axis=0)
+                    log(f"  IMU dataset TRUNCATED (inactive sensor): {ds_name} → 0 rows")
+
+    # 截断超出 num_imus 范围的传感器数据集（旧同步残留清理）
+    all_labels = ['a', 'b', 'c', 'd']
+    unused_labels = all_labels[num_imus:]
+    for label in unused_labels:
+        ds_name = f"imu{device_id}{label}_100hz"
+        if ds_name in h5_file:
+            ds_unused = h5_file[ds_name]
+            if ds_unused.shape[0] > 0:
+                ds_unused.resize(0, axis=0)
+                log(f"  IMU dataset TRUNCATED (unused sensor): {ds_name} → 0 rows")
+
+    # 更新 H5 attrs：记录实际活跃的 IMU 数量
+    h5_file.attrs[f'imu{device_id}_active_count'] = active_count
+    h5_file.attrs[f'imu{device_id}_active_indices'] = str(validation['active'])
+
     # legacy single-IMU dataset (keep for old tools)
     legacy_name = f"imu{device_id}_100hz"
     if legacy_name in h5_file:
@@ -2090,6 +2170,9 @@ def _sync_imu_100hz(h5_file, emg_parser, imu_parser, data_2khz, device_id):
         'imu_missing': imu_missing,
         'imu_count': num_imus,
         'imu_labels': labels,
+        'imu_active_count': active_count,
+        'imu_active_indices': validation['active'],
+        'imu_inactive_indices': inactive_indices,
     }
 
 
@@ -2458,11 +2541,20 @@ def run_gui():
                 self.log(f"[{i+1}/{len(pending_files)}] {os.path.basename(h5_path)}")
 
                 try:
-                    # 在同步前设置 IMU 数量到 H5 attrs（使用解析后的真实值，非 UI spinbox 默认值）
+                    # 在同步前设置 IMU 数量到 H5 attrs
+                    # 注意：保留采集时 BLE 硬件检测的原始值 (imu{dev}_num_imus)，
+                    # 仅当该 attr 不存在时才写入。全局 num_imus 总是更新为解析后的值。
                     with h5py.File(h5_path, 'r+') as f:
+                        dev_attr = f'imu{device_id}_num_imus'
+                        if dev_attr not in f.attrs:
+                            f.attrs[dev_attr] = resolved_num_imus
+                            self.log(f"  设置 IMU 数量: {resolved_num_imus} (采集时未记录，使用bin检测值)")
+                        else:
+                            existing_val = int(f.attrs[dev_attr])
+                            self.log(f"  保留采集时记录的 IMU 数量: {existing_val} (imu{device_id}_num_imus)")
+                            if existing_val != resolved_num_imus:
+                                self.log(f"  ⚠️ 注意: bin检测={resolved_num_imus}，BLE原始记录={existing_val}，保留BLE值")
                         f.attrs['num_imus'] = resolved_num_imus
-                        f.attrs[f'imu{device_id}_num_imus'] = resolved_num_imus
-                        self.log(f"  设置 IMU 数量: {resolved_num_imus}")
 
                     result = sync_h5_with_bin(
                         h5_path,
