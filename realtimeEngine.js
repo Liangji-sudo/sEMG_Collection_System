@@ -679,17 +679,23 @@ class RealtimeEngine extends EventEmitter {
         // 立即保存 prompt 到 storage，不等待 EMG 数据
         // 如果文件还没打开，等待一小段时间后重试
         let retryCount = 0;
-        const savePrompt = () => {
+        // 【修复 H-N5】使用 async/await + 标志位，防止 fire-and-forget 重试产生并发写入
+        let promptSaved = false;
+        const savePrompt = async () => {
+            if (promptSaved) return; // 已成功保存，跳过
             if (this.stageFileOpen && !this.isClosingStageFile) {
-                this.sendStorageCommand('append', {
-                    data: {
-                        prompt_name: name,
-                        prompt_time: promptTime,
-                        prompt_stage: stageName || this.currentStageName
-                    }
-                }).catch(err => {
+                try {
+                    await this.sendStorageCommand('append', {
+                        data: {
+                            prompt_name: name,
+                            prompt_time: promptTime,
+                            prompt_stage: stageName || this.currentStageName
+                        }
+                    });
+                    promptSaved = true;
+                } catch (err) {
                     console.error('[realtimeEngine] 保存 prompt 失败:', err);
-                });
+                }
             } else {
                 // 文件还没打开，100ms 后重试（最多重试 5 次）
                 retryCount++;

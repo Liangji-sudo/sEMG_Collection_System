@@ -2788,12 +2788,13 @@ class CalibrateTool(QMainWindow):
         self._widget.closeEvent(event)
         super().closeEvent(event)
 
-    def __getattr__(self, name):
-        """将未定义属性访问代理到内部 CalibrateWidget"""
-        widget = self.__dict__.get('_widget', None)
-        if widget is not None:
-            return getattr(widget, name)
-        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+    # 【修复 CRITICAL-G5】移除 __getattr__ 代理，显式定义公共 API
+    # 原 __getattr__ 代理会导致 Qt 框架方法名冲突和嵌入时的误导性错误
+    def load_h5_file(self, h5_path):
+        return self._widget.load_h5_file(h5_path)
+
+    def close_file(self):
+        return self._widget.close_file()
 
 
 def main():

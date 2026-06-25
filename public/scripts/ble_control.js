@@ -54,10 +54,14 @@
             return;
         }
 
-        // 【修复】如果正在重连中，跳过
+        // 【修复 CRITICAL-F12】如果正在自动重连中，手动连接优先 — 清除pending timer并继续
         if (BleState.reconnecting) {
-            console.log('[BLE] 正在重连中，跳过');
-            return;
+            console.log('[BLE] 检测到手动连接，取消自动重连');
+            BleState.reconnecting = false;
+            if (BleState._reconnectTimer) {
+                clearTimeout(BleState._reconnectTimer);
+                BleState._reconnectTimer = null;
+            }
         }
 
         // 清理旧的 WebSocket 对象
@@ -122,7 +126,13 @@
     }
 
     function disconnect() {
+        // 【修复 CRITICAL-F13】主动断开时重置重连计数和timer
         BleState.reconnecting = false;
+        BleState.reconnectAttempts = 0;
+        if (BleState._reconnectTimer) {
+            clearTimeout(BleState._reconnectTimer);
+            BleState._reconnectTimer = null;
+        }
         stopHeartbeat();
         if (BleState.ws) {
             BleState.ws.onclose = null; // 防止触发重连
@@ -147,8 +157,9 @@
         BleState.reconnecting = true;
         BleState.reconnectAttempts++;
         console.log(`[BLE] ${RECONNECT_DELAY/1000}秒后重连... (尝试 ${BleState.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
-        setTimeout(() => {
+        BleState._reconnectTimer = setTimeout(() => {
             BleState.reconnecting = false; // 重置标志，允许下次重连
+            BleState._reconnectTimer = null;
             connect();
         }, RECONNECT_DELAY);
     }

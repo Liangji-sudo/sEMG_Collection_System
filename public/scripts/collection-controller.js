@@ -228,8 +228,17 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
         loadCollectionConfig() {
             console.log('[Collection] ========== loadCollectionConfig 开始 ==========');
 
-            this.collectionConfig = window.currentCollectionConfig ||
-                JSON.parse(localStorage.getItem('emg_current_collection_config') || 'null');
+            // 【修复 CRITICAL-F1】JSON.parse 添加异常保护，避免损坏的 localStorage 数据导致崩溃
+            let storedConfig = null;
+            try {
+                const raw = localStorage.getItem('emg_current_collection_config');
+                if (raw) storedConfig = JSON.parse(raw);
+            } catch (e) {
+                console.error('[Collection] ⚠ 解析存储的采集配置失败，将使用默认配置:', e.message);
+                localStorage.removeItem('emg_current_collection_config'); // 清除损坏数据
+            }
+
+            this.collectionConfig = window.currentCollectionConfig || storedConfig;
 
             console.log('[Collection] collectionConfig:', this.collectionConfig);
 
@@ -1377,6 +1386,10 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 clearTimeout(this.phaseTimer);
                 this.phaseTimer = null;
             }
+            if (this._calibrationDelayTimer) {
+                clearTimeout(this._calibrationDelayTimer);
+                this._calibrationDelayTimer = null;
+            }
             if (this.countdownTimer) {
                 clearInterval(this.countdownTimer);
                 this.countdownTimer = null;
@@ -1568,6 +1581,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             // 清除所有定时器
             if (this.phaseTimer) { clearTimeout(this.phaseTimer); this.phaseTimer = null; }
+            if (this._calibrationDelayTimer) { clearTimeout(this._calibrationDelayTimer); this._calibrationDelayTimer = null; }
             if (this.countdownTimer) { clearInterval(this.countdownTimer); this.countdownTimer = null; }
             if (this.continualProgressTimer) { clearInterval(this.continualProgressTimer); this.continualProgressTimer = null; }
             if (this.calibrationTimer) { clearInterval(this.calibrationTimer); this.calibrationTimer = null; }
@@ -1881,7 +1895,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 showCountdown: false
             });
 
-            setTimeout(() => {
+            // 【修复 CRITICAL-F5】存储定时器引用，避免停止/中断后仍触发
+            this._calibrationDelayTimer = setTimeout(() => {
+                if (!this._isRunning) return; // 期间可能已停止
                 this.currentPhase = 'prepare';
                 this.updateGestureList();
                 this.showContinualPreparation(() => {
@@ -2957,7 +2973,10 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 return this.collectionConfig.subject.id;
             }
             // 3. localStorage 中的用户 ID
-            const userData = JSON.parse(localStorage.getItem('emg_current_user') || '{}');
+            let userData = {};
+            try {
+                userData = JSON.parse(localStorage.getItem('emg_current_user') || '{}');
+            } catch (e) { /* 解析失败使用空对象 */ }
             if (userData.id) {
                 return userData.id;
             }

@@ -3004,54 +3004,48 @@ class SyncCalibrationTab(QWidget):
                 self.h5_file.close()
                 self.h5_file = None
 
-            # 强制 GC 确保 Windows 释放文件锁
-            import gc
-            gc.collect()
+            # 【修复 CRITICAL-G1】避免主线程 sleep 冻结 GUI
+            # 使用 QTimer 延迟 300ms 后异步执行 H5 重新打开和属性写入
+            def _write_calib_attrs():
+                try:
+                    with h5py.File(h5_path, 'r+') as f:
+                        for side in ('left', 'right'):
+                            offset = save_offset.get(side, 0.0)
+                            frame = save_frame.get(side)
+                            if frame is not None:
+                                f.attrs[f'calib_offset_{side}'] = offset
+                                f.attrs[f'calib_marked_frame_{side}'] = int(frame)
 
-            # 短暂睡眠让 Windows 文件系统释放锁
-            _time_module.sleep(0.3)
+                        f.attrs['calib_prompt_idx'] = save_prompt_idx
+                        f.attrs['calib_prompt_time_unix'] = save_prompt_time
+                        f.attrs['calib_protocol'] = self._sync_protocol
+                        f.attrs['calib_marked_at'] = save_marked_at
 
-            with h5py.File(h5_path, 'r+') as f:
-                for side in ('left', 'right'):
-                    offset = save_offset.get(side, 0.0)
-                    frame = save_frame.get(side)
-                    if frame is not None:
-                        f.attrs[f'calib_offset_{side}'] = offset
-                        f.attrs[f'calib_marked_frame_{side}'] = int(frame)
+                    # 重新打开 H5 文件（只读）
+                    self.h5_file = h5py.File(h5_path, 'r')
+                    self.h5_path = h5_path
 
-                # 元数据
-                f.attrs['calib_prompt_idx'] = save_prompt_idx
-                f.attrs['calib_prompt_time_unix'] = save_prompt_time
-                f.attrs['calib_marked_at'] = save_marked_at
-                f.attrs['calib_present'] = True
+                    # 恢复之前清空的数据
+                    self._sync_prompt_time = save_prompt_time
+                    self._sync_prompt_idx = save_prompt_idx
+                    for side in ('left', 'right'):
+                        self._load_video_timing(side)
 
-                f.flush()
+                    self.lbl_status.setText('✅ 标定已保存到 H5 — 数据可视化标签页将自动应用偏移量')
+                    QMessageBox.information(self, '保存成功',
+                                            '标定偏移量已写入 H5 文件。\n\n'
+                                            '请在"数据可视化"标签页重新加载该文件，'
+                                            '即可看到校准后的视频对齐效果。')
+                    print(f"[SyncCalibration] 标定数据已保存到 {h5_path}")
+                except Exception as e:
+                    QMessageBox.critical(self, '保存失败', f'写入 H5 attrs 失败:\n{e}')
+                    # 尝试恢复只读打开
+                    try:
+                        self.h5_file = h5py.File(h5_path, 'r')
+                    except Exception:
+                        self.h5_file = None
 
-            # 重新以只读模式打开
-            self.h5_file = h5py.File(h5_path, 'r')
-
-            # 恢复之前清空的数据
-            self._sync_prompt_time = save_prompt_time
-            self._sync_prompt_idx = save_prompt_idx
-            for side in ('left', 'right'):
-                self._load_video_timing(side)
-
-            self.lbl_status.setText(
-                f'✅ 标定已保存到 H5 — '
-                f'数据可视化标签页将自动应用偏移量'
-            )
-            QMessageBox.information(self, '保存成功',
-                                    '标定偏移量已写入 H5 文件。\n\n'
-                                    '请在"数据可视化"标签页重新加载该文件，'
-                                    '即可看到校准后的视频对齐效果。')
-
-        except Exception as e:
-            QMessageBox.critical(self, '保存失败', f'写入 H5 attrs 失败:\n{e}')
-            # 尝试恢复只读打开
-            try:
-                self.h5_file = h5py.File(h5_path, 'r')
-            except Exception:
-                self.h5_file = None
+            QTimer.singleShot(300, _write_calib_attrs)
 
     def _close_videos(self):
         """关闭所有视频"""
