@@ -217,7 +217,7 @@ class CalibrateWidget(QWidget):
         # 供应商风格视图参数
         self.view_mode = 'stacked'       # 'stacked' (供应商) / 'subplot' (独立子图)
         self.offset_uv = 300             # 通道堆叠 offset (μV)
-        self.clamp_enabled = False       # 是否裁剪波形防止重叠
+        self.clamp_enabled = True        # 是否裁剪波形防止重叠（默认开启）
 
         # 滑块平滑更新相关
         self.update_timer = QTimer()
