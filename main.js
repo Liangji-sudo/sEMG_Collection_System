@@ -4,8 +4,22 @@ const { spawn, execSync } = require('child_process');
 
 let mainWindow;
 
-// 需要在退出时杀掉的进程名列表
-const PYTHON_PROCESSES = ['ble_server.exe', 'storage_server.exe', 'mocap_server.exe'];
+// 【修复 CRITICAL-N3】追踪子进程PID，退出时按PID终止（适用于打包和开发模式）
+const childPids = new Set();
+
+// 导出PID注册函数供 server.js 的 spawn 回调使用
+module.exports.registerChildPid = (pid) => {
+  childPids.add(pid);
+  console.log(`[Main] 注册子进程 PID: ${pid}`);
+};
+
+module.exports.unregisterChildPid = (pid) => {
+  childPids.delete(pid);
+  console.log(`[Main] 注销子进程 PID: ${pid}`);
+};
+
+// 需要在退出时杀掉的进程名列表（仅用于打包模式 .exe）
+const PYTHON_PROCESSES = ['ble_server.exe', 'storage_server.exe', 'mocap_server.exe', 'camera_server.exe'];
 
 /**
  * 强制杀掉所有 Python 子进程（Windows）
@@ -13,9 +27,20 @@ const PYTHON_PROCESSES = ['ble_server.exe', 'storage_server.exe', 'mocap_server.
 function killAllPythonProcesses() {
   console.log('[Main] 正在清理子进程...');
 
+  // 优先：按 PID 终止（开发和打包模式均适用）
+  for (const pid of childPids) {
+    try {
+      process.kill(pid, 'SIGTERM');
+      console.log(`[Main] 已发送 SIGTERM 到 PID: ${pid}`);
+    } catch (e) {
+      // 进程已退出，忽略
+    }
+  }
+  childPids.clear();
+
+  // 备用：按进程名强制终止（打包模式 .exe 进程名）
   for (const procName of PYTHON_PROCESSES) {
     try {
-      // Windows 下使用 taskkill 强制杀进程
       execSync(`taskkill /F /IM ${procName} 2>nul`, { stdio: 'ignore' });
       console.log(`[Main] 已终止: ${procName}`);
     } catch (e) {

@@ -3646,6 +3646,15 @@ class SyncTab(QWidget):
         self.log_text.append("=" * 50)
         self.log_text.append(f"开始同步... (bin目录: {self.bin_dir})")
 
+        # 【修复 CRITICAL-G3】检查旧 worker 是否仍在运行，防止两个线程竞争写入同一 H5
+        if self.worker is not None and self.worker.isRunning():
+            self.log_text.append("⚠ 上一个同步任务仍在运行，正在终止...")
+            self.worker.quit()
+            if not self.worker.wait(5000):
+                self.log_text.append("⚠ 旧任务未能正常终止，强制结束")
+                self.worker.terminate()
+                self.worker.wait(3000)
+
         self.worker = SyncWorker(
             self.h5_files, self.bin_dir,
             devices, self.validate_check.isChecked()
@@ -4104,6 +4113,14 @@ class OneToManySyncTab(QWidget):
         self.log(f"Bin 目录: {self.bin_dir}")
         self.log(f"待同步: {len(files_to_sync)} 个文件")
 
+        # 【修复 CRITICAL-G3】检查旧 worker 是否仍在运行
+        if self.worker is not None and self.worker.isRunning():
+            self.log("⚠ 上一个批量同步任务仍在运行，正在终止...")
+            self.worker.quit()
+            if not self.worker.wait(5000):
+                self.worker.terminate()
+                self.worker.wait(3000)
+
         self.worker = OneToManySyncWorker(
             files_to_sync, self.bin_dir,
             emg1=self.cb_emg1.isChecked(), emg2=self.cb_emg2.isChecked(),
@@ -4361,6 +4378,14 @@ class SyncToolsTab(QWidget):
         self.progress_bar.setMaximum(len(self.h5_paths))
         self.log_text.clear()
         self.log("=== 开始擦除同步 ===")
+
+        # 【修复 CRITICAL-G3】检查旧 worker 是否仍在运行
+        if self.worker is not None and self.worker.isRunning():
+            self.log("⚠ 上一个清除任务仍在运行，正在终止...")
+            self.worker.quit()
+            if not self.worker.wait(5000):
+                self.worker.terminate()
+                self.worker.wait(3000)
 
         self.worker = ClearSyncWorker(self.h5_paths)
         self.worker.progress.connect(self.on_progress)

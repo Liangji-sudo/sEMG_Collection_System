@@ -813,10 +813,15 @@ class RealtimeEngine extends EventEmitter {
                     // 标记该摄像头已被使用（避免同一摄像头被两个 bin 重复使用）
                     availableSides = availableSides.filter(s => s !== cameraSide);
                 } else {
+                    // 【修复】录制启动失败时记录状态，便于前端告警
                     console.error(`[realtimeEngine] ❌ ${cameraSide}侧录制启动失败:`, startResult.error);
+                    this._cameraRecordingErrors = this._cameraRecordingErrors || {};
+                    this._cameraRecordingErrors[cameraSide] = startResult.error || '未知错误';
                 }
             } catch (error) {
                 console.error(`[realtimeEngine] ${cameraSide}侧录制请求失败:`, error);
+                this._cameraRecordingErrors = this._cameraRecordingErrors || {};
+                this._cameraRecordingErrors[cameraSide] = error.message;
             }
         }
 
@@ -837,9 +842,13 @@ class RealtimeEngine extends EventEmitter {
                     this.videoFileNames[cameraSide] = videoFileName;
                 } else {
                     console.error(`[realtimeEngine] ❌ ${cameraSide}侧录制启动失败:`, startResult.error);
+                    this._cameraRecordingErrors = this._cameraRecordingErrors || {};
+                    this._cameraRecordingErrors[cameraSide] = startResult.error || '未知错误';
                 }
             } catch (error) {
                 console.error(`[realtimeEngine] ${cameraSide}侧录制请求失败:`, error);
+                this._cameraRecordingErrors = this._cameraRecordingErrors || {};
+                this._cameraRecordingErrors[cameraSide] = error.message;
             }
         }
 
@@ -1640,7 +1649,12 @@ class RealtimeEngine extends EventEmitter {
                 await this.sendStorageCommand('append', { data: sensorData });
             }
         } catch (error) {
-            // 静默失败，不阻塞主流程
+            // 【修复】记录丢失帧计数，便于诊断数据丢失问题
+            this._droppedStorageFrames = (this._droppedStorageFrames || 0) + 1;
+            // 每 100 帧丢失打印一次警告，避免日志洪水
+            if (this._droppedStorageFrames % 100 === 1) {
+                console.error(`[realtimeEngine] ⚠ Storage写入失败（已丢失${this._droppedStorageFrames}帧）: ${error.message}`);
+            }
         }
     }
 

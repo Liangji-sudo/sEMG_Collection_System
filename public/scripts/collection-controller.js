@@ -462,7 +462,13 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
         onPageShow() {
             console.log('[Collection] 页面显示');
-            // 【修复】重新进入采集页时清空采集进度，避免残留旧进度
+            // 【修复 CRITICAL-F3】续采模式下保留断点恢复的状态，不重置进度和配置
+            if (this._isResumeMode) {
+                console.log('[Collection] ★ 续采模式：保留断点状态，跳过进度重置');
+                this.updateUI();
+                return;
+            }
+            // 正常模式：重新进入采集页时清空采集进度
             this.currentSessionIndex = 0;
             this.currentStageIndex = 0;
             this.currentGestureIndex = 0;

@@ -1293,18 +1293,25 @@ async def main():
     print(f'║  客户端: 前端 camera_control.js + realtimeEngine.js      ║')
     print(f'╚══════════════════════════════════════════════════════════╝')
 
-    # 处理退出信号
+    # 【修复 CRITICAL-P1】使用 asyncio.Event 替代 sys.exit(0)，
+    # 确保 cleanup() 协程有机会执行完成再退出进程
+    shutdown_event = asyncio.Event()
+
     def signal_handler(sig, frame):
         print('\n[CameraServer] 收到退出信号，正在关闭...')
-        asyncio.create_task(camera_server.cleanup())
-        server.close()
-        sys.exit(0)
+        shutdown_event.set()
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    # 保持运行
-    await asyncio.Future()
+    # 等待关闭信号
+    await shutdown_event.wait()
+
+    # 收到信号后执行清理
+    await camera_server.cleanup()
+    server.close()
+    # 给 pending tasks 短暂时间完成
+    await asyncio.sleep(0.1)
 
 
 if __name__ == '__main__':
