@@ -2440,7 +2440,7 @@ def run_gui():
                                 emg1_frames = f['emg1_250hz'].shape[0] if 'emg1_250hz' in f else 0
                                 emg2_frames = f['emg2_250hz'].shape[0] if 'emg2_250hz' in f else 0
                             info = f"[{sync_status}] EMG1:{emg1_frames} EMG2:{emg2_frames}"
-                        except:
+                        except Exception:
                             info = "[读取失败]"
 
                         item = QListWidgetItem(f"{os.path.basename(path)} {info}")
@@ -2520,7 +2520,7 @@ def run_gui():
                         status = f.attrs.get('sync_status', 'unknown')
                         if status != 'synced':
                             pending_files.append(path)
-                except:
+                except Exception:
                     pending_files.append(path)
 
             if not pending_files:
@@ -2606,7 +2606,7 @@ def run_gui():
                         sync_status = f.attrs.get('sync_status', 'unknown')
                         emg1_frames = f['emg1_250hz'].shape[0] if 'emg1_250hz' in f else 0
                     info = f"[{sync_status}] EMG1:{emg1_frames}"
-                except:
+                except Exception:
                     info = "[读取失败]"
                 item = QListWidgetItem(f"{os.path.basename(path)} {info}")
                 item.setData(Qt.UserRole, path)

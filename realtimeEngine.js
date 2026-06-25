@@ -4,11 +4,6 @@
 const WebSocket = require('ws');
 const EventEmitter = require('events');
 const zmq = require('zeromq');
-const express = require('express');
-const cors = require('cors');
-const app = express();
-app.use(cors());
-app.use(express.json());
 
 const { discrete_gesture_prompt_name, collection_task_name } = require('./constants.js');
 
@@ -35,6 +30,8 @@ class RealtimeEngine extends EventEmitter {
         this.currentReconnectTimes = 0;
         this.reconnectTimer = null;
         this.connectTimeoutTimer = null;
+        this._mocapConnectTimer = null;   // 【修复 H-N3】Mocap延迟连接定时器引用
+        this._cameraConnectTimer = null;   // 【修复 H-N3】Camera延迟连接定时器引用
 
         // 【新增】Mocap服务器
         this.mocap_client = null;
@@ -134,13 +131,15 @@ class RealtimeEngine extends EventEmitter {
                     this.ble_server_connect();
                 }, 5000);  // 从3秒改为5秒，给ble_server更多启动时间
 
-                // 【新增】延迟连接Mocap服务器
-                setTimeout(() => {
+                // 【修复 H-N3】延迟连接Mocap服务器 — 存储定时器引用以便失败时清理
+                this._mocapConnectTimer = setTimeout(() => {
+                    this._mocapConnectTimer = null;
                     this.mocap_server_connect();
                 }, 5500);
 
-                // 【新增】延迟连接Camera服务器
-                setTimeout(() => {
+                // 【修复 H-N3】延迟连接Camera服务器 — 存储定时器引用以便失败时清理
+                this._cameraConnectTimer = setTimeout(() => {
+                    this._cameraConnectTimer = null;
                     this.camera_server_connect();
                 }, 6000);
 
@@ -190,6 +189,10 @@ class RealtimeEngine extends EventEmitter {
 
                 this.websocket_server.on('error', (error) => {
                     console.error('[realtimeEngine] WebSocket服务器启动失败:', error);
+                    // 【修复 H-N3】清理所有延迟连接定时器
+                    clearTimeout(this.connectTimeoutTimer);
+                    clearTimeout(this._mocapConnectTimer);
+                    clearTimeout(this._cameraConnectTimer);
                     reject(error);
                 });
 
@@ -1704,37 +1707,48 @@ class RealtimeEngine extends EventEmitter {
         };
     }
 
-    stop() {
-        return new Promise(async (resolve) => {
-            this.isRunning = false;
-            
-            if (this.stageFileOpen && !this.isClosingStageFile) await this.closeStageFile();
-            this.isCollecting = false;
+    // 【修复 H-N1】移除 async Promise executor 反模式
+    // async executor 中抛出的异常会导致 Promise 永久 pending，无法被外部 catch
+    async stop() {
+        this.isRunning = false;
 
-            this.clients.forEach(client => {
-                if (client.readyState === WebSocket.OPEN) client.close(1001, '服务器关闭');
-            });
-            this.clients.clear();
+        if (this.stageFileOpen && !this.isClosingStageFile) {
+            try {
+                await this.closeStageFile();
+            } catch (e) {
+                console.error('[realtimeEngine] closeStageFile 失败:', e.message);
+            }
+        }
+        this.isCollecting = false;
 
-            if (this.websocket_server) {
+        this.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) client.close(1001, '服务器关闭');
+        });
+        this.clients.clear();
+
+        if (this.ble_client) { this.ble_client.close(1000); this.ble_client = null; }
+        if (this.mocap_client) { this.mocap_client.close(1000); this.mocap_client = null; }
+
+        // 【新增】关闭 ZMQ sockets
+        try {
+            if (this.storage_push_socket) { this.storage_push_socket.close(); }
+            if (this.storage_server_socket) { this.storage_server_socket.close(); }
+        } catch (e) {}
+
+        clearTimeout(this.reconnectTimer);
+        clearTimeout(this.mocap_reconnectTimer);
+        // 【修复 H-N3】清理启动阶段延迟连接定时器
+        clearTimeout(this.connectTimeoutTimer);
+        clearTimeout(this._mocapConnectTimer);
+        clearTimeout(this._cameraConnectTimer);
+
+        // WebSocket 服务器关闭需要 Promise 包装（回调风格）
+        if (this.websocket_server) {
+            return new Promise((resolve) => {
                 const closeTimeout = setTimeout(() => resolve(), 3000);
                 this.websocket_server.close(() => { clearTimeout(closeTimeout); resolve(); });
-            } else {
-                resolve();
-            }
-
-            if (this.ble_client) { this.ble_client.close(1000); this.ble_client = null; }
-            if (this.mocap_client) { this.mocap_client.close(1000); this.mocap_client = null; }
-
-            // 【新增】关闭 ZMQ sockets
-            try {
-                if (this.storage_push_socket) { this.storage_push_socket.close(); }
-                if (this.storage_server_socket) { this.storage_server_socket.close(); }
-            } catch (e) {}
-
-            clearTimeout(this.reconnectTimer);
-            clearTimeout(this.mocap_reconnectTimer);
-        });
+            });
+        }
     }
 }
 

@@ -284,7 +284,7 @@ class NokovSDKReceiver(BaseMocapReceiver):
                 # 获取 MarkerSet 名称（如 "R-YC" 或 "L-YC"）
                 try:
                     set_name = markerset.szName.decode('utf-8')
-                except:
+                except Exception:
                     set_name = str(markerset.szName)
 
                 # 根据名称判断左右手

@@ -59,17 +59,38 @@ function startServer() {
       process.env.ELECTRON_MODE = '1';
 
       // 直接 require server.js，在 Electron 内置的 Node 环境中运行
-      // 注意：需要修改 server.js 导出 startServer 或监听端口
       const PORT = process.env.PORT || 3000;
 
-      // 动态加载 server.js
+      // 动态加载 server.js（同步加载模块，异步启动服务）
       require(path.join(__dirname, 'server.js'));
 
-      // 给服务一点启动时间，然后返回地址
-      // 可以根据实际情况调整延时，或改用更可靠的检测方式
-      setTimeout(() => {
-        resolve(`http://localhost:${PORT}`);
-      }, 3000); // 等待3秒让服务启动完成
+      // 【修复 H-N4】轮询 HTTP 服务就绪，替代盲目 3s 等待
+      const MAX_WAIT_MS = 15000;
+      const POLL_INTERVAL_MS = 200;
+      const startTime = Date.now();
+      const http = require('http');
+
+      const poll = () => {
+        const elapsed = Date.now() - startTime;
+        if (elapsed > MAX_WAIT_MS) {
+          reject(new Error(`HTTP 服务启动超时 (${MAX_WAIT_MS}ms)`));
+          return;
+        }
+
+        http.get(`http://localhost:${PORT}/api/health`, (res) => {
+          if (res.statusCode === 200) {
+            console.log(`[Main] HTTP 服务就绪 (${elapsed}ms)`);
+            resolve(`http://localhost:${PORT}`);
+          } else {
+            setTimeout(poll, POLL_INTERVAL_MS);
+          }
+        }).on('error', () => {
+          setTimeout(poll, POLL_INTERVAL_MS);
+        });
+      };
+
+      // 首次轮询给予最小 500ms 缓冲
+      setTimeout(poll, 500);
 
     } catch (error) {
       reject(error);

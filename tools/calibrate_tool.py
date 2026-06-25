@@ -746,6 +746,9 @@ class CalibrateWidget(QWidget):
 
     def load_h5_file(self, file_path):
         """加载H5文件数据"""
+        # 【修复 CRITICAL-G6】保存旧状态，加载失败时回滚
+        _old_file = self.h5_file
+        _old_path = self.h5_path
         try:
             # 停止正在进行的播放
             if self.is_playing:
@@ -753,10 +756,17 @@ class CalibrateWidget(QWidget):
             if self.is_full_playing:
                 self._stop_full_playback()
 
-            if self.h5_file:
-                self.h5_file.close()
+            # 先尝试打开新文件验证有效性，再关闭旧文件
+            try:
+                new_file = h5py.File(file_path, 'r')
+            except Exception as open_err:
+                raise RuntimeError(f'无法打开文件: {open_err}')
 
-            self.h5_file = h5py.File(file_path, 'r')
+            # 新文件有效，关闭旧文件
+            if _old_file:
+                _old_file.close()
+
+            self.h5_file = new_file
             self.h5_path = file_path
 
             # 更新文件标签
@@ -790,8 +800,29 @@ class CalibrateWidget(QWidget):
             print(f'[CalibrateTool] 已加载文件: {file_path}')
 
         except Exception as e:
+            # 【修复 CRITICAL-G6】回滚到旧文件状态
+            print(f'[CalibrateTool] 加载失败，尝试回滚: {e}')
+            if self.h5_file:
+                try:
+                    self.h5_file.close()
+                except Exception:
+                    pass
+                self.h5_file = None
+
+            # 尝试恢复旧文件
+            if _old_file and _old_path:
+                try:
+                    self.h5_file = h5py.File(_old_path, 'r')
+                    self.h5_path = _old_path
+                    print(f'[CalibrateTool] 已回滚到旧文件: {_old_path}')
+                except Exception as rollback_err:
+                    print(f'[CalibrateTool] 回滚失败: {rollback_err}')
+                    self.h5_file = None
+                    self.h5_path = None
+            else:
+                self.h5_path = None
+
             QMessageBox.critical(self, '错误', f'加载文件失败:\n{str(e)}')
-            print(f'[CalibrateTool] 加载失败: {e}')
 
     def _load_status_attrs(self):
         """Phase 6: 读取并显示 H5 同步/采集状态 attrs"""
@@ -1813,7 +1844,7 @@ class CalibrateWidget(QWidget):
                 ymin, ymax = np.min(filtered), np.max(filtered)
                 margin = (ymax - ymin) * 0.1
                 self.emg1_ylim = (ymin - margin, ymax + margin)
-            except:
+            except Exception:
                 self.emg1_ylim = (np.min(sampled_data), np.max(sampled_data))
             print(f'[CalibrateTool] EMG1 Y轴范围: {self.emg1_ylim}')
 

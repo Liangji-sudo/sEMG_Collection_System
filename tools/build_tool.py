@@ -2,7 +2,8 @@
 打包 hdf5_tool.py 为独立 exe
 
 使用方法:
-    python tools/build_tool.py
+    python tools/build_tool.py              # 发布模式（无控制台窗口）
+    python tools/build_tool.py --console    # 调试模式（保留控制台，查看错误）
 
 输出:
     dist/hdf5_tool.exe
@@ -17,6 +18,10 @@ def main():
     script = 'hdf5_tool.py'
     name = 'hdf5_tool'
 
+    # 【修复 H-G7】支持 --console 调试模式，保留控制台窗口查看错误
+    debug_mode = '--console' in sys.argv or '--debug' in sys.argv
+    window_mode = '--console' if debug_mode else '--windowed'
+
     # 确保在 tools/ 目录下能找到脚本
     here = os.path.dirname(os.path.abspath(__file__))
     script_path = os.path.join(here, script)
@@ -26,21 +31,39 @@ def main():
 
     print("=" * 60)
     print(f"正在打包: {script}")
+    if debug_mode:
+        print("模式: 调试 (保留控制台窗口)")
     print("=" * 60)
 
+    # 【修复 H-G6/H-G8】补充缺失的 hidden-import，确保依赖正确打包
     cmd = [
         sys.executable, '-m', 'PyInstaller',
         '--onefile',
-        '--windowed',
+        window_mode,       # 发布模式隐藏控制台，调试模式保留
         '--clean',
         f'--name={name}',
         # h5py 需要 --collect-all 才能把 hdf5.dll 等原生库一起打包
         '--collect-all', 'h5py',
+        # Python 科学计算
         '--hidden-import=numpy',
+        '--hidden-import=scipy',
+        '--hidden-import=scipy.signal',
+        '--hidden-import=scipy.interpolate',
+        # Qt GUI
         '--hidden-import=PyQt5',
+        '--hidden-import=PyQt5.QtCore',
+        '--hidden-import=PyQt5.QtGui',
+        '--hidden-import=PyQt5.QtWidgets',
+        '--hidden-import=PyQt5.sip',
+        # 可视化
         '--hidden-import=matplotlib',
         '--hidden-import=matplotlib.backends.backend_qt5agg',
+        # 数据处理
         '--hidden-import=msgpack',
+        # 视频处理 (calibrate_tool 子模块需要)
+        '--hidden-import=cv2',
+        '--hidden-import=PIL',
+        '--hidden-import=lz4.frame',
         script_path
     ]
 

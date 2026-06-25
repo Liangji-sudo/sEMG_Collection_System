@@ -14,6 +14,13 @@ const path = require('path');
 const { PATHS } = require('./paths'); // [新增] 引入路径管理模块
 const { getPythonCommand } = require('./pythonPath'); // [新增] Python路径解析
 
+// 【修复 H-N6】添加 PYTHON_ENV 确保 Windows 下 UTF-8 编码正确
+const PYTHON_ENV = {
+    ...process.env,
+    PYTHONIOENCODING: 'utf-8',
+    PYTHONUTF8: '1'
+};
+
 class DataStorage extends EventEmitter {
     constructor() {
         super();
@@ -37,7 +44,7 @@ class DataStorage extends EventEmitter {
                 ]);
 
                 console.log(`[dataStorage] 启动命令: ${command} ${args.join(' ')}`);
-                this.pythonProcess = spawn(command, args);
+                this.pythonProcess = spawn(command, args, { env: PYTHON_ENV });
 
                 this.pythonProcess.on('spawn', () => {
                     console.log('[dataStorage] storage_server已启动');

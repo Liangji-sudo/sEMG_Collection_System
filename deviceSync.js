@@ -186,32 +186,33 @@ class DeviceSync extends EventEmitter {
     }
 
     // 关闭连接
+    // 【修复 H-N2】移除 async Promise executor 反模式
     async close() {
-        return new Promise(async (resolve) => {
-            // 关闭摄像头
+        // 关闭摄像头
+        try {
             await this.cameraManager.stopAll();
             console.log('[deviceSync] 摄像头已关闭');
+        } catch (e) {
+            console.error('[deviceSync] 关闭摄像头失败:', e.message);
+        }
 
-            // 关闭mocap_server
-            if (this.mocapProcess) {
-                this.mocapProcess.kill();
-                this.mocapProcess = null;
-                console.log('[deviceSync] mocap_server关闭');
-            }
+        // 关闭mocap_server
+        if (this.mocapProcess) {
+            this.mocapProcess.kill();
+            this.mocapProcess = null;
+            console.log('[deviceSync] mocap_server关闭');
+        }
 
-            // 关闭ble_server
-            if (this.pythonProcess) {
-                this.pythonProcess.kill();
-                this.pythonProcess = null;
-                this.isConnected = false;
-                console.log('[deviceSync] ble_server关闭');
-                this.emit('disconnected');
-                resolve();
-            } else {
-                console.log('[deviceSync] ble_server未启动，无需关闭');
-                resolve();
-            }
-        });
+        // 关闭ble_server
+        if (this.pythonProcess) {
+            this.pythonProcess.kill();
+            this.pythonProcess = null;
+            this.isConnected = false;
+            console.log('[deviceSync] ble_server关闭');
+            this.emit('disconnected');
+        } else {
+            console.log('[deviceSync] ble_server未启动，无需关闭');
+        }
     }
 
     // 重置模块状态

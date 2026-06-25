@@ -2191,7 +2191,7 @@ class ViewerTab(QWidget):
                 if val.dtype.kind == 'S' or val.dtype == object:
                     try:
                         val_str = val.item().decode('utf-8', errors='replace') if isinstance(val.item(), bytes) else str(val.item())
-                    except:
+                    except Exception:
                         val_str = str(val)
                 else:
                     val_str = str(val)
@@ -2994,11 +2994,6 @@ class SyncCalibrationTab(QWidget):
                                if self._sync_prompt_idx is not None else 0)
             save_prompt_time = float(self._sync_prompt_time)
             save_marked_at = datetime.now().isoformat()
-
-            # 显式释放所有 H5 内部引用
-            self.video_first_frame_unix.clear()
-            self.video_last_frame_unix.clear()
-            self.video_duration.clear()
 
             if self.h5_file:
                 self.h5_file.close()

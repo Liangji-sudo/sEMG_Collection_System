@@ -949,7 +949,7 @@ def add_to_queue(priority: int, msg_type: str, data: dict, target_ws=None):
                 old = q.get_nowait()
                 if old[0] <= PRIORITY_HIGH:
                     q.put(old)
-            except:
+            except Exception:
                 pass
         
         seq = next(state.queue_seq)
@@ -1833,17 +1833,20 @@ async def switch_preview_to_collection(ws):
             continue
 
         dev.reset_stats()
-        dev.stream_mode = "collection"
 
         # 生成 collection bin 文件名（含 session_id，不含 PREVIEW_ 前缀）
         filename_str = _build_stream_filename(dev, prefix_hint="COLLECT")
         ok = await _do_start_stream_for_device(dev, filename_str)
         if ok:
+            dev.stream_mode = "collection"  # 【修复 H-P3】仅成功时设置，避免失败后状态不一致
             started_ids.append(did)
             collection_bins[f'dev{did}'] = filename_str
             if dev.name:
                 device_names[f'dev{did}'] = dev.name
             log(f"[switch] Dev{did} collection stream 已启动: {filename_str}")
+        else:
+            dev.stream_mode = "idle"  # 【修复 H-P3】失败时回滚到 idle
+            log(f"[switch] Dev{did} collection stream 启动失败")
 
     if not started_ids:
         await send_to_control(ws, action, {
@@ -1931,14 +1934,16 @@ async def switch_collection_to_preview(ws):
             continue
 
         dev.reset_stats()
-        dev.stream_mode = "preview"
 
         # preview bin 文件名含 PREVIEW_ 前缀
         filename_str = _build_stream_filename(dev, prefix_hint="PREVIEW")
         ok = await _do_start_stream_for_device(dev, filename_str)
         if ok:
+            dev.stream_mode = "preview"  # 【修复 H-P3】仅成功时设置
             started_ids.append(did)
             log(f"[switch] Dev{did} preview stream 已启动: {filename_str}")
+        else:
+            dev.stream_mode = "idle"  # 【修复 H-P3】失败时回滚
 
     log("=" * 50)
     log(f"[switch] === collection → preview 切换完成 ===")
@@ -2121,11 +2126,13 @@ async def handle_control_client(websocket):
                             dev = state.get_device(did)
                             if dev.is_connected() and not dev.is_streaming:
                                 dev.reset_stats()
-                                dev.stream_mode = "collection"
                                 fn = _build_stream_filename(dev, prefix_hint="COLLECT")
                                 if await _do_start_stream_for_device(dev, fn):
+                                    dev.stream_mode = "collection"  # 【修复 H-P3】仅成功时设置
                                     started.append(did)
                                     collection_bins[f'dev{did}'] = fn
+                                else:
+                                    dev.stream_mode = "idle"  # 【修复 H-P3】失败时回滚
                         await send_to_control(websocket, 'start_collection_stream', {
                             'success': len(started) > 0,
                             'started': started,

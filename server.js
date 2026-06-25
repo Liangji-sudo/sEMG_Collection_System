@@ -51,6 +51,11 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(PATHS.public));
 
+// 【修复 H-N4】健康检查端点，用于 Electron 主进程轮询服务就绪状态
+app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok', timestamp: Date.now() });
+});
+
 
 // ===================== Storage 文件列表 API =====================
 app.get('/api/storage/files', (req, res) => {
@@ -398,24 +403,34 @@ app.get('*', (req, res) => {
 
 
 // 自动打开浏览器函数
+// 【修复】使用 spawn 代替 exec 避免命令注入，验证端口号为有效数字
 function openBrowser() {
     try {
-        const { exec } = require('child_process');
-        const url = `http://localhost:${PORT}`;
-        
+        const { spawn } = require('child_process');
+        const port = parseInt(process.env.PORT, 10) || 3000;
+        // 验证端口号范围
+        const validPort = (port >= 1 && port <= 65535) ? port : 3000;
+        const url = `http://localhost:${validPort}`;
+
+        let command, args;
         switch (process.platform) {
             case 'win32':
-                exec(`start ${url}`);
+                command = 'cmd';
+                args = ['/c', 'start', '', url];
                 break;
             case 'darwin':
-                exec(`open ${url}`);
+                command = 'open';
+                args = [url];
                 break;
             case 'linux':
-                exec(`xdg-open ${url}`);
+                command = 'xdg-open';
+                args = [url];
                 break;
             default:
                 console.log(`请手动打开浏览器访问: ${url}`);
+                return;
         }
+        spawn(command, args, { detached: true, stdio: 'ignore' }).unref();
     } catch (error) {
         console.log('自动打开浏览器失败，请手动访问');
     }
