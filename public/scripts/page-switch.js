@@ -363,7 +363,8 @@
             localStorage.setItem('emg_current_user', JSON.stringify(user));
             
             // 添加到用户历史
-            let userHistory = JSON.parse(localStorage.getItem('emg_user_history') || '[]');
+            let userHistory = [];
+            try { userHistory = JSON.parse(localStorage.getItem('emg_user_history') || '[]'); } catch (e) { userHistory = []; }
             userHistory.push(user);
             localStorage.setItem('emg_user_history', JSON.stringify(userHistory));
         }
@@ -374,7 +375,7 @@
         loadSavedUser() {
             const saved = localStorage.getItem('emg_current_user');
             if (saved) {
-                this.currentUser = JSON.parse(saved);
+                try { this.currentUser = JSON.parse(saved); } catch (e) { this.currentUser = null; }
             }
         }
 

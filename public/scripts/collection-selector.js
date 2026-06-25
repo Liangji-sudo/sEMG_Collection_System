@@ -295,7 +295,8 @@
                 console.log('[CollectionSelector] 使用默认受试者字段配置');
             }
 
-            const saved = JSON.parse(localStorage.getItem('emg_current_user') || '{}');
+            let saved = {};
+            try { saved = JSON.parse(localStorage.getItem('emg_current_user') || '{}'); } catch (e) { saved = {}; }
 
             // 【新增】从初始界面获取受试者编号，并设置到saved中
             const sessionIdInput = document.getElementById('sessionIdInput');

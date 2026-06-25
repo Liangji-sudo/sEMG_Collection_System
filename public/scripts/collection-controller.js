@@ -1153,8 +1153,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this.updateNextStageButton();
 
             const currentStage = this.stages[this.currentStageIndex];
-            const userData = JSON.parse(localStorage.getItem('emg_current_user') || '{}');
-
+            let userData = {};
+            try { userData = JSON.parse(localStorage.getItem('emg_current_user') || '{}'); } catch (e) { userData = {}; }
             const userId = userData.id ||
                            this.collectionConfig?.subject?.id ||
                            `S${Date.now().toString().slice(-6)}`;
@@ -3964,7 +3964,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
                 // 保存H5文件名（用于后续写入H5属性）
                 const currentStage = this.stages[this.currentStageIndex];
-                const userData = JSON.parse(localStorage.getItem('emg_current_user') || '{}');
+                let userData = {};
+                try { userData = JSON.parse(localStorage.getItem('emg_current_user') || '{}'); } catch (e) { userData = {}; }
                 const userId = userData.id ||
                                this.collectionConfig?.subject?.id ||
                                `S${Date.now().toString().slice(-6)}`;
