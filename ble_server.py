@@ -788,61 +788,9 @@ def clear_stream_buffers(dev: DeviceState):
     reset_callback_timing(dev.device_id)
 
 
-def _legacy_create_notification_handler(dev: DeviceState):
-    def handler(sender: int, data: bytearray):
-        try:
-            ts = time.time()
-
-            # 【诊断】检测回调间隔异常
-            device_key = dev.device_id
-            if device_key in _last_callback_time:
-                interval = ts - _last_callback_time[device_key]
-                # 正常情况下，250Hz的数据应该每4ms收到一包，9帧/包约36ms
-                # 如果间隔超过100ms，说明有问题
-                if interval > 0.1 and not _callback_interval_warning_printed.get(device_key):
-                    log(f"[Dev{dev.device_id}] ⚠️ 回调间隔异常: {interval*1000:.1f}ms (正常应<40ms)")
-                    _callback_interval_warning_printed[device_key] = True
-                elif interval < 0.1:
-                    _callback_interval_warning_printed[device_key] = False
-            _last_callback_time[device_key] = ts
-
-            dev.last_data_time = ts  # 【新增】记录最后收到数据的时间
-            if dev.is_streaming:
-                enqueue_raw_packet(dev, ts, data)
-            return
-            parsed = parse_packet(data, dev)
-            if parsed:
-                parsed['t'] = ts
-
-                # 【调试】每100个包打印一次日志
-                if dev.total_frames % 100 == 0:
-                    log(f"[Dev{dev.device_id}] 已收到 {dev.total_frames} 帧, 丢帧: {dev.lost_frames}, 缓冲区: {len(dev.data_buffer)}")
-
-                # 生成每帧EMG的时间戳
-                # 注意：BLE传输的是250Hz数据（2kHz降采样8倍），所以时间间隔是1/250=0.004秒
-                fpkt = parsed.get('n', 9)
-                ble_sample_rate = 250  # BLE传输频率固定为250Hz
-                frame_interval = 1.0 / ble_sample_rate  # 0.004秒
-
-                # 为每帧生成时间戳（从当前时间向前推算）
-                emg_timestamps = []
-                for i in range(fpkt):
-                    # 最后一帧的时间是ts，往前推算
-                    frame_ts = ts - (fpkt - 1 - i) * frame_interval
-                    emg_timestamps.append(frame_ts)
-                parsed['emg_t'] = emg_timestamps
-
-                # IMU时间戳（每包 N 个 IMU，随 BLE 包接收，约 27.8Hz）
-                # V1: 2 个 IMU, V2: 0-3 个 IMU
-                if parsed.get('imu'):
-                    imu_timestamps = [ts] * len(parsed['imu'])
-                    parsed['imu_t'] = imu_timestamps
-                
-                dev.data_buffer.append(parsed)
-        except Exception as e:
-            log(f"[Dev{dev.device_id}] 回调错误: {e}")
-    return handler
-
+# 【修复 CRITICAL-P3】_legacy_create_notification_handler 已删除
+# 该函数从未被调用，且包含不可达死代码（return 后 30+ 行），当前使用的
+# create_notification_handler 提供了完整功能。
 
 # ================= 消息队列 =================
 

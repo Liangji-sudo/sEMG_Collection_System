@@ -913,18 +913,23 @@
                 const width = singleSize * emojiCount;
                 const height = singleSize;
 
-                // 对于emoji，创建临时canvas来绘制
-                const tempCanvas = document.createElement('canvas');
-                const tempCtx = tempCanvas.getContext('2d');
-                tempCanvas.width = width;
-                tempCanvas.height = height;
+                // 【修复 CRITICAL-F8】缓存 emoji canvas，避免每帧创建 600+ 个临时 canvas
+                if (!this._emojiCache) this._emojiCache = new Map();
+                const cacheKey = `${icon}_${emojiCount}`;
+                let tempCanvas = this._emojiCache.get(cacheKey);
+                if (!tempCanvas) {
+                    tempCanvas = document.createElement('canvas');
+                    const tempCtx = tempCanvas.getContext('2d');
+                    tempCanvas.width = width;
+                    tempCanvas.height = height;
+                    tempCtx.font = `${singleSize - 8}px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
+                    tempCtx.textAlign = 'center';
+                    tempCtx.textBaseline = 'middle';
+                    tempCtx.fillText(icon, width / 2, height / 2);
+                    this._emojiCache.set(cacheKey, tempCanvas);
+                }
 
-                tempCtx.font = `${singleSize - 8}px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
-                tempCtx.textAlign = 'center';
-                tempCtx.textBaseline = 'middle';
-                tempCtx.fillText(icon, width / 2, height / 2);
-
-                // 将临时canvas绘制到主canvas
+                // 将缓存的canvas绘制到主canvas
                 ctx.drawImage(tempCanvas, x - width / 2, y - height / 2, width, height);
             } else {
                 // 非emoji使用普通方式绘制
@@ -1021,9 +1026,13 @@
             if (this.ctx && this.config.canvasWidth && this.config.canvasHeight) {
                 this.ctx.clearRect(0, 0, this.config.canvasWidth, this.config.canvasHeight);
             }
-            
+
             if (this.canvas) {
                 this.canvas.style.display = 'none';
+            }
+            // 【修复 CRITICAL-F8】清除 emoji 缓存
+            if (this._emojiCache) {
+                this._emojiCache.clear();
             }
             window.animationPositionManager?.hideAnimationPanel();
         }
@@ -1164,8 +1173,10 @@
             }
             console.log('  - 持续手势时长:', this.sustainedDuration, '秒');
 
-            // 清空并重新构建promptLibrary
-            this.promptLibrary = {};
+            // 【修复 CRITICAL-F7】仅清除乱序模式条目(shuffle_前缀)，保留非乱序模式下添加的条目
+            Object.keys(this.promptLibrary).forEach(k => {
+                if (k.startsWith('shuffle_')) delete this.promptLibrary[k];
+            });
 
             // 构建promptSequence，并将每个手势添加到promptLibrary
             // 【Bugfix】每个 prompt 保存 originalIndex（全局索引），续采时用于回调

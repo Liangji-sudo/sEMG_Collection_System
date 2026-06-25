@@ -451,7 +451,8 @@
                     <div class="empty-state">
                         <i class="fa fa-exclamation-triangle"></i>
                         <p>加载失败</p>
-                        <p class="text-sm">${error}</p>
+                        <!-- 【修复 CRITICAL-F10】使用HTML转义防XSS -->
+                        <p class="text-sm">${this._escapeHtml(String(error))}</p>
                     </div>
                 `;
             }
@@ -758,7 +759,8 @@
                         <i class="fa fa-file"></i>
                     </div>
                     <div class="file-info">
-                        <div class="file-name">${file.name}</div>
+                        <!-- 【修复 CRITICAL-F9】使用HTML转义防XSS -->
+                <div class="file-name">${this._escapeHtml(file.name)}</div>
                         <div class="file-meta">
                             <span><i class="fa fa-calendar"></i> ${dateStr}</span>
                             <span><i class="fa fa-hdd-o"></i> ${sizeStr}</span>
@@ -872,6 +874,14 @@
             setTimeout(() => {
                 toast.classList.remove('visible');
             }, 2500);
+        }
+
+        // 【修复 CRITICAL-F9/F10】HTML 转义工具方法，防止 XSS
+        _escapeHtml(str) {
+            if (!str) return '';
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
         }
     }
 

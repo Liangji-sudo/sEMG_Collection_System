@@ -102,6 +102,12 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             // 短休息（<此阈值）不切 preview，保持 idle 减少不必要的 bin 切流
             this.MIN_REST_FOR_PREVIEW_STREAM_SECONDS = 10;
 
+            // 【修复】声明所有使用的属性（避免隐式全局/未声明属性访问）
+            this._isTestMode = false;               // 测试模式标志
+            this._syncRemainingGestures = null;     // 同步阶段剩余手势列表
+            this._resumeGestureStartIndex = 0;      // 续采模式下手势起始索引
+            this._calibrationDelayTimer = null;     // 标定完成延迟定时器
+
             console.log('[Collection] 构造函数结束');
         }
 
@@ -1096,6 +1102,14 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 } catch (err) {
                     console.error('[Collection] ★ 切换采集流失败:', err);
                     this.showToast('切换采集流失败: ' + err.message, 'error');
+                    // 【修复 CRITICAL-F6】尝试回滚 session_id，避免设备端状态不一致
+                    try {
+                        console.log('[Collection] 尝试回滚 session_id...');
+                        await window.BleControl.setSessionIdAndWait(''); // 清空 session_id
+                    } catch (rollbackErr) {
+                        console.warn('[Collection] ⚠ session_id 回滚失败:', rollbackErr.message);
+                        console.warn('[Collection] 设备端 session_id 可能处于不一致状态，建议重启设备');
+                    }
                     this._setAllButtonsDisabled(false);
                     this._switchInProgress = false;
                     this.updateControlButtons(false);
@@ -2834,14 +2848,19 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 stageName: currentStage?.name || currentStage?.id
             });
 
+            // 【修复 CRITICAL-F4】每个 Stage 完成都发送 collection_stop，非仅最后一个
+            this.sendToRealtimeEngine('collection_stop', {
+                completed: this.currentStageIndex >= this.stages.length - 1,
+                stageIndex: this.currentStageIndex,
+                totalStages: this.stages.length
+            });
+
             if (this.currentStageIndex < this.stages.length - 1) {
                 this.updateGestureDisplay({
                     name: 'Stage完成',
                     instruction: '可以点击开始进行下一个Stage',
                     showCountdown: false
                 });
-            } else {
-                this.sendToRealtimeEngine('collection_stop', { completed: true });
             }
 
             this._isRunning = false;
