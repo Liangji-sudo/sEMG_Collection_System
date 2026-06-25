@@ -1859,7 +1859,7 @@ class CalibrateWidget(QWidget):
                 ymin, ymax = np.min(filtered), np.max(filtered)
                 margin = (ymax - ymin) * 0.1
                 self.emg2_ylim = (ymin - margin, ymax + margin)
-            except:
+            except Exception:
                 self.emg2_ylim = (np.min(sampled_data), np.max(sampled_data))
             print(f'[CalibrateTool] EMG2 Y轴范围: {self.emg2_ylim}')
 

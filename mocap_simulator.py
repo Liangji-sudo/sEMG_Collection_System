@@ -265,7 +265,7 @@ class MocapSimulator:
         }
         try:
             await websocket.send(json.dumps(welcome, ensure_ascii=False))
-        except:
+        except Exception:
             pass
 
         try:
@@ -379,7 +379,7 @@ class MocapSimulator:
 
         try:
             app.run()
-        except:
+        except Exception:
             pass
         print("[MocapSim] vispy 可视化窗口已关闭")
 

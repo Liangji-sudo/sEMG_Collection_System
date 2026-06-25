@@ -421,7 +421,7 @@ class DeviceState:
         try:
             # 显式转换为 bool，避免 _DeprecatedIsConnectedReturn 类型无法 JSON 序列化
             return bool(self.client.is_connected)
-        except:
+        except Exception:
             return False
     
     def to_dict(self) -> dict:
@@ -981,24 +981,24 @@ async def process_queue():
                         if ws:
                             try:
                                 await ws.send(payload)
-                            except:
+                            except Exception:
                                 pass
-                
+
                 elif msg_type == 'data':
                     # 数据 -> 发送到数据端
                     for ws in list(state.data_clients):
                         try:
                             await ws.send(payload)
-                        except:
+                        except Exception:
                             pass
-                
+
                 elif msg_type == 'broadcast':
                     # 广播 -> 发送到所有客户端
                     all_clients = list(state.control_clients) + list(state.data_clients)
                     for ws in all_clients:
                         try:
                             await ws.send(payload)
-                        except:
+                        except Exception:
                             pass
                             
             except Exception as e:
@@ -1274,7 +1274,7 @@ async def disconnect_device(ws, device_id: int, silent=False):
         if dev.client:
             try:
                 await dev.client.disconnect()
-            except:
+            except Exception:
                 pass
             dev.client = None
 

@@ -220,7 +220,7 @@ class CameraCapture:
                                 'frame': b64,
                                 'timestamp': time.time()
                             })
-                        except:
+                        except Exception:
                             pass
 
                     # FPS 统计
@@ -246,7 +246,7 @@ class CameraCapture:
                 line_str = line.decode('utf-8', errors='ignore').strip()
                 if 'error' in line_str.lower() or 'cannot' in line_str.lower():
                     print(f'[CameraCapture] [{self.side}] ffmpeg: {line_str}')
-        except:
+        except Exception:
             pass
 
     def stop(self):
@@ -258,10 +258,10 @@ class CameraCapture:
             try:
                 self.process.terminate()
                 self.process.wait(timeout=3)
-            except:
+            except Exception:
                 try:
                     self.process.kill()
-                except:
+                except Exception:
                     pass
             self.process = None
 
@@ -381,6 +381,9 @@ class FrameRecorder:
               f'{self.recording_stopped_at - self.recording_started_at:.1f}s elapsed)')
 
         # 用 ffmpeg 将 MJPEG 流封装为 AVI（保持原始 1920x1080@30fps）
+        # 【修复 H-P1】根据录制时长动态计算超时，避免长录制时 ffmpeg 超时
+        recording_duration = self.recording_stopped_at - self.recording_started_at
+        ffmpeg_timeout = max(60, recording_duration * 0.5)  # 至少60秒，长录制按50%时长
         try:
             result = subprocess.run([
                 self.ffmpeg_path,
@@ -391,7 +394,7 @@ class FrameRecorder:
                 '-q:v', '12',
                 '-y',
                 str(self.output_path)
-            ], capture_output=True, text=True, timeout=60,
+            ], capture_output=True, text=True, timeout=ffmpeg_timeout,
                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
 
             if not self.output_path.exists():
@@ -692,7 +695,7 @@ class CameraServer:
         for ws in clients:
             try:
                 await ws.send(json.dumps(status_msg))
-            except:
+            except Exception:
                 dead.add(ws)
         if dead:
             with self.clients_lock:
@@ -1246,7 +1249,7 @@ class CameraServer:
             status = self._cmd_get_status()
             status['type'] = 'status'
             await websocket.send(json.dumps(status))
-        except:
+        except Exception:
             pass
 
     # ==================== 清理 ====================
@@ -1263,7 +1266,7 @@ class CameraServer:
                     if side in self.captures:
                         self.captures[side].frame_recorder = None
                     recorder.stop_and_save()
-                except:
+                except Exception:
                     pass
         self.recorders.clear()
 
