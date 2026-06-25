@@ -516,7 +516,12 @@ async function startServer() {
     try {
 
 
-        // 启动realtimeEngine模块
+        // 【修复 CRITICAL-N1】先启动 dataStorage（storage_server ZMQ），
+        // 确保 ZMQ REP/PUSH 端口在 realtimeEngine 连接之前已绑定
+        await dataStorage.initialize();
+        console.log('[server.js] dataStorage 启动成功');
+
+        // 启动realtimeEngine模块（此时 ZMQ 服务端已就绪）
         await realtimeEngine.start(8080);
         console.log('[server.js] realtimeEngine 启动成功');
 
@@ -527,10 +532,6 @@ async function startServer() {
         // 【新增】启动 camera_server
         await startCameraServer();
         console.log('[server.js] camera_server 启动成功');
-
-        // 启动dataStorage模块(dataStorage模块启动storage_server模块)
-        await dataStorage.initialize();
-        console.log('[server.js] dataStorage 启动成功');
         
         // 启动HTTP服务器
         const server = app.listen(PORT, () => {

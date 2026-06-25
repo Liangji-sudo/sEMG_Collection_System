@@ -217,8 +217,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 });
             }
 
-            // 【新增】初始化空格键监听器（但不立即启用）
-            this._initSpaceKeyListener();
+            // 【修复 CRITICAL-F2】_initSpaceKeyListener 已在 init() 中调用，此处重复导致空格键响应两次
+            // this._initSpaceKeyListener();  // 已移除重复调用
 
             console.log('[Collection] bindEvents() 完成 ✓');
         }

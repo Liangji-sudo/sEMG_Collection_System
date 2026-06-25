@@ -2295,11 +2295,12 @@ def sync_h5_one_to_many_adc_search(h5_path, emg_bin_path, imu_bin_path=None, dev
 def run_gui():
     """运行GUI界面"""
     try:
+        # 【修复 CRITICAL-P2】添加缺失的 QSpinBox 导入
         from PyQt5.QtWidgets import (
             QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
             QPushButton, QLabel, QFileDialog, QTextEdit, QGroupBox,
             QCheckBox, QComboBox, QMessageBox, QProgressBar, QListWidget,
-            QListWidgetItem, QAbstractItemView
+            QListWidgetItem, QAbstractItemView, QSpinBox
         )
         from PyQt5.QtCore import Qt
     except ImportError:

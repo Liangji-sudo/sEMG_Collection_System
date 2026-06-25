@@ -1563,23 +1563,36 @@ class RealtimeEngine extends EventEmitter {
     }
 
     async storage_server_connect() {
-        try {
-            // 连接 REP socket（用于控制命令）
-            const address = `tcp://${this.storage_server_host}:${this.storage_server_port}`;
-            await this.storage_server_socket.connect(address);
-            this.storage_connected = true;
-            console.log(`[realtimeEngine] 已连接到storage_server控制端: ${address}`);
+        // 【修复 CRITICAL-N1】添加重试机制：storage_server 进程启动后 ZMQ bind 可能需要短暂时间
+        const MAX_RETRIES = 5;
+        const RETRY_DELAY_MS = 1000;
 
-            // 【新增】连接 PUSH socket（用于数据发送）
-            const dataAddress = `tcp://${this.storage_server_host}:${this.storage_data_port}`;
-            await this.storage_push_socket.connect(dataAddress);
-            this.storage_push_connected = true;
-            console.log(`[realtimeEngine] 已连接到storage_server数据端: ${dataAddress} (PUSH模式)`);
-        } catch (err) {
-            this.storage_connected = false;
-            this.storage_push_connected = false;
-            console.error('[realtimeEngine] 连接storage_server失败:', err);
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                // 连接 REP socket（用于控制命令）
+                const address = `tcp://${this.storage_server_host}:${this.storage_server_port}`;
+                await this.storage_server_socket.connect(address);
+                this.storage_connected = true;
+                console.log(`[realtimeEngine] 已连接到storage_server控制端: ${address}`);
+
+                // 连接 PUSH socket（用于数据发送）
+                const dataAddress = `tcp://${this.storage_server_host}:${this.storage_data_port}`;
+                await this.storage_push_socket.connect(dataAddress);
+                this.storage_push_connected = true;
+                console.log(`[realtimeEngine] 已连接到storage_server数据端: ${dataAddress} (PUSH模式)`);
+                return; // 连接成功，退出重试循环
+            } catch (err) {
+                console.error(`[realtimeEngine] 连接storage_server失败 (attempt ${attempt}/${MAX_RETRIES}):`, err.message);
+                if (attempt < MAX_RETRIES) {
+                    await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+                }
+            }
         }
+
+        // 所有重试均失败
+        this.storage_connected = false;
+        this.storage_push_connected = false;
+        console.error('[realtimeEngine] 连接storage_server全部重试失败，H5存储功能不可用');
     }
 
     async sendStorageCommand(cmd, params = {}) {

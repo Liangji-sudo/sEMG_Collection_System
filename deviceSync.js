@@ -357,7 +357,8 @@ class DeviceSync extends EventEmitter {
 
             // 通过 realtimeEngine 发送命令到 camera_server
             try {
-                const result = await this.realtimeEngine.sendCameraCommand('start_recording', {
+                // 【修复 CRITICAL-N2】realtimeEngine 是模块级导入常量，非实例属性
+                const result = await realtimeEngine.sendCameraCommand('start_recording', {
                     side: side,
                     output_filename: output_filename
                 });
@@ -399,7 +400,7 @@ class DeviceSync extends EventEmitter {
         for (const side of ['left', 'right']) {
             if (this.cameraManager.cameraStatus[side].recording) {
                 try {
-                    const result = await this.realtimeEngine.sendCameraCommand('stop_recording', {
+                    const result = await realtimeEngine.sendCameraCommand('stop_recording', {
                         side: side
                     });
 
