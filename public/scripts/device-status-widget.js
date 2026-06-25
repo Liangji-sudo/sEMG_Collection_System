@@ -104,8 +104,8 @@
                 e.preventDefault();
             });
 
-            // 鼠标移动
-            document.addEventListener('mousemove', (e) => {
+            // 【修复】命名函数以便拖拽结束时清理事件监听器，防止内存泄漏
+            this._dragMoveHandler = (e) => {
                 if (!this.isDragging) return;
 
                 const deltaX = e.clientX - this.dragStartX;
@@ -128,16 +128,20 @@
                 this.floatElement.style.left = newX + 'px';
 
                 e.preventDefault();
-            });
+            };
 
-            // 鼠标释放
-            document.addEventListener('mouseup', () => {
+            this._dragUpHandler = () => {
                 if (this.isDragging) {
                     this.isDragging = false;
                     this.floatElement.style.cursor = '';
                     header.style.cursor = 'move';
                 }
-            });
+                document.removeEventListener('mousemove', this._dragMoveHandler);
+                document.removeEventListener('mouseup', this._dragUpHandler);
+            };
+
+            document.addEventListener('mousemove', this._dragMoveHandler);
+            document.addEventListener('mouseup', this._dragUpHandler);
 
             // 设置标题栏光标样式
             header.style.cursor = 'move';

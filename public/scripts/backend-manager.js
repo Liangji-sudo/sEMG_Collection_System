@@ -919,6 +919,11 @@
         if (backendPage) {
             observer.observe(backendPage, { attributes: true });
         }
+
+        // 【修复】页面卸载时断开 MutationObserver，防止内存泄漏
+        window.addEventListener('beforeunload', () => {
+            observer.disconnect();
+        });
     }
 
     if (document.readyState === 'loading') {

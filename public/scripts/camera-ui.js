@@ -1105,7 +1105,8 @@
             header.style.cursor = 'grabbing';
         });
 
-        document.addEventListener('mousemove', (e) => {
+        // 【修复】命名函数以便拖拽结束时清理事件监听器
+        const _thumbDragMove = (e) => {
             if (!_thumbDragData) return;
             const d = _thumbDragData;
             let newX = d.left + (e.clientX - d.startX);
@@ -1120,16 +1121,26 @@
             d.el.style.top = newY + 'px';
             d.el.style.right = 'auto';
             d.el.style.bottom = 'auto';
-        });
+        };
 
-        document.addEventListener('mouseup', () => {
+        const _thumbDragUp = () => {
             if (_thumbDragData) {
                 _thumbDragData.el.style.cursor = '';
                 header.style.cursor = 'move';
                 _thumbDragData = null;
             }
-        });
+            document.removeEventListener('mousemove', _thumbDragMove);
+            document.removeEventListener('mouseup', _thumbDragUp);
+        };
+
+        document.addEventListener('mousemove', _thumbDragMove);
+        document.addEventListener('mouseup', _thumbDragUp);
     }
+
+    // 【修复】页面卸载时清理定时器和事件监听器
+    window.addEventListener('beforeunload', () => {
+        if (updateStatusInterval) { clearInterval(updateStatusInterval); updateStatusInterval = null; }
+    });
 
     console.log('[CameraUI] 脚本加载完成');
 

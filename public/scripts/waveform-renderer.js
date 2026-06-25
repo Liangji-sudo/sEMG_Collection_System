@@ -143,14 +143,24 @@
 
         setupResizeHandler() {
             let resizeTimeout;
-            const resizeObserver = new ResizeObserver(() => {
+            this._resizeObserver = new ResizeObserver(() => {
                 clearTimeout(resizeTimeout);
                 resizeTimeout = setTimeout(() => {
                     this.resize();
                     this.clear();
                 }, 100);
             });
-            resizeObserver.observe(this.container);
+            this._resizeObserver.observe(this.container);
+        }
+
+        /**
+         * 销毁渲染器，清理所有资源
+         */
+        destroy() {
+            if (this._resizeObserver) {
+                this._resizeObserver.disconnect();
+                this._resizeObserver = null;
+            }
         }
 
         /**
@@ -238,7 +248,7 @@
          * 更新时间指针位置
          */
         updatePointer() {
-            if (this.pointer) {
+            if (this.pointer && this.totalPoints > 0) {
                 const metrics = this.getPlotMetrics();
                 const x = metrics.left + (this.writeIndex / this.totalPoints) * metrics.width;
                 this.pointer.style.left = x + 'px';
@@ -267,7 +277,8 @@
          *   IMU: 3个通道(xyz)，每个通道1个点
          */
         renderPoints(data) {
-            if (!data || data.length === 0) return;
+            // 【修复】防止 totalPoints 为 0 时除零导致 NaN
+            if (!data || data.length === 0 || this.totalPoints <= 0) return;
 
             if (this.imuStackedMode) {
                 this._renderIMUStacked(data);

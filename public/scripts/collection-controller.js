@@ -1423,6 +1423,11 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 clearInterval(this.calibrationTimer);
                 this.calibrationTimer = null;
             }
+            // 【修复】清理空格键监听器，避免在非采集页面仍响应空格键
+            if (this._spaceKeyHandler) {
+                document.removeEventListener('keydown', this._spaceKeyHandler);
+                this._spaceKeyHandler = null;
+            }
             this.isCalibrating = false;
             this.calibrationPhase = null;
 

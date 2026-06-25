@@ -360,7 +360,7 @@
 
             // 更新时间显示
             this.updateTimeDisplay();
-            setInterval(() => this.updateTimeDisplay(), 1000);
+            this._timeUpdateInterval = setInterval(() => this.updateTimeDisplay(), 1000);
 
             console.log('[Waveform] 渲染器初始化完成');
         }
@@ -413,6 +413,8 @@
         stop() {
             this.isRunning = false;
             this.dataReceiver.disconnect();
+            // 清理时间更新定时器
+            if (this._timeUpdateInterval) { clearInterval(this._timeUpdateInterval); this._timeUpdateInterval = null; }
             // 重置质量状态
             this._qualityMonitor1.reset();
             this._qualityMonitor2.reset();
