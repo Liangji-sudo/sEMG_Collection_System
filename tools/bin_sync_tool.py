@@ -1374,10 +1374,17 @@ def _verify_imu_count_fits_bin(imu_bin_path, num_imus, min_consecutive=5):
     用于交叉验证：当 bin 自动检测与 BLE 数据冲突时，
     分别验证两个候选值，选择帧 ID 递增序列更长的一方。
 
+    Args:
+        imu_bin_path: IMU bin 文件路径
+        num_imus: 待验证的 IMU 数量
+        min_consecutive: 最少连续递增帧数（用于判定"解析正确"的阈值）
+
     Returns:
-        dict: _verify_imu_frame_ids 的完整结果（包含 score, longest_run 等）
+        dict: _verify_imu_frame_ids 的完整结果，额外增加 'passed' 字段
     """
-    return _verify_imu_frame_ids(imu_bin_path, num_imus, max_frames=200)
+    vr = _verify_imu_frame_ids(imu_bin_path, num_imus, max_frames=200)
+    vr['passed'] = vr['score'] >= 0.90 and vr['longest_run'] >= min_consecutive
+    return vr
 
 
 def _validate_imu_sensor_data(all_data, num_imus, sample_size=500):
@@ -1665,7 +1672,7 @@ def _resolve_num_imus(h5_file, device_id, imu_bin_path=None, manual_num_imus=Non
 
         for n in candidates:
             vr = _verify_imu_count_fits_bin(imu_bin_path, n, min_consecutive=10)
-            passed = vr['score'] >= 0.90 and vr['longest_run'] >= 10
+            passed = vr.get('passed', False)
             log(f"     n={n}: score={vr['score']:.1%}, "
                 f"longest_run={vr['longest_run']}/{vr['total']}, "
                 f"first_fid={vr.get('first_fid')}, {'✓ PASS' if passed else '✗ FAIL'}")
@@ -2478,29 +2485,25 @@ def run_gui():
 
             device_id = self.device_combo.currentIndex() + 1
             verify = self.verify_cb.isChecked()
-            ui_num_imus = self.num_imus_spin.value()  # UI 指定的 IMU 数量（手动兜底值）
 
             self.log(f"\n{'='*60}")
             self.log(f"开始批量同步 ({len(self.h5_paths)} 个文件)")
             self.log(f"设备: {device_id}, 校验: {verify}")
             self.log(f"{'='*60}\n")
 
-            # 【IMU数量解析】优先 bin 自动检测 → 失败则用 UI spinbox 值
-            # bin 文件才是硬件真实数据结构，UI spinbox 只是兜底
-            resolved_num_imus = ui_num_imus
+            # 【IMU数量解析】始终交由 _resolve_num_imus 做多源融合（bin帧ID验证 + BLE实测 + BLE握手）
+            # GUI spinbox 仅作显示参考，不参与决策。需要手动覆盖请用 CLI --num-imus 参数
+            resolved_num_imus = None
+            self.log(f"  IMU数量: 交由多源融合自动裁决（bin帧ID验证 + BLE实测 + BLE握手）")
             if self.imu_bin_path:
                 detected = _detect_num_imus_from_bin(self.imu_bin_path)
                 if detected is not None:
-                    resolved_num_imus = detected
-                    if detected != ui_num_imus:
-                        self.log(f"  ⚠️ IMU数量: bin自动检测={detected}，UI设置={ui_num_imus}，以bin检测为准")
-                    else:
-                        self.log(f"  IMU数量: bin自动检测={detected}（与UI设置一致）")
+                    self.log(f"  bin结构预检测: {detected}（供参考，以融合结果为准）")
                 else:
-                    self.log(f"  IMU数量: bin自动检测失败，使用UI设置={ui_num_imus}")
+                    self.log(f"  bin结构预检测失败")
             else:
-                self.log(f"  IMU数量: 无IMU bin文件，使用UI设置={ui_num_imus}")
-            self.log(f"  最终使用 IMU 数量: {resolved_num_imus}")
+                self.log(f"  无IMU bin文件，由BLE数据推断")
+            self.log(f"  同步时将启动多源融合裁决（bin帧ID验证 + BLE实测 + BLE握手）")
             pending_files = []
             for path in self.h5_paths:
                 try:
@@ -2541,20 +2544,19 @@ def run_gui():
                 self.log(f"[{i+1}/{len(pending_files)}] {os.path.basename(h5_path)}")
 
                 try:
-                    # 在同步前设置 IMU 数量到 H5 attrs
-                    # 注意：保留采集时 BLE 硬件检测的原始值 (imu{dev}_num_imus)，
-                    # 仅当该 attr 不存在时才写入。全局 num_imus 总是更新为解析后的值。
-                    with h5py.File(h5_path, 'r+') as f:
-                        dev_attr = f'imu{device_id}_num_imus'
-                        if dev_attr not in f.attrs:
-                            f.attrs[dev_attr] = resolved_num_imus
-                            self.log(f"  设置 IMU 数量: {resolved_num_imus} (采集时未记录，使用bin检测值)")
-                        else:
-                            existing_val = int(f.attrs[dev_attr])
-                            self.log(f"  保留采集时记录的 IMU 数量: {existing_val} (imu{device_id}_num_imus)")
-                            if existing_val != resolved_num_imus:
-                                self.log(f"  ⚠️ 注意: bin检测={resolved_num_imus}，BLE原始记录={existing_val}，保留BLE值")
-                        f.attrs['num_imus'] = resolved_num_imus
+                    # 【IMU数量】仅当用户手动覆盖时预写入 H5 attrs
+                    # 自动检测模式下，_resolve_num_imus 会在 sync 内部查询 BLE 数据
+                    if resolved_num_imus is not None:
+                        with h5py.File(h5_path, 'r+') as f:
+                            dev_attr = f'imu{device_id}_num_imus'
+                            if dev_attr not in f.attrs:
+                                f.attrs[dev_attr] = resolved_num_imus
+                                self.log(f"  设置 IMU 数量: {resolved_num_imus} (用户手动指定)")
+                            else:
+                                existing_val = int(f.attrs[dev_attr])
+                                self.log(f"  手动覆盖 IMU 数量: {existing_val} → {resolved_num_imus}")
+                                f.attrs[dev_attr] = resolved_num_imus
+                            f.attrs['num_imus'] = resolved_num_imus
 
                     result = sync_h5_with_bin(
                         h5_path,

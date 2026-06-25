@@ -11,7 +11,7 @@ import h5py
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from bin_sync_tool import _detect_num_imus_from_bin, _resolve_num_imus, HEADER_SIZE, BYTES_PER_IMU_CHIP
+from bin_sync_tool import _detect_num_imus_from_bin, HEADER_SIZE, BYTES_PER_IMU_CHIP
 
 
 def diagnose_h5(h5_path, label):
