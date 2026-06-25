@@ -2033,6 +2033,10 @@ def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
             append_sync_history(f, action='sync', status='synced', details=detail)
 
     imu_info = f", IMU: {imu_result.get('imu_frames',0)}f filled={imu_result.get('imu_filled',0)}" if imu_result.get('imu_status') == 'success' else f", IMU: {imu_result.get('imu_status','skipped')}"
+    if imu_result.get('imu_status') == 'success':
+        active_cnt = imu_result.get('imu_active_count', '?')
+        imu_cnt = imu_result.get('imu_count', '?')
+        imu_info += f" [{active_cnt}/{imu_cnt}活跃]"
     log(f"[{sync_mode}] 同步完成！2kHz: {filled_frames}f{imu_info}")
     return {
         'status': 'success', 'frames_250hz': num_frames_250hz,
@@ -2042,6 +2046,10 @@ def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
         'imu_frames': imu_result.get('imu_frames', 0),
         'imu_filled': imu_result.get('imu_filled', 0),
         'imu_missing': imu_result.get('imu_missing', 0),
+        'imu_count': imu_result.get('imu_count', 0),
+        'imu_active_count': imu_result.get('imu_active_count', 0),
+        'imu_active_indices': imu_result.get('imu_active_indices', []),
+        'imu_inactive_indices': imu_result.get('imu_inactive_indices', []),
     }
 
 

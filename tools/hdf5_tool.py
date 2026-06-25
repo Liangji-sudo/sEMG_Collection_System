@@ -241,9 +241,24 @@ class SyncWorker(QThread):
                                           f"(来自bin:{result['filled_frames']}, "
                                           f"插值:{result['missing_frames']})")
                             if result.get('imu_status') == 'success':
+                                # 显示帧数统计
                                 self.log.emit(f"    ✓ IMU: {result['imu_frames']}帧 "
                                               f"(来自bin:{result['imu_filled']}, "
                                               f"缺失:{result['imu_missing']})")
+                                # 显示传感器活跃状态
+                                active_cnt = result.get('imu_active_count', result.get('imu_count', '?'))
+                                active_indices = result.get('imu_active_indices', [])
+                                total_cnt = result.get('imu_count', '?')
+                                ch_labels = ['a', 'b', 'c', 'd']
+                                active_chs = [ch_labels[i] for i in active_indices if i < len(ch_labels)]
+                                inactive_indices = result.get('imu_inactive_indices', [])
+                                inactive_chs = [ch_labels[i] for i in inactive_indices if i < len(ch_labels)]
+                                parts = [f"bin解析: {total_cnt}个传感器"]
+                                if active_chs:
+                                    parts.append(f"活跃: {', '.join(active_chs)}")
+                                if inactive_chs:
+                                    parts.append(f"损坏已截断: {', '.join(inactive_chs)}")
+                                self.log.emit(f"      IMU状态: {' | '.join(parts)}")
                             elif result.get('imu_status') == 'skipped':
                                 self.log.emit(f"    - IMU: 未找到bin文件，跳过")
                         elif result.get('status') == 'skipped':
@@ -831,6 +846,7 @@ class StatisticsPanel(QFrame):
             ('imu1c_100hz', 'IMU-C 100Hz'),
             ('imu1_all_ble', 'IMU(蓝牙A+B通道)'),
             ('imu1_hw_version', '硬件版本'), ('imu1_num_imus', 'IMU传感器数'),
+            ('imu1_ble_channels', 'BLE实测通道'), ('imu1_sync_active', '同步后活跃IMU'),
         ]),
         ('蓝牙手环 — 设备2', [
             ('ble_device_dev2', 'BLE设备名称'),
@@ -842,6 +858,7 @@ class StatisticsPanel(QFrame):
             ('imu2c_100hz', 'IMU-C 100Hz'),
             ('imu2_all_ble', 'IMU(蓝牙A+B通道)'),
             ('imu2_hw_version', '硬件版本'), ('imu2_num_imus', 'IMU传感器数'),
+            ('imu2_ble_channels', 'BLE实测通道'), ('imu2_sync_active', '同步后活跃IMU'),
         ]),
         ('数据流信息', [
             ('stream_mode', '流模式'), ('stream_format_version', '流格式版本'),
@@ -881,10 +898,12 @@ class StatisticsPanel(QFrame):
     _wristband_dev1_keys = {'ble_device_dev1', 'emg1_250hz', 'emg1_2khz',
                             'imu1a_100hz', 'imu1b_100hz', 'imu1c_100hz',
                             'imu1_all_ble', 'imu1_hw_version', 'imu1_num_imus',
+                            'imu1_ble_channels', 'imu1_sync_active',
                             'segment_has_dev1_bin'}
     _wristband_dev2_keys = {'ble_device_dev2', 'emg2_250hz', 'emg2_2khz',
                             'imu2a_100hz', 'imu2b_100hz', 'imu2c_100hz',
                             'imu2_all_ble', 'imu2_hw_version', 'imu2_num_imus',
+                            'imu2_ble_channels', 'imu2_sync_active',
                             'segment_has_dev2_bin'}
 
     def __init__(self, parent=None):
@@ -1314,6 +1333,64 @@ class StatisticsPanel(QFrame):
                         self.labels[attr_name].setText(str(val))
                     else:
                         self.labels[attr_name].setText('-')
+
+                # IMU BLE 实测通道 + 同步后活跃 IMU
+                ch_labels = ['a', 'b', 'c', 'd']
+                for dev in [1, 2]:
+                    ble_label = f'imu{dev}_ble_channels'
+                    sync_label = f'imu{dev}_sync_active'
+
+                    # BLE 实测通道：从 imu{dev}_all_ble 的 imu_index 推断
+                    all_ble_name = f'imu{dev}_all_ble'
+                    ble_channels = []
+                    if all_ble_name in f and f[all_ble_name].shape[0] > 0:
+                        ds = f[all_ble_name]
+                        if hasattr(ds, 'dtype') and ds.dtype.names and 'imu_index' in ds.dtype.names:
+                            try:
+                                indices = sorted(set(int(x) for x in ds['imu_index'][:]))
+                                ble_channels = [ch_labels[i] for i in indices if i < len(ch_labels)]
+                            except Exception:
+                                pass
+                    if ble_channels:
+                        self.labels[ble_label].setText(f"{len(ble_channels)}个 ({', '.join(ble_channels)})")
+                        self.labels[ble_label].setStyleSheet('color: #16a34a; font-weight: bold; font-size: 9pt;')
+                    else:
+                        self.labels[ble_label].setText('(无BLE数据)')
+                        self.labels[ble_label].setStyleSheet('color: #999; font-size: 9pt;')
+
+                    # 同步后活跃 IMU：从 imu{dev}_active_count / active_indices attrs
+                    active_count = f.attrs.get(f'imu{dev}_active_count')
+                    active_indices_str = f.attrs.get(f'imu{dev}_active_indices')
+                    if active_count is not None:
+                        try:
+                            ac = int(active_count)
+                            indices = []
+                            if active_indices_str:
+                                if isinstance(active_indices_str, bytes):
+                                    active_indices_str = active_indices_str.decode('utf-8')
+                                # 解析 "[0, 1]" 或 "[0]" 格式
+                                import re
+                                nums = re.findall(r'\d+', str(active_indices_str))
+                                indices = [ch_labels[int(n)] for n in nums if int(n) < len(ch_labels)]
+                            ch_str = f"({', '.join(indices)})" if indices else ''
+                            self.labels[sync_label].setText(f"{ac}个活跃 {ch_str}")
+                            self.labels[sync_label].setStyleSheet('color: #2563eb; font-weight: bold; font-size: 9pt;')
+                        except Exception:
+                            self.labels[sync_label].setText(str(active_count))
+                            self.labels[sync_label].setStyleSheet('color: #2563eb; font-weight: bold; font-size: 9pt;')
+                    else:
+                        # 未同步时，显示各 100Hz 数据集是否有数据
+                        synced_channels = []
+                        for ch in ch_labels:
+                            ds_name = f'imu{dev}{ch}_100hz'
+                            if ds_name in f and f[ds_name].shape[0] > 0:
+                                synced_channels.append(ch)
+                        if synced_channels:
+                            self.labels[sync_label].setText(f"待确认 ({', '.join(synced_channels)}有数据)")
+                            self.labels[sync_label].setStyleSheet('color: #f97316; font-size: 9pt;')
+                        else:
+                            self.labels[sync_label].setText('(未同步)')
+                            self.labels[sync_label].setStyleSheet('color: #999; font-size: 9pt;')
 
                 if 'mocap' in f:
                     self.labels['mocap'].setText(f"{f['mocap'].shape[0]} 帧")

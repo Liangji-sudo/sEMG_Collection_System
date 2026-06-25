@@ -166,6 +166,12 @@ class CalibrateWidget(QWidget):
         self.imu1_imu_count = 2
         self.imu2_imu_count = 2
 
+        # IMU 通道详情（用于标题栏展示 BLE / Sync 通道信息）
+        self._imu_dev1_ble_channels = []
+        self._imu_dev1_sync_channels = []
+        self._imu_dev2_ble_channels = []
+        self._imu_dev2_sync_channels = []
+
         # IMU 供应商风格堆叠参数
         self.imu_acc_offset = 4.0       # Acc offset (g)
         self.imu_gyr_offset = 600.0     # Gyr offset (deg/s)
@@ -535,6 +541,9 @@ class CalibrateWidget(QWidget):
         # 中文标题 + offset 控件
         acc_title = QHBoxLayout()
         acc_title.addWidget(QLabel('📐 左手加速度计'))
+        self.lbl_imu_acc_dev1_info = QLabel('')
+        self.lbl_imu_acc_dev1_info.setStyleSheet('color: #2563eb; font-size: 7pt; padding-left: 3px;')
+        acc_title.addWidget(self.lbl_imu_acc_dev1_info)
         acc_title.addStretch()
         acc_title.addWidget(QLabel('Offset(g):'))
         self.spin_imu_acc_offset = QSpinBox()
@@ -545,6 +554,9 @@ class CalibrateWidget(QWidget):
         acc_title.addWidget(self.spin_imu_acc_offset)
         acc_title.addStretch()
         acc_title.addWidget(QLabel('📐 右手加速度计'))
+        self.lbl_imu_acc_dev2_info = QLabel('')
+        self.lbl_imu_acc_dev2_info.setStyleSheet('color: #7c3aed; font-size: 7pt; padding-left: 3px;')
+        acc_title.addWidget(self.lbl_imu_acc_dev2_info)
         acc_title.setContentsMargins(0, 2, 0, 2)
         imu_acc_layout.addLayout(acc_title)
         self.fig_imu_acc = Figure(figsize=(16, 2.5), dpi=100)
@@ -560,6 +572,9 @@ class CalibrateWidget(QWidget):
         # 中文标题 + offset 控件
         gyr_title = QHBoxLayout()
         gyr_title.addWidget(QLabel('🔄 左手陀螺仪'))
+        self.lbl_imu_gyr_dev1_info = QLabel('')
+        self.lbl_imu_gyr_dev1_info.setStyleSheet('color: #2563eb; font-size: 7pt; padding-left: 3px;')
+        gyr_title.addWidget(self.lbl_imu_gyr_dev1_info)
         gyr_title.addStretch()
         gyr_title.addWidget(QLabel('Offset(deg/s):'))
         self.spin_imu_gyr_offset = QSpinBox()
@@ -570,6 +585,9 @@ class CalibrateWidget(QWidget):
         gyr_title.addWidget(self.spin_imu_gyr_offset)
         gyr_title.addStretch()
         gyr_title.addWidget(QLabel('🔄 右手陀螺仪'))
+        self.lbl_imu_gyr_dev2_info = QLabel('')
+        self.lbl_imu_gyr_dev2_info.setStyleSheet('color: #7c3aed; font-size: 7pt; padding-left: 3px;')
+        gyr_title.addWidget(self.lbl_imu_gyr_dev2_info)
         gyr_title.setContentsMargins(0, 2, 0, 2)
         imu_gyr_layout.addLayout(gyr_title)
         self.fig_imu_gyr = Figure(figsize=(16, 2.5), dpi=100)
@@ -1239,6 +1257,59 @@ class CalibrateWidget(QWidget):
 
             self.__dict__[f'imu{dev}_imu_count'] = count
             print(f'[CalibrateTool] IMU{dev} imu_count={count} (来源: {src})')
+
+            # 计算通道标签信息（用于标题栏展示）
+            ch_labels = ['a', 'b', 'c']
+            # BLE 实际传输通道
+            ble_chs = []
+            all_name = f'imu{dev}_all_ble'
+            if all_name in self.h5_file and self.h5_file[all_name].shape[0] > 0:
+                ds = self.h5_file[all_name]
+                if hasattr(ds, 'dtype') and ds.dtype.names and 'imu_index' in ds.dtype.names:
+                    try:
+                        indices = sorted(set(int(x) for x in ds['imu_index'][:]))
+                        ble_chs = [ch_labels[i] for i in indices if i < len(ch_labels)]
+                    except Exception:
+                        pass
+            # 同步后活跃通道（从 active_indices attr 或已加载数据反推）
+            sync_chs = []
+            active_indices_str = self.h5_file.attrs.get(f'imu{dev}_active_indices')
+            if active_indices_str:
+                try:
+                    if isinstance(active_indices_str, bytes):
+                        active_indices_str = active_indices_str.decode('utf-8')
+                    import re
+                    nums = re.findall(r'\d+', str(active_indices_str))
+                    sync_chs = [ch_labels[int(n)] for n in nums if int(n) < len(ch_labels)]
+                except Exception:
+                    pass
+            if not sync_chs:
+                # 从已加载数据反推（哪些传感器有非零数据）
+                for i, ch in enumerate(ch_labels):
+                    d = getattr(self, f'imu{dev}{ch}_data', None)
+                    if d is not None and len(d) > 0 and np.any(d != 0):
+                        if i < count:  # 在 imu_count 范围内的才算
+                            sync_chs.append(ch)
+
+            setattr(self, f'_imu_dev{dev}_ble_channels', ble_chs)
+            setattr(self, f'_imu_dev{dev}_sync_channels', sync_chs)
+
+    def _update_imu_channel_labels(self):
+        """更新 IMU 标题栏中 BLE / Sync 通道信息标签"""
+        for dev in (1, 2):
+            ble_chs = getattr(self, f'_imu_dev{dev}_ble_channels', [])
+            sync_chs = getattr(self, f'_imu_dev{dev}_sync_channels', [])
+            ble_str = f"BLE: {','.join(ble_chs)}" if ble_chs else ''
+            sync_str = f"Sync: {','.join(sync_chs)}" if sync_chs else ''
+            info = ' | '.join(filter(None, [ble_str, sync_str]))
+            # Acc label
+            lbl_acc = getattr(self, f'lbl_imu_acc_dev{dev}_info', None)
+            if lbl_acc:
+                lbl_acc.setText(info)
+            # Gyr label
+            lbl_gyr = getattr(self, f'lbl_imu_gyr_dev{dev}_info', None)
+            if lbl_gyr:
+                lbl_gyr.setText(info)
 
     def _extract_imu_acc(self, data):
         """从结构化数组或普通数组中提取IMU加速度数据；返回 (N, 3) 或 None"""
@@ -2026,6 +2097,8 @@ class CalibrateWidget(QWidget):
 
     def update_imu_plot(self, fast_mode=False):
         """供应商风格 IMU 显示：Acc + Gyr 堆叠图，每图同轴 XYZ 通道 × 多 IMU"""
+        # 更新标题栏通道信息标签
+        self._update_imu_channel_labels()
         # 清除
         for ax_name in ('ax_imu_acc_dev1', 'ax_imu_acc_dev2', 'ax_imu_gyr_dev1', 'ax_imu_gyr_dev2'):
             ax = getattr(self, ax_name, None)
@@ -2153,7 +2226,15 @@ class CalibrateWidget(QWidget):
                 legend_labels_list.append(f'IMU{imu_idx+1}')
             if legend_lines:
                 ax.legend(legend_lines, legend_labels_list, fontsize=6, loc='upper right')
-            ax.set_title(f'{dev_label} ({imu_count}IMU)', fontsize=9, pad=3)
+            # 标题：设备 + IMU数量 + BLE通道 + 同步通道
+            ble_chs = getattr(self, f'_imu_dev{dev_id}_ble_channels', [])
+            sync_chs = getattr(self, f'_imu_dev{dev_id}_sync_channels', [])
+            title_parts = [f'{dev_label} ({imu_count}IMU)']
+            if ble_chs:
+                title_parts.append(f'BLE: {",".join(ble_chs)}')
+            if sync_chs:
+                title_parts.append(f'Sync活跃: {",".join(sync_chs)}')
+            ax.set_title(' | '.join(title_parts), fontsize=9, pad=3)
             # 播放红线
             if self.is_full_playing:
                 window_center = (time_start + time_end) / 2.0
