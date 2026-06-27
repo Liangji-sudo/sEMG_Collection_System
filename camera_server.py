@@ -166,11 +166,13 @@ class CameraCapture:
 
         self._startup_time = time.time()
 
-        # 候选设备ID列表：优先友好名称，备用 @device_pnp 路径
+        # 候选设备ID列表：优先 @device_pnp 路径（唯一且不冲突），
+        # 后备友好名称（多个同名设备时可能冲突）
         friendly_name = re.sub(r'\s*\([0-9a-fA-F:]+\)\s*$', '', self.device_name).strip()
-        device_candidates = [('友好名称', friendly_name)]
+        device_candidates = []
         if self.alt_name:
             device_candidates.append(('设备路径', self.alt_name))
+        device_candidates.append(('友好名称', friendly_name))
 
         # 采集模式候选：从最宽松到最严格
         # - 'auto': 不指定参数，DShow 自动协商（RealSense 等需要）
@@ -192,7 +194,9 @@ class CameraCapture:
                     self._last_device_label = label
                     self._last_capture_mode = mode
 
-                    # 等待 100ms 检查进程是否立即退出
+                    # 两阶段启动检查（ffmpeg 先打印版本信息 ~100ms，
+                    # 然后才进行 DShow 协商，单次 100ms poll 会漏过延迟失败）
+                    # 阶段1：100ms 后检查是否立即崩溃
                     time.sleep(0.1)
                     if self.process.poll() is not None:
                         # ffmpeg 进程已退出，读取 stderr 诊断信息
@@ -211,10 +215,35 @@ class CameraCapture:
                         self.process = None
                         self._stdout_fd = None
                         continue  # 尝试下一个模式
-                    else:
-                        # 进程存活，启动成功
-                        opened = True
-                        break
+
+                    # 阶段2：再等 400ms（DShow 协商 + 首帧到达），每 100ms 轮询
+                    startup_ok = True
+                    for _ in range(4):
+                        time.sleep(0.1)
+                        if self.process.poll() is not None:
+                            # DShow 协商阶段失败
+                            stderr_output = ''
+                            try:
+                                stderr_output = self.process.stderr.read().decode('utf-8', errors='ignore')
+                            except Exception:
+                                pass
+                            exit_code = self.process.returncode
+                            print(f'[CameraCapture] [{self.side}] ❌ ffmpeg 启动后崩溃 (exit={exit_code}) '
+                                  f'标签={label}, 模式={mode}, 设备={device_id[:40]}')
+                            if stderr_output:
+                                for err_line in stderr_output.strip().split('\n'):
+                                    if err_line.strip():
+                                        print(f'[CameraCapture] [{self.side}]   stderr: {err_line.strip()[:200]}')
+                            self.process = None
+                            self._stdout_fd = None
+                            startup_ok = False
+                            break
+                    if not startup_ok:
+                        continue  # 尝试下一个模式
+
+                    # 进程存活超过 500ms，DShow 协商成功，启动完成
+                    opened = True
+                    break
                 if opened:
                     break
             if opened:
@@ -937,42 +966,56 @@ class CameraServer:
             print(f'[CameraServer] ffmpeg 输出:\n{output_preview}')
 
             devices = []
-            current_alt_name = None  # 备用设备路径（Alternative name）
+            pending_device = None  # 等待其 Alternative name 的设备
+
+            def _flush_pending():
+                """将待定设备加入列表，同名设备用 alt_name 区分"""
+                nonlocal pending_device
+                if not pending_device:
+                    return
+                name = pending_device['name']
+                alt = pending_device.get('alt_name')
+                # 同名设备：优先用 @device_pnp 作为唯一 id；无 alt_name 则保留名称
+                existing_names = [d['name'] for d in devices]
+                if name in existing_names:
+                    # 同名第 N 个设备，强制用 alt_name 作为 id 以区分
+                    pending_device['id'] = alt if alt else f'{name}#{existing_names.count(name)+1}'
+                else:
+                    pending_device['id'] = alt if alt else name
+                devices.append(pending_device)
+                pending_device = None
 
             for line in output.split('\n'):
                 # 新格式: [in#0 @ xxx] "设备名称" (video)
-                match = re.search(r'\[in#\d+.*?\]\s*"([^"]+)"\s*\(video\)', line)
-                if match:
-                    device_name = match.group(1)
-                    if 'Alternative name' not in line:
-                        devices.append({
-                            'name': device_name,
-                            'id': device_name,
-                            'alt_name': current_alt_name  # 备用路径
-                        })
-                        print(f'[CameraServer]   [新格式] {device_name}')
-                        current_alt_name = None
+                new_match = re.search(r'\[in#\d+.*?\]\s*"([^"]+)"\s*\(video\)', line)
+                if new_match and 'Alternative name' not in line:
+                    _flush_pending()
+                    device_name = new_match.group(1)
+                    pending_device = {'name': device_name, 'id': device_name, 'alt_name': None}
+                    print(f'[CameraServer]   [新格式] {device_name}')
                     continue
 
                 # 旧格式: DirectShow video devices 段落中的 "设备名称"
-                alt_match = re.search(r'^\s*"([^"]+)"\s*\(video\)', line)
-                if alt_match:
-                    device_name = alt_match.group(1)
-                    if 'Alternative name' not in line and device_name not in {d['name'] for d in devices}:
-                        devices.append({
-                            'name': device_name,
-                            'id': device_name,
-                            'alt_name': current_alt_name
-                        })
-                        print(f'[CameraServer]   [旧格式] {device_name}')
-                        current_alt_name = None
+                old_match = re.search(r'^\s*"([^"]+)"\s*\(video\)', line)
+                if old_match and 'Alternative name' not in line:
+                    device_name = old_match.group(1)
+                    # 去重（旧格式优先，已存在的跳过）
+                    if device_name in {d['name'] for d in devices}:
+                        continue
+                    _flush_pending()
+                    pending_device = {'name': device_name, 'id': device_name, 'alt_name': None}
+                    print(f'[CameraServer]   [旧格式] {device_name}')
                     continue
 
-                # 捕获 Alternative name 备用设备路径
+                # 捕获 Alternative name — 属于当前 pending_device
                 alt_path_match = re.search(r'Alternative name\s+"([^"]+)"', line)
-                if alt_path_match:
-                    current_alt_name = alt_path_match.group(1)
-                    print(f'[CameraServer]     备用路径: {current_alt_name}')
+                if alt_path_match and pending_device:
+                    pending_device['alt_name'] = alt_path_match.group(1)
+                    print(f'[CameraServer]     备用路径: {pending_device["alt_name"]}')
+                    continue
+
+            # 刷新最后一个待定设备
+            _flush_pending()
 
             print(f'[CameraServer] 找到 {len(devices)} 个摄像头设备')
             # 缓存设备列表供 set_camera 查找 alt_name
@@ -1000,7 +1043,11 @@ class CameraServer:
             }
 
     def _cmd_set_camera(self, data):
-        """设置摄像头配置（不启动采集，只保存配置）"""
+        """设置摄像头配置（不启动采集，只保存配置）
+
+        device_id 可以是友好名称或 @device_pnp_... 路径。
+        当两个摄像头同名时，前端通过 device_id（@device_pnp 路径）区分。
+        """
         side = data.get('side')
         device_name = data.get('device_name')
         device_id = data.get('device_id')
@@ -1008,27 +1055,40 @@ class CameraServer:
         if not side or side not in ['left', 'right']:
             return {'success': False, 'error': '无效的side参数'}
 
-        # 从缓存的设备列表中查找备用名称（@device_pnp_...）
+        # 从缓存的设备列表中查找匹配的设备
         alt_name = None
-        if hasattr(self, '_device_list_cache'):
-            for dev in self._device_list_cache:
-                if dev.get('name') == device_name:
-                    alt_name = dev.get('alt_name')
-                    if alt_name:
-                        print(f'[CameraServer]   {side} 备用路径: {alt_name[:60]}...')
-                    break
+        resolved_name = device_name
+        if hasattr(self, '_device_list_cache') and self._device_list_cache:
+            if device_id:
+                for dev in self._device_list_cache:
+                    if dev.get('id') == device_id:
+                        alt_name = dev.get('alt_name')
+                        resolved_name = dev.get('name')
+                        if alt_name:
+                            print(f'[CameraServer]   {side} 匹配设备: {resolved_name}'
+                                  f' (备用路径: {alt_name[:60]}...)')
+                        break
+            # 如果 device_id 没匹配到，尝试用 device_name 匹配
+            if not alt_name and not resolved_name:
+                for dev in self._device_list_cache:
+                    if dev.get('name') == device_name:
+                        alt_name = dev.get('alt_name')
+                        resolved_name = dev.get('name')
+                        if alt_name:
+                            print(f'[CameraServer]   {side} 备用路径: {alt_name[:60]}...')
+                        break
 
         self.cameras[side] = {
-            'device_name': device_name,
-            'device_id': device_id or device_name,
+            'device_name': resolved_name,
+            'device_id': device_id or resolved_name,
             'alt_name': alt_name
         }
 
-        print(f'[CameraServer] 摄像头配置已保存: {side} -> {device_name}')
+        print(f'[CameraServer] 摄像头配置已保存: {side} -> {resolved_name}')
         return {
             'success': True,
             'side': side,
-            'device_name': device_name,
+            'device_name': resolved_name,
             'message': f'{side}侧摄像头配置已保存'
         }
 
@@ -1249,56 +1309,69 @@ class CameraServer:
         alt_name = self.cameras[side].get('alt_name')
         friendly_name = re.sub(r'\s*\([0-9a-fA-F:]+\)\s*$', '', device_name).strip()
 
-        # 候选设备ID列表：优先友好名称，备用 @device_pnp 路径
-        candidates = ['video=' + friendly_name]
+        # 候选设备ID列表：优先 @device_pnp 路径（唯一且不冲突）
+        candidates = []
+        candidate_labels = []
         if alt_name:
             candidates.append('video=' + alt_name)
+            candidate_labels.append('设备路径')
+        candidates.append('video=' + friendly_name)
+        candidate_labels.append('友好名称')
+
+        # 三种采集模式（与 CameraCapture.start() 保持一致）
+        mode_configs = [
+            ('auto', []),                                                   # DShow 自动协商
+            ('1080p30', ['-video_size', '1920x1080', '-framerate', '30']),  # 显式参数
+            ('yuy2', ['-pixel_format', 'yuyv422',                           # YUY2 格式
+                      '-video_size', '1920x1080', '-framerate', '30']),
+        ]
 
         for candidate_idx, video_arg in enumerate(candidates):
-            label = '友好名称' if candidate_idx == 0 else '设备路径'
-            cmd = [
-                self.ffmpeg_path,
-                '-f', 'dshow',
-                '-rtbufsize', '2M',
-                '-video_size', '1920x1080',
-                '-framerate', '30',
-                '-i', video_arg,
-                '-vframes', '1',
-                '-vcodec', 'mjpeg',
-                '-q:v', '8',
-                '-f', 'image2pipe',
-                'pipe:1'
-            ]
+            label = candidate_labels[candidate_idx]
+            for mode_name, mode_params in mode_configs:
+                cmd = [
+                    self.ffmpeg_path,
+                    '-f', 'dshow',
+                    '-rtbufsize', '2M',
+                ] + mode_params + [
+                    '-i', video_arg,
+                    '-vframes', '1',
+                    '-vcodec', 'mjpeg',
+                    '-q:v', '8',
+                    '-f', 'image2pipe',
+                    'pipe:1'
+                ]
 
-            print(f'[CameraServer] 📸 {side}侧 单帧拍照 ({label}): {video_arg}')
-            try:
-                proc = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    timeout=10,
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-                )
-                if proc.stdout and len(proc.stdout) > 0:
-                    start = proc.stdout.find(b'\xff\xd8')
-                    end = proc.stdout.find(b'\xff\xd9', start + 2) if start != -1 else -1
-                    if start != -1 and end != -1:
-                        frame = proc.stdout[start:end + 2]
-                        b64 = base64.b64encode(frame).decode()
-                        print(f'[CameraServer] 📸 {side}侧 拍照成功 ({len(frame)} bytes, {len(b64)/1024:.1f}KB b64)')
-                        return b64, None
+                print(f'[CameraServer] 📸 {side}侧 单帧拍照 ({label}, 模式={mode_name}): {video_arg}')
+                try:
+                    proc = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        timeout=10,
+                        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                    )
+                    if proc.stdout and len(proc.stdout) > 0:
+                        start = proc.stdout.find(b'\xff\xd8')
+                        end = proc.stdout.find(b'\xff\xd9', start + 2) if start != -1 else -1
+                        if start != -1 and end != -1:
+                            frame = proc.stdout[start:end + 2]
+                            b64 = base64.b64encode(frame).decode()
+                            print(f'[CameraServer] 📸 {side}侧 拍照成功 '
+                                  f'({len(frame)} bytes, {len(b64)/1024:.1f}KB b64)')
+                            return b64, None
+                        else:
+                            # 此组合未产生有效帧，尝试下一个
+                            continue
                     else:
-                        # 此候选未产生有效帧，尝试下一个
-                        continue
-                else:
-                    stderr_tail = proc.stderr[-500:].decode('utf-8', errors='ignore') if proc.stderr else '(无输出)'
-                    print(f'[CameraServer] 📸 {side}侧 {label} 失败: {stderr_tail[:200]}')
-                    continue  # 尝试下一个候选
-            except subprocess.TimeoutExpired:
-                print(f'[CameraServer] 📸 {side}侧 {label} 超时')
-                continue
-            except Exception as e:
-                print(f'[CameraServer] 📸 {side}侧 {label} 异常: {e}')
-                continue
+                        stderr_tail = proc.stderr[-500:].decode('utf-8', errors='ignore') if proc.stderr else '(无输出)'
+                        print(f'[CameraServer] 📸 {side}侧 {label}/{mode_name} 失败: {stderr_tail[:200]}')
+                        continue  # 尝试下一个组合
+                except subprocess.TimeoutExpired:
+                    print(f'[CameraServer] 📸 {side}侧 {label}/{mode_name} 超时')
+                    continue
+                except Exception as e:
+                    print(f'[CameraServer] 📸 {side}侧 {label}/{mode_name} 异常: {e}')
+                    continue
         # 所有候选都不成功
         return None, f'{side}摄像头抓帧失败: 全部候选标识符均无法打开'
 
