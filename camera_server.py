@@ -159,149 +159,102 @@ class CameraCapture:
             return False, None
 
     def start(self):
-        """启动 MJPEG 采集（支持重试 + Alternative name fallback）"""
+        """启动 MJPEG 采集（快速失败策略：不重试，尽快返回结果）"""
         if self.running:
             print(f'[CameraCapture] [{self.side}] 已在运行中')
             return True
 
         self._startup_time = time.time()
 
-        # 候选设备ID列表：优先友好名称（最可靠），
-        # 后备 @device_pnp 路径（同名设备时用于区分；某些摄像头不支持 @device_pnp）
+        # 候选设备ID列表：优先友好名称，后备 @device_pnp
         friendly_name = re.sub(r'\s*\([0-9a-fA-F:]+\)\s*$', '', self.device_name).strip()
         device_candidates = [('友好名称', friendly_name)]
         if self.alt_name:
             device_candidates.append(('设备路径', self.alt_name))
 
-        # 采集模式候选：从最宽松到最严格
-        # - 'auto': 不指定参数，DShow 自动协商（RealSense 等需要）
-        # - '1080p30': 显式 1920x1080@30fps（大多数 USB 摄像头）
-        # - 'yuy2': YUY2 像素格式 + 1080p30
+        # 采集模式：从最宽松到最严格
         capture_modes = ['auto', '1080p30', 'yuy2']
 
-        # 尝试打开摄像头（只重试 1 次，因为已有 6 种候选组合）
-        for attempt in range(1):
-            for label, device_id in device_candidates:
-                for mode in capture_modes:
-                    ok, proc = self._try_open_camera(device_id, label, mode)
-                    if not ok:
-                        continue
+        # 遍历候选组合，第一个成功的直接返回
+        for label, device_id in device_candidates:
+            for mode in capture_modes:
+                ok, proc = self._try_open_camera(device_id, label, mode)
+                if not ok:
+                    continue
 
-                    self.process = proc
-                    self._stdout_fd = self.process.stdout.fileno()
-                    self._last_device_label = label
-                    self._last_capture_mode = mode
+                self.process = proc
+                self._stdout_fd = self.process.stdout.fileno()
+                self._last_device_label = label
+                self._last_capture_mode = mode
 
-                    # 两阶段启动检查（ffmpeg 先打印版本信息 ~100ms，
-                    # 然后才进行 DShow 协商，单次 100ms poll 会漏过延迟失败）
-                    # 阶段1：100ms 后检查是否立即崩溃
-                    time.sleep(0.1)
-                    if self.process.poll() is not None:
-                        # ffmpeg 进程已退出，读取 stderr 诊断信息
-                        stderr_output = ''
-                        try:
-                            stderr_output = self.process.stderr.read().decode('utf-8', errors='ignore')
-                        except Exception:
-                            pass
-                        exit_code = self.process.returncode
-                        print(f'[CameraCapture] [{self.side}] ❌ ffmpeg 立即退出 (exit={exit_code}) '
-                              f'标签={label}, 模式={mode}, 设备={device_id[:40]}')
-                        if stderr_output:
-                            for err_line in stderr_output.strip().split('\n'):
-                                if err_line.strip():
-                                    print(f'[CameraCapture] [{self.side}]   stderr: {err_line.strip()[:200]}')
-                        self.process = None
-                        self._stdout_fd = None
-                        continue  # 尝试下一个模式
+                # 等 300ms 让 ffmpeg 完成版本打印 + DShow 协商
+                time.sleep(0.3)
+                if self.process.poll() is not None:
+                    # 立即崩溃，打印原因后试下一个
+                    stderr_output = ''
+                    try:
+                        stderr_output = self.process.stderr.read().decode('utf-8', errors='ignore')
+                    except Exception:
+                        pass
+                    print(f'[CameraCapture] [{self.side}] ❌ ffmpeg 退出 (exit={self.process.returncode}) '
+                          f'标签={label}, 模式={mode}')
+                    if stderr_output:
+                        for err_line in stderr_output.strip().split('\n'):
+                            if err_line.strip():
+                                print(f'[CameraCapture] [{self.side}]   stderr: {err_line.strip()[:200]}')
+                    self.process = None
+                    self._stdout_fd = None
+                    continue
 
-                    # 阶段2：再等 400ms（DShow 协商），每 100ms 轮询
-                    startup_ok = True
-                    for _ in range(4):
-                        time.sleep(0.1)
-                        if self.process.poll() is not None:
-                            # DShow 协商阶段失败
-                            stderr_output = ''
-                            try:
-                                stderr_output = self.process.stderr.read().decode('utf-8', errors='ignore')
-                            except Exception:
-                                pass
-                            exit_code = self.process.returncode
-                            print(f'[CameraCapture] [{self.side}] ❌ ffmpeg 启动后崩溃 (exit={exit_code}) '
-                                  f'标签={label}, 模式={mode}, 设备={device_id[:40]}')
-                            if stderr_output:
-                                for err_line in stderr_output.strip().split('\n'):
-                                    if err_line.strip():
-                                        print(f'[CameraCapture] [{self.side}]   stderr: {err_line.strip()[:200]}')
-                            self.process = None
-                            self._stdout_fd = None
-                            startup_ok = False
-                            break
-                    if not startup_ok:
-                        continue  # 尝试下一个模式
+                # 进程存活，启动读取线程，等首帧（最多 1.5s）
+                self.running = True
+                self.reader_thread = threading.Thread(target=self._read_frames, daemon=True)
+                self.reader_thread.start()
+                stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
+                stderr_thread.start()
 
-                    # 阶段3：进程存活 500ms+，启动读取线程，等待首帧
-                    # （有些情况如 @device_pnp 不可用时，ffmpeg 挂死但不退出）
-                    self.running = True
-                    self.reader_thread = threading.Thread(target=self._read_frames, daemon=True)
-                    self.reader_thread.start()
-                    stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
-                    stderr_thread.start()
-
-                    first_frame_deadline = time.time() + 2.0
-                    frame_arrived = False
-                    while time.time() < first_frame_deadline:
-                        if self.latest_frame_b64 is not None:
-                            frame_arrived = True
-                            break
-                        if self.process.poll() is not None:
-                            # ffmpeg 在等待首帧期间退出（延迟崩溃）
-                            self.running = False
-                            stderr_output = ''
-                            try:
-                                stderr_output = self.process.stderr.read().decode('utf-8', errors='ignore')
-                            except Exception:
-                                pass
-                            print(f'[CameraCapture] [{self.side}] ❌ ffmpeg 等待首帧期间退出 '
-                                  f'(exit={self.process.returncode}) '
-                                  f'标签={label}, 模式={mode}')
-                            if stderr_output:
-                                for err_line in stderr_output.strip().split('\n'):
-                                    if err_line.strip():
-                                        print(f'[CameraCapture] [{self.side}]   stderr: {err_line.strip()[:200]}')
-                            self.process = None
-                            self._stdout_fd = None
-                            break
-                        time.sleep(0.1)
-
-                    if frame_arrived:
+                deadline = time.time() + 1.5
+                while time.time() < deadline:
+                    if self.latest_frame_b64 is not None:
                         print(f'[CameraCapture] [{self.side}] ✅ MJPEG采集已启动 '
                               f'(标签={label}, 模式={mode}, PID={self.process.pid})')
                         return True
+                    if self.process.poll() is not None:
+                        # 延迟崩溃
+                        break
+                    time.sleep(0.1)
 
-                    # 首帧超时或进程崩溃，清理并尝试下一个候选
-                    if self.latest_frame_b64 is None:
-                        if self.process and self.process.poll() is None:
-                            print(f'[CameraCapture] [{self.side}] ❌ 首帧超时(2s)，'
-                                  f'ffmpeg 进程存活但无帧输出 (DShow 挂死，'
-                                  f'标签={label}, 模式={mode})')
-                        self.running = False
-                        if self.process and self.process.poll() is None:
-                            try:
-                                self.process.terminate()
-                                self.process.wait(timeout=3)
-                            except Exception:
-                                try:
-                                    self.process.kill()
-                                except Exception:
-                                    pass
-                        self.process = None
-                        self._stdout_fd = None
-                        # 继续尝试下一个模式
-                        continue
-                # 该设备的所有模式都失败，继续尝试下一个设备
-                pass
-        # 所有设备候选都失败
-        print(f'[CameraCapture] [{self.side}] ❌ 所有设备/模式候选均失败')
+                # 失败：清理并试下一个
+                self.running = False
+                reason = '首帧超时(1.5s)' if (self.process and self.process.poll() is None) else '进程退出'
+                if self.process and self.process.poll() is not None:
+                    stderr_output = ''
+                    try:
+                        stderr_output = self.process.stderr.read().decode('utf-8', errors='ignore')
+                    except Exception:
+                        pass
+                    reason = f'进程退出(exit={self.process.returncode})'
+                    if stderr_output:
+                        for err_line in stderr_output.strip().split('\n'):
+                            if err_line.strip():
+                                print(f'[CameraCapture] [{self.side}]   stderr: {err_line.strip()[:200]}')
+                print(f'[CameraCapture] [{self.side}] ❌ {reason} '
+                      f'标签={label}, 模式={mode}')
+
+                if self.process and self.process.poll() is None:
+                    try:
+                        self.process.terminate()
+                        self.process.wait(timeout=2)
+                    except Exception:
+                        try:
+                            self.process.kill()
+                        except Exception:
+                            pass
+                self.process = None
+                self._stdout_fd = None
+
+        # 全部候选失败
+        print(f'[CameraCapture] [{self.side}] ❌ 所有候选均失败')
         return False
 
     def _read_frames(self):
