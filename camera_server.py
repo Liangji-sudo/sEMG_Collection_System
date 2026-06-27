@@ -179,8 +179,8 @@ class CameraCapture:
         # - 'yuy2': YUY2 像素格式 + 1080p30
         capture_modes = ['auto', '1080p30', 'yuy2']
 
-        # 尝试打开摄像头（最多 3 次重试，每次间隔递增）
-        for attempt in range(3):
+        # 尝试打开摄像头（只重试 1 次，因为已有 6 种候选组合）
+        for attempt in range(1):
             for label, device_id in device_candidates:
                 for mode in capture_modes:
                     ok, proc = self._try_open_camera(device_id, label, mode)
@@ -247,7 +247,7 @@ class CameraCapture:
                     stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
                     stderr_thread.start()
 
-                    first_frame_deadline = time.time() + 3.0
+                    first_frame_deadline = time.time() + 2.0
                     frame_arrived = False
                     while time.time() < first_frame_deadline:
                         if self.latest_frame_b64 is not None:
@@ -281,7 +281,7 @@ class CameraCapture:
                     # 首帧超时或进程崩溃，清理并尝试下一个候选
                     if self.latest_frame_b64 is None:
                         if self.process and self.process.poll() is None:
-                            print(f'[CameraCapture] [{self.side}] ❌ 首帧超时(3s)，'
+                            print(f'[CameraCapture] [{self.side}] ❌ 首帧超时(2s)，'
                                   f'ffmpeg 进程存活但无帧输出 (DShow 挂死，'
                                   f'标签={label}, 模式={mode})')
                         self.running = False
@@ -298,16 +298,10 @@ class CameraCapture:
                         self._stdout_fd = None
                         # 继续尝试下一个模式
                         continue
-                # 该设备的所有模式都失败
+                # 该设备的所有模式都失败，继续尝试下一个设备
                 pass
-            # 所有设备候选都失败
-            if attempt < 2:
-                delay = 0.5 * (attempt + 1)
-                print(f'[CameraCapture] [{self.side}] 第 {attempt+1} 次尝试失败，'
-                      f'{delay:.1f}s 后重试...')
-                time.sleep(delay)
-        # 全部 3 次重试均失败
-        print(f'[CameraCapture] [{self.side}] ❌ 全部 3 次尝试均失败')
+        # 所有设备候选都失败
+        print(f'[CameraCapture] [{self.side}] ❌ 所有设备/模式候选均失败')
         return False
 
     def _read_frames(self):
@@ -1162,7 +1156,11 @@ class CameraServer:
         alt_name = camera.get('alt_name')  # 备用设备路径（@device_pnp_...），用于 fallback
         capture = CameraCapture(side, camera['device_name'], self.ffmpeg_path,
                                 self.frame_queue, alt_name=alt_name)
-        success = capture.start()
+
+        # 在 executor 中运行 start()，避免阻塞事件循环
+        # （start() 内部有 sleep 轮询，阻塞期间无法处理其他 WebSocket 消息）
+        loop = asyncio.get_running_loop()
+        success = await loop.run_in_executor(None, capture.start)
 
         if success:
             self.captures[side] = capture
