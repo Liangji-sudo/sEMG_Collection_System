@@ -103,17 +103,35 @@ class CameraCapture:
         self.frame_recorder = None  # FrameRecorder instance (set when recording)
         self._stdout_fd = None      # raw pipe fd for unbuffered reads
         self._startup_time = None   # 启动时间，用于控制诊断日志窗口
+        self._last_device_label = None
+        self._last_capture_mode = None
 
-    def _build_ffmpeg_args(self, device_id):
-        """构建 ffmpeg dshow 采集命令参数"""
-        return [
+    def _build_ffmpeg_args(self, device_id, capture_mode='auto'):
+        """构建 ffmpeg dshow 采集命令参数
+
+        capture_mode:
+          'auto'   — 不指定 video_size/framerate，让 DShow 自动协商
+          '1080p30' — 显式指定 1920x1080@30fps
+          'yuy2'   — 指定 YUY2 像素格式 + 1080p30
+        """
+        base = [
             self.ffmpeg_path,
             '-fflags', 'nobuffer',
             '-flags', 'low_delay',
             '-rtbufsize', '2M',
             '-f', 'dshow',
-            '-video_size', '1920x1080',
-            '-framerate', '30',
+        ]
+        if capture_mode == 'auto':
+            # 不指定 video_size/framerate，DShow 自动协商
+            pass
+        elif capture_mode == 'yuy2':
+            base += ['-pixel_format', 'yuyv422',
+                     '-video_size', '1920x1080',
+                     '-framerate', '30']
+        else:  # 1080p30
+            base += ['-video_size', '1920x1080',
+                     '-framerate', '30']
+        base += [
             '-i', f'video={device_id}',
             '-vcodec', 'mjpeg',
             '-q:v', '8',
@@ -121,11 +139,12 @@ class CameraCapture:
             '-flush_packets', '1',
             'pipe:1'
         ]
+        return base
 
-    def _try_open_camera(self, device_id, label):
+    def _try_open_camera(self, device_id, label, capture_mode='1080p30'):
         """尝试用指定设备ID打开摄像头，返回 (success, process)"""
-        cmd = self._build_ffmpeg_args(device_id)
-        print(f'[CameraCapture] [{self.side}] 尝试打开: {label} ...')
+        cmd = self._build_ffmpeg_args(device_id, capture_mode)
+        print(f'[CameraCapture] [{self.side}] 尝试打开: {label} (模式={capture_mode}) ...')
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -149,43 +168,57 @@ class CameraCapture:
 
         # 候选设备ID列表：优先友好名称，备用 @device_pnp 路径
         friendly_name = re.sub(r'\s*\([0-9a-fA-F:]+\)\s*$', '', self.device_name).strip()
-        candidates = [('友好名称', friendly_name)]
+        device_candidates = [('友好名称', friendly_name)]
         if self.alt_name:
-            candidates.append(('设备路径', self.alt_name))
+            device_candidates.append(('设备路径', self.alt_name))
+
+        # 采集模式候选：从最宽松到最严格
+        # - 'auto': 不指定参数，DShow 自动协商（RealSense 等需要）
+        # - '1080p30': 显式 1920x1080@30fps（大多数 USB 摄像头）
+        # - 'yuy2': YUY2 像素格式 + 1080p30
+        capture_modes = ['auto', '1080p30', 'yuy2']
 
         # 尝试打开摄像头（最多 3 次重试，每次间隔递增）
         for attempt in range(3):
-            for label, device_id in candidates:
-                ok, proc = self._try_open_camera(device_id, label)
-                if not ok:
-                    continue
+            opened = False
+            for label, device_id in device_candidates:
+                for mode in capture_modes:
+                    ok, proc = self._try_open_camera(device_id, label, mode)
+                    if not ok:
+                        continue
 
-                self.process = proc
-                self._stdout_fd = self.process.stdout.fileno()
-                self._last_device_label = label
+                    self.process = proc
+                    self._stdout_fd = self.process.stdout.fileno()
+                    self._last_device_label = label
+                    self._last_capture_mode = mode
 
-                # 等待 100ms 检查进程是否立即退出
-                time.sleep(0.1)
-                if self.process.poll() is not None:
-                    # ffmpeg 进程已退出，读取 stderr 诊断信息
-                    stderr_output = ''
-                    try:
-                        stderr_output = self.process.stderr.read().decode('utf-8', errors='ignore')
-                    except Exception:
-                        pass
-                    exit_code = self.process.returncode
-                    print(f'[CameraCapture] [{self.side}] ❌ ffmpeg 立即退出 (exit={exit_code}) '
-                          f'标签={label}, 设备={device_id[:40]}')
-                    if stderr_output:
-                        for err_line in stderr_output.strip().split('\n'):
-                            if err_line.strip():
-                                print(f'[CameraCapture] [{self.side}]   stderr: {err_line.strip()[:200]}')
-                    self.process = None
-                    self._stdout_fd = None
-                    continue  # 尝试下一个候选
-                else:
-                    # 进程存活，启动成功
+                    # 等待 100ms 检查进程是否立即退出
+                    time.sleep(0.1)
+                    if self.process.poll() is not None:
+                        # ffmpeg 进程已退出，读取 stderr 诊断信息
+                        stderr_output = ''
+                        try:
+                            stderr_output = self.process.stderr.read().decode('utf-8', errors='ignore')
+                        except Exception:
+                            pass
+                        exit_code = self.process.returncode
+                        print(f'[CameraCapture] [{self.side}] ❌ ffmpeg 立即退出 (exit={exit_code}) '
+                              f'标签={label}, 模式={mode}, 设备={device_id[:40]}')
+                        if stderr_output:
+                            for err_line in stderr_output.strip().split('\n'):
+                                if err_line.strip():
+                                    print(f'[CameraCapture] [{self.side}]   stderr: {err_line.strip()[:200]}')
+                        self.process = None
+                        self._stdout_fd = None
+                        continue  # 尝试下一个模式
+                    else:
+                        # 进程存活，启动成功
+                        opened = True
+                        break
+                if opened:
                     break
+            if opened:
+                break
             else:
                 # 所有候选都失败
                 if attempt < 2:
@@ -193,13 +226,9 @@ class CameraCapture:
                     print(f'[CameraCapture] [{self.side}] 第 {attempt+1} 次尝试失败，'
                           f'{delay:.1f}s 后重试...')
                     time.sleep(delay)
-                    continue
                 else:
                     print(f'[CameraCapture] [{self.side}] ❌ 全部 3 次尝试均失败')
                     return False
-
-            # 成功，跳出重试循环
-            break
 
         self.running = True
         self.reader_thread = threading.Thread(target=self._read_frames, daemon=True)
@@ -209,7 +238,8 @@ class CameraCapture:
         stderr_thread.start()
 
         print(f'[CameraCapture] [{self.side}] ✅ MJPEG采集已启动 '
-              f'(标签={self._last_device_label}, PID={self.process.pid})')
+              f'(标签={self._last_device_label}, 模式={self._last_capture_mode}, '
+              f'PID={self.process.pid})')
         return True
 
     def _read_frames(self):
