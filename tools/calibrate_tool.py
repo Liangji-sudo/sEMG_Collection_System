@@ -1625,8 +1625,10 @@ class CalibrateWidget(QWidget):
         - calib_present: 是否有标定数据（任一 side 有值即为 True）
 
         偏移量含义：calib_offset = video_frame_unix - prompt_unix
-        即：视频比 prompt 快/慢多少秒（负值 = 视频滞后，正值 = 视频超前）。
-        在校正时：corrected_video_unix = target_unix - calib_offset
+        正值 = 视频帧实际时间戳比 prompt 触发时刻晚（视频滞后于 EMG）
+        负值 = 视频帧实际时间戳比 prompt 触发时刻早（视频超前于 EMG）
+        在校正时：corrected_video_unix = target_unix + calib_offset
+        即：EMG 数据在 target_unix 时，对应视频帧在 target_unix + calib_offset
         """
         self.calib_offset = {}
         self.calib_present = False

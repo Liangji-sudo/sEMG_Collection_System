@@ -2915,13 +2915,17 @@ class SyncCalibrationTab(QWidget):
             frame_idx = self._current_frame_idx.get(side, 0)
             self._marked_frame[side] = frame_idx
 
-            # 计算视频帧的 Unix 时间
+            # 计算视频帧的 Unix 时间（使用实际帧率，与数据可视化对齐）
             first_u = self.video_first_frame_unix.get(side, 0)
-            fps = self.video_fps.get(side, 30.0)
-            frame_unix = first_u + frame_idx / fps
+            last_u = self.video_last_frame_unix.get(side, 0)
+            total = self.video_frame_count.get(side, frame_idx + 1)
+            actual_dur = last_u - first_u
+            effective_fps = total / actual_dur if actual_dur > 0 else self.video_fps.get(side, 30.0)
+            frame_unix = first_u + frame_idx / effective_fps
 
             # 计算偏移量: offset = video_frame_unix - prompt_unix
-            # 正值 = 视频超前于 prompt，负值 = 视频滞后于 prompt
+            # 正值 = 视频帧时间戳晚于 prompt（视频滞后于 EMG）
+            # 负值 = 视频帧时间戳早于 prompt（视频超前于 EMG）
             offset = frame_unix - self._sync_prompt_time
             self._marked_offset[side] = round(offset, 4)
 
