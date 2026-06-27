@@ -2817,13 +2817,15 @@ class SyncCalibrationTab(QWidget):
                                    Qt.KeepAspectRatio, Qt.SmoothTransformation)
             lbl.setPixmap(QPixmap.fromImage(scaled))
 
-            # 更新时间标签
-            fps = self.video_fps.get(side, 30.0)
-            frame_time = frame_idx / fps if fps > 0 else 0
+            # 更新时间标签（使用实际帧率，与 _mark_calibration 对齐）
+            first_u = self.video_first_frame_unix.get(side, 0)
+            last_u = self.video_last_frame_unix.get(side, 0)
+            actual_dur = last_u - first_u
+            effective_fps = total / actual_dur if actual_dur > 0 else self.video_fps.get(side, 30.0)
+            frame_time = frame_idx / effective_fps if effective_fps > 0 else 0
             m = int(frame_time // 60)
             s = int(frame_time % 60)
             ms = int((frame_time % 1) * 100)
-            first_u = self.video_first_frame_unix.get(side, 0)
             frame_unix = first_u + frame_time
 
             lbl_time = getattr(self, f'lbl_video_{side}_time')
@@ -2847,7 +2849,19 @@ class SyncCalibrationTab(QWidget):
             return
         self._is_playing = True
         self.btn_play.setText('⏸ 暂停')
-        interval = int(1000 / (30 * self._playback_speed))  # 30fps nominal
+        # 使用视频实际帧率（取左右视频中实际帧率的较小值，避免过快）
+        fps_list = []
+        for side in self.video_caps:
+            first_u = self.video_first_frame_unix.get(side, 0)
+            last_u = self.video_last_frame_unix.get(side, 0)
+            total = self.video_frame_count.get(side, 0)
+            actual_dur = last_u - first_u
+            if actual_dur > 0 and total > 0:
+                fps_list.append(total / actual_dur)
+            elif self.video_fps.get(side, 30) > 0:
+                fps_list.append(self.video_fps.get(side, 30))
+        actual_fps = min(fps_list) if fps_list else 30.0
+        interval = int(1000 / (actual_fps * self._playback_speed))
         self._playback_timer.start(max(16, interval))
         self.lbl_status.setText('▶ 播放中...')
 
@@ -2867,7 +2881,19 @@ class SyncCalibrationTab(QWidget):
         speeds = [0.5, 1.0, 2.0, 4.0]
         self._playback_speed = speeds[idx]
         if self._is_playing:
-            interval = int(1000 / (30 * self._playback_speed))
+            # 使用视频实际帧率（取左右视频中实际帧率的较小值）
+            fps_list = []
+            for side in self.video_caps:
+                first_u = self.video_first_frame_unix.get(side, 0)
+                last_u = self.video_last_frame_unix.get(side, 0)
+                total = self.video_frame_count.get(side, 0)
+                actual_dur = last_u - first_u
+                if actual_dur > 0 and total > 0:
+                    fps_list.append(total / actual_dur)
+                elif self.video_fps.get(side, 30) > 0:
+                    fps_list.append(self.video_fps.get(side, 30))
+            actual_fps = min(fps_list) if fps_list else 30.0
+            interval = int(1000 / (actual_fps * self._playback_speed))
             self._playback_timer.setInterval(max(16, interval))
 
     def _step_frame(self, delta):

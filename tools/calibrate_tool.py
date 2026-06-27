@@ -1771,16 +1771,20 @@ class CalibrateWidget(QWidget):
                 lbl.setPixmap(QPixmap.fromImage(scaled))
 
                 # 更新时间标签（视频帧号 + 视频时间 + EMG相对时间）
-                fps = self.video_fps.get(side, 30)
-                frame_time_sec = frame_idx / fps if fps > 0 else 0
+                # 使用实际帧率，与 _seek_video_frame 对齐
+                first_u = self.video_first_frame_unix.get(side, 0)
+                last_u = self.video_last_frame_unix.get(side, 0)
+                total_f = self.video_frame_count.get(side, 1)
+                actual_dur = last_u - first_u
+                eff_fps = total_f / actual_dur if actual_dur > 0 else self.video_fps.get(side, 30)
+                frame_time_sec = frame_idx / eff_fps if eff_fps > 0 else 0
                 minutes = int(frame_time_sec // 60)
                 seconds = int(frame_time_sec % 60)
                 ms = int((frame_time_sec % 1) * 100)
                 # EMG 相对时间（与 Prompt 时间戳对齐，含标定偏移）
                 if self.emg_start_time is not None:
-                    first_unix = self.video_first_frame_unix.get(side, 0)
                     calib = self.calib_offset.get(side, 0)
-                    emg_rel = first_unix + frame_idx / fps - float(self.emg_start_time) - calib
+                    emg_rel = first_u + frame_idx / eff_fps - float(self.emg_start_time) - calib
                     if abs(calib) > 0.001:
                         lbl_time.setText(f'Frame #{frame_idx} | 视频 {minutes:02d}:{seconds:02d}.{ms:02d} | EMG {emg_rel:.2f}s | 标定{calib:+.3f}s')
                     else:
@@ -2556,14 +2560,20 @@ class CalibrateWidget(QWidget):
         scaled = qimage.scaled(lbl_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         lbl.setPixmap(QPixmap.fromImage(scaled))
         fps = self.video_fps.get(side, 30.0)
-        frame_time_sec = new_idx / fps if fps > 0 else 0
+        # 使用实际帧率计算视频帧的 Unix 时间（与 _seek_video_frame 对齐）
+        first_u = self.video_first_frame_unix.get(side, 0)
+        last_u = self.video_last_frame_unix.get(side, 0)
+        total_f = self.video_frame_count.get(side, 1)
+        actual_dur = last_u - first_u
+        eff_fps = total_f / actual_dur if actual_dur > 0 else fps
+        frame_time_sec = new_idx / eff_fps if eff_fps > 0 else 0
+        target_unix = first_u + frame_time_sec  # 使用有效 FPS 计算目标时间
         minutes = int(frame_time_sec // 60)
         seconds = int(frame_time_sec % 60)
         # EMG 相对时间（与 Prompt 时间戳对齐，含标定偏移）
         if self.emg_start_time is not None:
-            first_unix = self.video_first_frame_unix.get(side, 0)
             calib = self.calib_offset.get(side, 0)
-            emg_rel = first_unix + new_idx / fps - float(self.emg_start_time) - calib
+            emg_rel = target_unix - float(self.emg_start_time) - calib
             if abs(calib) > 0.001:
                 lbl_time.setText(f'Frame #{new_idx} | 视频 {minutes:02d}:{seconds:02d} | EMG {emg_rel:.2f}s | 标定{calib:+.3f}s')
             else:
@@ -2572,8 +2582,7 @@ class CalibrateWidget(QWidget):
             lbl_time.setText(f'Frame #{new_idx} | 视频 {minutes:02d}:{seconds:02d}')
 
         # 同步另一侧视频（seek 到对应时间点）
-        first_unix = self.video_first_frame_unix.get(side, 0)
-        target_unix = first_unix + new_idx / fps
+        # target_unix 已使用 effective_fps 计算，见上文
         for other_side in ('left', 'right'):
             if other_side == side:
                 continue
@@ -2581,8 +2590,11 @@ class CalibrateWidget(QWidget):
             if other_cap is None:
                 continue
             other_first = self.video_first_frame_unix.get(other_side, 0)
-            other_fps_val = self.video_fps.get(other_side, 30.0)
-            other_frame = int((target_unix - other_first) * other_fps_val)
+            other_last = self.video_last_frame_unix.get(other_side, 0)
+            other_total = self.video_frame_count.get(other_side, 1)
+            other_actual_dur = other_last - other_first
+            other_eff_fps = other_total / other_actual_dur if other_actual_dur > 0 else self.video_fps.get(other_side, 30.0)
+            other_frame = int((target_unix - other_first) * other_eff_fps)
             other_frame = max(0, min(other_frame, self.video_frame_count.get(other_side, 0) - 1))
             other_cap.set(cv2.CAP_PROP_POS_FRAMES, other_frame)
             ret2, frame2 = other_cap.read()
@@ -2596,13 +2608,13 @@ class CalibrateWidget(QWidget):
                 lbl2_size = lbl2.size()
                 scaled2 = q2.scaled(lbl2_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 lbl2.setPixmap(QPixmap.fromImage(scaled2))
-                other_frame_time = other_frame / other_fps_val if other_fps_val > 0 else 0
+                other_frame_time = other_frame / other_eff_fps if other_eff_fps > 0 else 0
                 om = int(other_frame_time // 60)
                 os = int(other_frame_time % 60)
                 lbl_time2 = getattr(self, f'lbl_video_{other_side}_time')
                 if self.emg_start_time is not None:
                     calib2 = self.calib_offset.get(other_side, 0)
-                    emg_rel2 = other_first + other_frame / other_fps_val - float(self.emg_start_time) - calib2
+                    emg_rel2 = other_first + other_frame / other_eff_fps - float(self.emg_start_time) - calib2
                     if abs(calib2) > 0.001:
                         lbl_time2.setText(f'Frame #{other_frame} | 视频 {om:02d}:{os:02d} | EMG {emg_rel2:.2f}s | 标定{calib2:+.3f}s')
                     else:
