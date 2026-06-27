@@ -61,7 +61,10 @@ def main():
         # 数据处理
         '--hidden-import=msgpack',
         # 视频处理 (calibrate_tool 子模块需要)
-        '--hidden-import=cv2',
+        # 【修复】--hidden-import 只打包 Python 模块，不收集原生 DLL
+        # cv2.VideoCapture 在 Windows 上依赖 opencv_videoio_ffmpeg*.dll
+        # 必须用 --collect-all 才能把 FFmpeg 后端 DLL 一起打包
+        '--collect-all', 'cv2',
         '--hidden-import=PIL',
         '--hidden-import=lz4.frame',
         script_path
