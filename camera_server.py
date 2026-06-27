@@ -166,13 +166,12 @@ class CameraCapture:
 
         self._startup_time = time.time()
 
-        # 候选设备ID列表：优先 @device_pnp 路径（唯一且不冲突），
-        # 后备友好名称（多个同名设备时可能冲突）
+        # 候选设备ID列表：优先友好名称（最可靠），
+        # 后备 @device_pnp 路径（同名设备时用于区分；某些摄像头不支持 @device_pnp）
         friendly_name = re.sub(r'\s*\([0-9a-fA-F:]+\)\s*$', '', self.device_name).strip()
-        device_candidates = []
+        device_candidates = [('友好名称', friendly_name)]
         if self.alt_name:
             device_candidates.append(('设备路径', self.alt_name))
-        device_candidates.append(('友好名称', friendly_name))
 
         # 采集模式候选：从最宽松到最严格
         # - 'auto': 不指定参数，DShow 自动协商（RealSense 等需要）
@@ -182,7 +181,6 @@ class CameraCapture:
 
         # 尝试打开摄像头（最多 3 次重试，每次间隔递增）
         for attempt in range(3):
-            opened = False
             for label, device_id in device_candidates:
                 for mode in capture_modes:
                     ok, proc = self._try_open_camera(device_id, label, mode)
@@ -216,7 +214,7 @@ class CameraCapture:
                         self._stdout_fd = None
                         continue  # 尝试下一个模式
 
-                    # 阶段2：再等 400ms（DShow 协商 + 首帧到达），每 100ms 轮询
+                    # 阶段2：再等 400ms（DShow 协商），每 100ms 轮询
                     startup_ok = True
                     for _ in range(4):
                         time.sleep(0.1)
@@ -241,35 +239,76 @@ class CameraCapture:
                     if not startup_ok:
                         continue  # 尝试下一个模式
 
-                    # 进程存活超过 500ms，DShow 协商成功，启动完成
-                    opened = True
-                    break
-                if opened:
-                    break
-            if opened:
-                break
-            else:
-                # 所有候选都失败
-                if attempt < 2:
-                    delay = 0.5 * (attempt + 1)
-                    print(f'[CameraCapture] [{self.side}] 第 {attempt+1} 次尝试失败，'
-                          f'{delay:.1f}s 后重试...')
-                    time.sleep(delay)
-                else:
-                    print(f'[CameraCapture] [{self.side}] ❌ 全部 3 次尝试均失败')
-                    return False
+                    # 阶段3：进程存活 500ms+，启动读取线程，等待首帧
+                    # （有些情况如 @device_pnp 不可用时，ffmpeg 挂死但不退出）
+                    self.running = True
+                    self.reader_thread = threading.Thread(target=self._read_frames, daemon=True)
+                    self.reader_thread.start()
+                    stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
+                    stderr_thread.start()
 
-        self.running = True
-        self.reader_thread = threading.Thread(target=self._read_frames, daemon=True)
-        self.reader_thread.start()
+                    first_frame_deadline = time.time() + 3.0
+                    frame_arrived = False
+                    while time.time() < first_frame_deadline:
+                        if self.latest_frame_b64 is not None:
+                            frame_arrived = True
+                            break
+                        if self.process.poll() is not None:
+                            # ffmpeg 在等待首帧期间退出（延迟崩溃）
+                            self.running = False
+                            stderr_output = ''
+                            try:
+                                stderr_output = self.process.stderr.read().decode('utf-8', errors='ignore')
+                            except Exception:
+                                pass
+                            print(f'[CameraCapture] [{self.side}] ❌ ffmpeg 等待首帧期间退出 '
+                                  f'(exit={self.process.returncode}) '
+                                  f'标签={label}, 模式={mode}')
+                            if stderr_output:
+                                for err_line in stderr_output.strip().split('\n'):
+                                    if err_line.strip():
+                                        print(f'[CameraCapture] [{self.side}]   stderr: {err_line.strip()[:200]}')
+                            self.process = None
+                            self._stdout_fd = None
+                            break
+                        time.sleep(0.1)
 
-        stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
-        stderr_thread.start()
+                    if frame_arrived:
+                        print(f'[CameraCapture] [{self.side}] ✅ MJPEG采集已启动 '
+                              f'(标签={label}, 模式={mode}, PID={self.process.pid})')
+                        return True
 
-        print(f'[CameraCapture] [{self.side}] ✅ MJPEG采集已启动 '
-              f'(标签={self._last_device_label}, 模式={self._last_capture_mode}, '
-              f'PID={self.process.pid})')
-        return True
+                    # 首帧超时或进程崩溃，清理并尝试下一个候选
+                    if self.latest_frame_b64 is None:
+                        if self.process and self.process.poll() is None:
+                            print(f'[CameraCapture] [{self.side}] ❌ 首帧超时(3s)，'
+                                  f'ffmpeg 进程存活但无帧输出 (DShow 挂死，'
+                                  f'标签={label}, 模式={mode})')
+                        self.running = False
+                        if self.process and self.process.poll() is None:
+                            try:
+                                self.process.terminate()
+                                self.process.wait(timeout=3)
+                            except Exception:
+                                try:
+                                    self.process.kill()
+                                except Exception:
+                                    pass
+                        self.process = None
+                        self._stdout_fd = None
+                        # 继续尝试下一个模式
+                        continue
+                # 该设备的所有模式都失败
+                pass
+            # 所有设备候选都失败
+            if attempt < 2:
+                delay = 0.5 * (attempt + 1)
+                print(f'[CameraCapture] [{self.side}] 第 {attempt+1} 次尝试失败，'
+                      f'{delay:.1f}s 后重试...')
+                time.sleep(delay)
+        # 全部 3 次重试均失败
+        print(f'[CameraCapture] [{self.side}] ❌ 全部 3 次尝试均失败')
+        return False
 
     def _read_frames(self):
         """读取 MJPEG 帧（在单独线程中运行，使用无缓冲 os.read）"""
@@ -1008,10 +1047,14 @@ class CameraServer:
                     continue
 
                 # 捕获 Alternative name — 属于当前 pending_device
-                alt_path_match = re.search(r'Alternative name\s+"([^"]+)"', line)
+                # 只取 @device_pnp_ 路径（视频设备），过滤音频/软件路径
+                #   @device_pnp_  → 物理即插即用视频设备 ✓
+                #   @device_cm_   → Kernel Streaming 音频 ✗
+                #   @device_sw_   → 软件虚拟设备 ✗
+                alt_path_match = re.search(r'Alternative name\s+"(@device_pnp_[^"]+)"', line)
                 if alt_path_match and pending_device:
                     pending_device['alt_name'] = alt_path_match.group(1)
-                    print(f'[CameraServer]     备用路径: {pending_device["alt_name"]}')
+                    print(f'[CameraServer]     备用路径(视频): {pending_device["alt_name"]}')
                     continue
 
             # 刷新最后一个待定设备
@@ -1309,14 +1352,12 @@ class CameraServer:
         alt_name = self.cameras[side].get('alt_name')
         friendly_name = re.sub(r'\s*\([0-9a-fA-F:]+\)\s*$', '', device_name).strip()
 
-        # 候选设备ID列表：优先 @device_pnp 路径（唯一且不冲突）
-        candidates = []
-        candidate_labels = []
+        # 候选设备ID列表：优先友好名称，后备 @device_pnp 路径
+        candidates = ['video=' + friendly_name]
+        candidate_labels = ['友好名称']
         if alt_name:
             candidates.append('video=' + alt_name)
             candidate_labels.append('设备路径')
-        candidates.append('video=' + friendly_name)
-        candidate_labels.append('友好名称')
 
         # 三种采集模式（与 CameraCapture.start() 保持一致）
         mode_configs = [
