@@ -87,9 +87,10 @@ def find_ffmpeg():
 class CameraCapture:
     """实时摄像头采集器 - 通过 ffmpeg MJPEG pipe 抓取帧并推送给订阅者"""
 
-    def __init__(self, side, device_name, ffmpeg_path, frame_queue):
+    def __init__(self, side, device_name, ffmpeg_path, frame_queue, alt_name=None):
         self.side = side
         self.device_name = device_name
+        self.alt_name = alt_name  # 备用设备路径（@device_pnp_...），用于 fallback
         self.ffmpeg_path = ffmpeg_path
         self.frame_queue = frame_queue  # asyncio.Queue，用于跨线程传递帧
         self.process = None
@@ -101,60 +102,115 @@ class CameraCapture:
         self.current_fps = 0
         self.frame_recorder = None  # FrameRecorder instance (set when recording)
         self._stdout_fd = None      # raw pipe fd for unbuffered reads
+        self._startup_time = None   # 启动时间，用于控制诊断日志窗口
+
+    def _build_ffmpeg_args(self, device_id):
+        """构建 ffmpeg dshow 采集命令参数"""
+        return [
+            self.ffmpeg_path,
+            '-fflags', 'nobuffer',
+            '-flags', 'low_delay',
+            '-rtbufsize', '2M',
+            '-f', 'dshow',
+            '-video_size', '1920x1080',
+            '-framerate', '30',
+            '-i', f'video={device_id}',
+            '-vcodec', 'mjpeg',
+            '-q:v', '8',
+            '-f', 'image2pipe',
+            '-flush_packets', '1',
+            'pipe:1'
+        ]
+
+    def _try_open_camera(self, device_id, label):
+        """尝试用指定设备ID打开摄像头，返回 (success, process)"""
+        cmd = self._build_ffmpeg_args(device_id)
+        print(f'[CameraCapture] [{self.side}] 尝试打开: {label} ...')
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+            )
+            return True, proc
+        except Exception as e:
+            print(f'[CameraCapture] [{self.side}] ❌ 启动失败 ({label}): {e}')
+            return False, None
 
     def start(self):
-        """启动 MJPEG 采集"""
+        """启动 MJPEG 采集（支持重试 + Alternative name fallback）"""
         if self.running:
             print(f'[CameraCapture] [{self.side}] 已在运行中')
             return True
 
-        clean_name = re.sub(r'\s*\([0-9a-fA-F:]+\)\s*$', '', self.device_name).strip()
+        self._startup_time = time.time()
 
-        cmd = [
-            self.ffmpeg_path,
-            '-fflags', 'nobuffer',       # 禁用输入端缓冲
-            '-flags', 'low_delay',       # 低延迟模式
-            '-rtbufsize', '2M',           # dshow 实时缓冲（1080p 需要更大）
-            '-f', 'dshow',
-            '-video_size', '1920x1080',
-            '-framerate', '30',
-            '-i', f'video={clean_name}',
-            '-vcodec', 'mjpeg',
-            '-q:v', '8',
-            '-f', 'image2pipe',
-            '-flush_packets', '1',       # 每帧即时flush输出
-            'pipe:1'
-        ]
+        # 候选设备ID列表：优先友好名称，备用 @device_pnp 路径
+        friendly_name = re.sub(r'\s*\([0-9a-fA-F:]+\)\s*$', '', self.device_name).strip()
+        candidates = [('友好名称', friendly_name)]
+        if self.alt_name:
+            candidates.append(('设备路径', self.alt_name))
 
-        print(f'[CameraCapture] [{self.side}] 启动MJPEG采集: {clean_name} (low_delay模式)')
+        # 尝试打开摄像头（最多 3 次重试，每次间隔递增）
+        for attempt in range(3):
+            for label, device_id in candidates:
+                ok, proc = self._try_open_camera(device_id, label)
+                if not ok:
+                    continue
 
-        try:
-            self.process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                bufsize=0,  # 禁用Python层缓冲
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-            )
-            # 获取原始 FD 用于无缓冲读取（绕过 BufferedReader）
-            self._stdout_fd = self.process.stdout.fileno()
+                self.process = proc
+                self._stdout_fd = self.process.stdout.fileno()
+                self._last_device_label = label
 
-            self.running = True
-            self.reader_thread = threading.Thread(target=self._read_frames, daemon=True)
-            self.reader_thread.start()
+                # 等待 100ms 检查进程是否立即退出
+                time.sleep(0.1)
+                if self.process.poll() is not None:
+                    # ffmpeg 进程已退出，读取 stderr 诊断信息
+                    stderr_output = ''
+                    try:
+                        stderr_output = self.process.stderr.read().decode('utf-8', errors='ignore')
+                    except Exception:
+                        pass
+                    exit_code = self.process.returncode
+                    print(f'[CameraCapture] [{self.side}] ❌ ffmpeg 立即退出 (exit={exit_code}) '
+                          f'标签={label}, 设备={device_id[:40]}')
+                    if stderr_output:
+                        for err_line in stderr_output.strip().split('\n'):
+                            if err_line.strip():
+                                print(f'[CameraCapture] [{self.side}]   stderr: {err_line.strip()[:200]}')
+                    self.process = None
+                    self._stdout_fd = None
+                    continue  # 尝试下一个候选
+                else:
+                    # 进程存活，启动成功
+                    break
+            else:
+                # 所有候选都失败
+                if attempt < 2:
+                    delay = 0.5 * (attempt + 1)
+                    print(f'[CameraCapture] [{self.side}] 第 {attempt+1} 次尝试失败，'
+                          f'{delay:.1f}s 后重试...')
+                    time.sleep(delay)
+                    continue
+                else:
+                    print(f'[CameraCapture] [{self.side}] ❌ 全部 3 次尝试均失败')
+                    return False
 
-            # 启动 stderr 读取线程（避免管道阻塞）
-            stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
-            stderr_thread.start()
+            # 成功，跳出重试循环
+            break
 
-            print(f'[CameraCapture] [{self.side}] ✅ MJPEG采集已启动, PID: {self.process.pid}')
-            return True
+        self.running = True
+        self.reader_thread = threading.Thread(target=self._read_frames, daemon=True)
+        self.reader_thread.start()
 
-        except Exception as e:
-            print(f'[CameraCapture] [{self.side}] ❌ 启动失败: {e}')
-            import traceback
-            traceback.print_exc()
-            return False
+        stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
+        stderr_thread.start()
+
+        print(f'[CameraCapture] [{self.side}] ✅ MJPEG采集已启动 '
+              f'(标签={self._last_device_label}, PID={self.process.pid})')
+        return True
 
     def _read_frames(self):
         """读取 MJPEG 帧（在单独线程中运行，使用无缓冲 os.read）"""
@@ -236,17 +292,23 @@ class CameraCapture:
             self.running = False
 
     def _read_stderr(self):
-        """读取 ffmpeg stderr（避免管道阻塞）"""
+        """读取 ffmpeg stderr（避免管道阻塞），启动阶段打印全部诊断行"""
         try:
+            startup_deadline = (self._startup_time or time.time()) + 3.0  # 前3s全量输出
             while self.running and self.process and self.process.poll() is None:
                 line = self.process.stderr.readline()
                 if not line:
                     break
-                # 只打印关键信息
                 line_str = line.decode('utf-8', errors='ignore').strip()
-                if 'error' in line_str.lower() or 'cannot' in line_str.lower():
+                if not line_str:
+                    continue
+                # 启动诊断窗口内全量输出；稳定运行后只输出异常行
+                in_startup = time.time() < startup_deadline
+                if in_startup or 'error' in line_str.lower() or 'cannot' in line_str.lower() \
+                        or 'fail' in line_str.lower() or 'unable' in line_str.lower() \
+                        or 'invalid' in line_str.lower():
                     print(f'[CameraCapture] [{self.side}] ffmpeg: {line_str}')
-        except:
+        except Exception:
             pass
 
     def stop(self):
@@ -845,6 +907,7 @@ class CameraServer:
             print(f'[CameraServer] ffmpeg 输出:\n{output_preview}')
 
             devices = []
+            current_alt_name = None  # 备用设备路径（Alternative name）
 
             for line in output.split('\n'):
                 # 新格式: [in#0 @ xxx] "设备名称" (video)
@@ -854,24 +917,36 @@ class CameraServer:
                     if 'Alternative name' not in line:
                         devices.append({
                             'name': device_name,
-                            'id': device_name
+                            'id': device_name,
+                            'alt_name': current_alt_name  # 备用路径
                         })
                         print(f'[CameraServer]   [新格式] {device_name}')
-                        continue
+                        current_alt_name = None
+                    continue
 
                 # 旧格式: DirectShow video devices 段落中的 "设备名称"
-                # 兼容没有 [in#...] 前缀的旧版 ffmpeg
                 alt_match = re.search(r'^\s*"([^"]+)"\s*\(video\)', line)
                 if alt_match:
                     device_name = alt_match.group(1)
                     if 'Alternative name' not in line and device_name not in {d['name'] for d in devices}:
                         devices.append({
                             'name': device_name,
-                            'id': device_name
+                            'id': device_name,
+                            'alt_name': current_alt_name
                         })
                         print(f'[CameraServer]   [旧格式] {device_name}')
+                        current_alt_name = None
+                    continue
+
+                # 捕获 Alternative name 备用设备路径
+                alt_path_match = re.search(r'Alternative name\s+"([^"]+)"', line)
+                if alt_path_match:
+                    current_alt_name = alt_path_match.group(1)
+                    print(f'[CameraServer]     备用路径: {current_alt_name}')
 
             print(f'[CameraServer] 找到 {len(devices)} 个摄像头设备')
+            # 缓存设备列表供 set_camera 查找 alt_name
+            self._device_list_cache = devices
             return {
                 'success': True,
                 'devices': devices
@@ -903,9 +978,20 @@ class CameraServer:
         if not side or side not in ['left', 'right']:
             return {'success': False, 'error': '无效的side参数'}
 
+        # 从缓存的设备列表中查找备用名称（@device_pnp_...）
+        alt_name = None
+        if hasattr(self, '_device_list_cache'):
+            for dev in self._device_list_cache:
+                if dev.get('name') == device_name:
+                    alt_name = dev.get('alt_name')
+                    if alt_name:
+                        print(f'[CameraServer]   {side} 备用路径: {alt_name[:60]}...')
+                    break
+
         self.cameras[side] = {
             'device_name': device_name,
-            'device_id': device_id or device_name
+            'device_id': device_id or device_name,
+            'alt_name': alt_name
         }
 
         print(f'[CameraServer] 摄像头配置已保存: {side} -> {device_name}')
@@ -940,7 +1026,9 @@ class CameraServer:
             return {'success': False, 'error': f'{side}侧正在录制中，不能同时重新打开摄像头'}
 
         camera = self.cameras[side]
-        capture = CameraCapture(side, camera['device_name'], self.ffmpeg_path, self.frame_queue)
+        alt_name = camera.get('alt_name')  # 备用设备路径（@device_pnp_...），用于 fallback
+        capture = CameraCapture(side, camera['device_name'], self.ffmpeg_path,
+                                self.frame_queue, alt_name=alt_name)
         success = capture.start()
 
         if success:
@@ -1128,48 +1216,61 @@ class CameraServer:
             return None, 'ffmpeg未安装'
 
         device_name = self.cameras[side]['device_name']
-        clean_name = re.sub(r'\s*\([0-9a-fA-F:]+\)\s*$', '', device_name).strip()
+        alt_name = self.cameras[side].get('alt_name')
+        friendly_name = re.sub(r'\s*\([0-9a-fA-F:]+\)\s*$', '', device_name).strip()
 
-        cmd = [
-            self.ffmpeg_path,
-            '-f', 'dshow',
-            '-rtbufsize', '2M',
-            '-video_size', '1920x1080',
-            '-framerate', '30',
-            '-i', f'video={clean_name}',
-            '-vframes', '1',         # 只抓一帧就退出
-            '-vcodec', 'mjpeg',
-            '-q:v', '8',
-            '-f', 'image2pipe',
-            'pipe:1'
-        ]
+        # 候选设备ID列表：优先友好名称，备用 @device_pnp 路径
+        candidates = ['video=' + friendly_name]
+        if alt_name:
+            candidates.append('video=' + alt_name)
 
-        print(f'[CameraServer] 📸 {side}侧 单帧拍照: {clean_name}')
-        try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                timeout=10,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-            )
-            if proc.stdout and len(proc.stdout) > 0:
-                # 提取第一个 JPEG (可能有多帧或垃圾数据)
-                start = proc.stdout.find(b'\xff\xd8')
-                end = proc.stdout.find(b'\xff\xd9', start + 2) if start != -1 else -1
-                if start != -1 and end != -1:
-                    frame = proc.stdout[start:end + 2]
-                    b64 = base64.b64encode(frame).decode()
-                    print(f'[CameraServer] 📸 {side}侧 拍照成功 ({len(frame)} bytes, {len(b64)/1024:.1f}KB b64)')
-                    return b64, None
+        for candidate_idx, video_arg in enumerate(candidates):
+            label = '友好名称' if candidate_idx == 0 else '设备路径'
+            cmd = [
+                self.ffmpeg_path,
+                '-f', 'dshow',
+                '-rtbufsize', '2M',
+                '-video_size', '1920x1080',
+                '-framerate', '30',
+                '-i', video_arg,
+                '-vframes', '1',
+                '-vcodec', 'mjpeg',
+                '-q:v', '8',
+                '-f', 'image2pipe',
+                'pipe:1'
+            ]
+
+            print(f'[CameraServer] 📸 {side}侧 单帧拍照 ({label}): {video_arg}')
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    timeout=10,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                )
+                if proc.stdout and len(proc.stdout) > 0:
+                    start = proc.stdout.find(b'\xff\xd8')
+                    end = proc.stdout.find(b'\xff\xd9', start + 2) if start != -1 else -1
+                    if start != -1 and end != -1:
+                        frame = proc.stdout[start:end + 2]
+                        b64 = base64.b64encode(frame).decode()
+                        print(f'[CameraServer] 📸 {side}侧 拍照成功 ({len(frame)} bytes, {len(b64)/1024:.1f}KB b64)')
+                        return b64, None
+                    else:
+                        # 此候选未产生有效帧，尝试下一个
+                        continue
                 else:
-                    return None, f'未能从{side}摄像头数据中提取有效JPEG帧'
-            else:
-                stderr_tail = proc.stderr[-300:].decode('utf-8', errors='ignore') if proc.stderr else '(无输出)'
-                return None, f'{side}摄像头抓帧失败: {stderr_tail[:200]}'
-        except subprocess.TimeoutExpired:
-            return None, f'{side}摄像头抓帧超时(10s)'
-        except Exception as e:
-            return None, f'{side}摄像头抓帧异常: {e}'
+                    stderr_tail = proc.stderr[-500:].decode('utf-8', errors='ignore') if proc.stderr else '(无输出)'
+                    print(f'[CameraServer] 📸 {side}侧 {label} 失败: {stderr_tail[:200]}')
+                    continue  # 尝试下一个候选
+            except subprocess.TimeoutExpired:
+                print(f'[CameraServer] 📸 {side}侧 {label} 超时')
+                continue
+            except Exception as e:
+                print(f'[CameraServer] 📸 {side}侧 {label} 异常: {e}')
+                continue
+        # 所有候选都不成功
+        return None, f'{side}摄像头抓帧失败: 全部候选标识符均无法打开'
 
     def _cmd_get_preview_frame(self, data):
         """获取单帧预览（按需拍照模式）
