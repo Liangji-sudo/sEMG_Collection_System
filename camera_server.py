@@ -144,7 +144,15 @@ class CameraCapture:
     def _try_open_camera(self, device_id, label, capture_mode='1080p30'):
         """尝试用指定设备ID打开摄像头，返回 (success, process)"""
         cmd = self._build_ffmpeg_args(device_id, capture_mode)
-        print(f'[CameraCapture] [{self.side}] 尝试打开: {label} (模式={capture_mode}) ...')
+        # 精简版命令（去掉长路径和版本信息）
+        cmd_short = ' '.join(
+            [c if c != self.ffmpeg_path else 'ffmpeg']
+            + [f'"video={device_id[:60]}..."' if c.startswith('video=') and len(c) > 80 else c
+               for c in cmd[1:]]
+        )
+        print(f'[CameraCapture] [{self.side}] ▶ 尝试: {label} 模式={capture_mode} '
+              f'设备={device_id[:80]}')
+        print(f'[CameraCapture] [{self.side}]   命令: {cmd_short}')
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -155,7 +163,8 @@ class CameraCapture:
             )
             return True, proc
         except Exception as e:
-            print(f'[CameraCapture] [{self.side}] ❌ 启动失败 ({label}): {e}')
+            print(f'[CameraCapture] [{self.side}] ❌ subprocess启动异常: {e}')
+            return False, None
             return False, None
 
     def start(self):
@@ -261,6 +270,8 @@ class CameraCapture:
         """读取 MJPEG 帧（在单独线程中运行，使用无缓冲 os.read）"""
         buf = b''
         fd = self._stdout_fd
+        first_frame_logged = False
+        frame_start_time = time.time()
         while self.running and self.process and self.process.poll() is None:
             try:
                 # 使用 os.read 无缓冲直接读管道，避免 Python BufferedReader 延迟
@@ -284,6 +295,26 @@ class CameraCapture:
                     # 提取完整帧
                     frame = buf[start:end + 2]
                     buf = buf[end + 2:]
+
+                    # 首帧诊断：记录从进程启动到首帧的时间
+                    if not first_frame_logged:
+                        first_frame_logged = True
+                        elapsed = time.time() - (self._startup_time or time.time())
+                        w, h = 0, 0
+                        try:
+                            # 从 JPEG 头解析分辨率 (SOF0 marker)
+                            idx = 0
+                            while idx < len(frame) - 1:
+                                if frame[idx] == 0xff and frame[idx+1] == 0xc0:
+                                    h = (frame[idx+5] << 8) | frame[idx+6]
+                                    w = (frame[idx+7] << 8) | frame[idx+8]
+                                    break
+                                idx += 1
+                        except Exception:
+                            pass
+                        print(f'[CameraCapture] [{self.side}] 🎬 首帧到达 '
+                              f'(启动耗时={elapsed*1000:.0f}ms, '
+                              f'分辨率={w}x{h}, 大小={len(frame)/1024:.1f}KB)')
 
                     # Base64 编码
                     b64 = base64.b64encode(frame).decode()
@@ -333,13 +364,15 @@ class CameraCapture:
 
         # 进程已退出
         if self.running:
-            print(f'[CameraCapture] [{self.side}] ffmpeg进程意外退出')
+            elapsed = time.time() - (frame_start_time or time.time())
+            print(f'[CameraCapture] [{self.side}] ⚠️ ffmpeg进程意外退出 '
+                  f'(运行{elapsed:.1f}s, 共{self.fps_frame_count}帧)')
             self.running = False
 
     def _read_stderr(self):
-        """读取 ffmpeg stderr（避免管道阻塞），启动阶段打印全部诊断行"""
+        """读取 ffmpeg stderr（避免管道阻塞），启动阶段全量输出诊断信息"""
         try:
-            startup_deadline = (self._startup_time or time.time()) + 3.0  # 前3s全量输出
+            startup_deadline = (self._startup_time or time.time()) + 5.0  # 前5s全量输出
             while self.running and self.process and self.process.poll() is None:
                 line = self.process.stderr.readline()
                 if not line:
@@ -347,18 +380,23 @@ class CameraCapture:
                 line_str = line.decode('utf-8', errors='ignore').strip()
                 if not line_str:
                     continue
-                # 启动诊断窗口内全量输出；稳定运行后只输出异常行
                 in_startup = time.time() < startup_deadline
-                if in_startup or 'error' in line_str.lower() or 'cannot' in line_str.lower() \
-                        or 'fail' in line_str.lower() or 'unable' in line_str.lower() \
-                        or 'invalid' in line_str.lower():
+                # 启动窗口内全量输出；稳定运行后只输出关键诊断行
+                is_diag = any(kw in line_str.lower() for kw in
+                              ['error', 'cannot', 'fail', 'unable', 'invalid',
+                               'input #0', 'stream #0', 'video:', 'mjpeg',
+                               'yuv', 'fps', 'bitrate', 'could not'])
+                if in_startup or is_diag:
                     print(f'[CameraCapture] [{self.side}] ffmpeg: {line_str}')
         except Exception:
             pass
 
     def stop(self):
         """停止 MJPEG 采集"""
-        print(f'[CameraCapture] [{self.side}] 停止MJPEG采集...')
+        lifetime = time.time() - (self._startup_time or time.time()) if self._startup_time else 0
+        print(f'[CameraCapture] [{self.side}] 停止MJPEG采集... '
+              f'(运行{lifetime:.1f}s, {self.fps_frame_count}帧, '
+              f'设备={self._last_device_label or "?"}, 模式={self._last_capture_mode or "?"})')
         self.running = False
 
         if self.process:
