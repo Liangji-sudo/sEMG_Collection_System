@@ -188,7 +188,7 @@ class CalibrateWidget(QWidget):
         self._video_current_idx = {'left': -1, 'right': -1}         # 当前帧索引
         self._last_video_update = 0     # 上次视频更新时间戳
         self._video_update_throttle_drag = 0.15   # 拖动时节流间隔 (秒)
-        self._video_update_throttle_static = 0.05 # 静止时更新间隔
+        self._video_update_throttle_static = 0.033 # 静止时更新间隔（对齐视频 30fps）
         self.video_label_height = 200   # 视频预览区域高度
 
         # 精确对齐标定偏移量（从 H5 attrs 读取，无标定时默认 0）
@@ -244,6 +244,7 @@ class CalibrateWidget(QWidget):
         self.full_playback_timer = QTimer()
         self.full_playback_timer.timeout.connect(self._on_full_playback_tick)
         self._full_playback_speed = 1.0    # 播放速度倍率 (1.0 = 实时)
+        self._show_position_line = False   # 逐帧步进时也显示位置红线
 
         self.init_ui()
 
@@ -432,6 +433,63 @@ class CalibrateWidget(QWidget):
         playback_layout.addWidget(self.btn_pause)
 
         control_layout.addWidget(playback_widget)
+
+        # 逐帧步进按钮（按视频帧粒度微调位置，用于精细观察对齐）
+        control_layout.addWidget(QLabel('  |  '))
+        step_widget = QWidget()
+        step_layout = QHBoxLayout(step_widget)
+        step_layout.setContentsMargins(0, 0, 0, 0)
+        step_layout.setSpacing(2)
+
+        step_btn_style = (
+            'QPushButton {'
+            '  font-size: 12px; padding: 3px 6px;'
+            '  border-radius: 4px; border: none;'
+            '  color: #fff;'
+            '}'
+        )
+
+        self.btn_step_back5 = QPushButton('◀◀')
+        self.btn_step_back5.setFixedWidth(36)
+        self.btn_step_back5.setToolTip('后退5个视频帧')
+        self.btn_step_back5.clicked.connect(lambda: self._step_frames(-5))
+        self.btn_step_back5.setStyleSheet(
+            step_btn_style + 'QPushButton { background-color: #636e72; }'
+            'QPushButton:hover { background-color: #7f8c8d; }')
+        step_layout.addWidget(self.btn_step_back5)
+
+        self.btn_step_back1 = QPushButton('◀')
+        self.btn_step_back1.setFixedWidth(32)
+        self.btn_step_back1.setToolTip('后退1个视频帧')
+        self.btn_step_back1.clicked.connect(lambda: self._step_frames(-1))
+        self.btn_step_back1.setStyleSheet(
+            step_btn_style + 'QPushButton { background-color: #636e72; }'
+            'QPushButton:hover { background-color: #7f8c8d; }')
+        step_layout.addWidget(self.btn_step_back1)
+
+        self.lbl_step_info = QLabel('帧步')
+        self.lbl_step_info.setStyleSheet('color: #666; font-size: 9pt; padding: 0 4px;')
+        step_layout.addWidget(self.lbl_step_info)
+
+        self.btn_step_fwd1 = QPushButton('▶')
+        self.btn_step_fwd1.setFixedWidth(32)
+        self.btn_step_fwd1.setToolTip('前进1个视频帧')
+        self.btn_step_fwd1.clicked.connect(lambda: self._step_frames(1))
+        self.btn_step_fwd1.setStyleSheet(
+            step_btn_style + 'QPushButton { background-color: #0984e3; }'
+            'QPushButton:hover { background-color: #3498db; }')
+        step_layout.addWidget(self.btn_step_fwd1)
+
+        self.btn_step_fwd5 = QPushButton('▶▶')
+        self.btn_step_fwd5.setFixedWidth(36)
+        self.btn_step_fwd5.setToolTip('前进5个视频帧')
+        self.btn_step_fwd5.clicked.connect(lambda: self._step_frames(5))
+        self.btn_step_fwd5.setStyleSheet(
+            step_btn_style + 'QPushButton { background-color: #0984e3; }'
+            'QPushButton:hover { background-color: #3498db; }')
+        step_layout.addWidget(self.btn_step_fwd5)
+
+        control_layout.addWidget(step_widget)
 
         control_scroll = QScrollArea()
         control_scroll.setWidget(control_widget)
@@ -1592,6 +1650,12 @@ class CalibrateWidget(QWidget):
                     btn = getattr(self, f'btn_preview_{side}', None)
                     if btn:
                         btn.setEnabled(True)
+            # 更新帧步信息提示
+            if hasattr(self, 'lbl_step_info'):
+                step_samples = self._get_frame_step_samples()
+                step_ms = (step_samples / self._active_emg_sample_rate()) * 1000
+                self.lbl_step_info.setToolTip(
+                    f'1帧 ≈ {step_samples}样本 ({step_ms:.1f}ms) @ {self._active_emg_sample_rate()}Hz EMG')
 
     def _close_videos(self):
         """关闭所有视频文件"""
@@ -2001,7 +2065,7 @@ class CalibrateWidget(QWidget):
             ax.set_ylim(-offset * 0.3, total_height - offset * 0.7)
             ax.set_autoscale_on(False)  # 禁止自动缩放，防止工具栏或 resize 改变视图
             # 播放红线：窗口中央 = 当前时间
-            if self.is_full_playing:
+            if self.is_full_playing or self._show_position_line:
                 window_center = (time_start + time_end) / 2.0
                 ax.axvline(x=window_center, color='#e74c3c', linewidth=2.0, alpha=0.9, zorder=10)
             title_suffix = '滤波后' if use_filter else '原始'
@@ -2087,7 +2151,7 @@ class CalibrateWidget(QWidget):
                 ax2.spines['bottom'].set_visible(False)
                 ax2.tick_params(axis='x', length=0)
             # 播放红线（仅第一个通道显示，避免重复）
-            if self.is_full_playing and i == 0:
+            if (self.is_full_playing or self._show_position_line) and i == 0:
                 window_center = (time_start + time_end) / 2.0
                 ax1.axvline(x=window_center, color='#e74c3c', linewidth=2.0, alpha=0.9, zorder=10)
                 ax2.axvline(x=window_center, color='#e74c3c', linewidth=2.0, alpha=0.9, zorder=10)
@@ -2242,7 +2306,7 @@ class CalibrateWidget(QWidget):
                 title_parts.append(f'Sync活跃: {",".join(sync_chs)}')
             ax.set_title(' | '.join(title_parts), fontsize=9, pad=3)
             # 播放红线
-            if self.is_full_playing:
+            if self.is_full_playing or self._show_position_line:
                 window_center = (time_start + time_end) / 2.0
                 ax.axvline(x=window_center, color='#e74c3c', linewidth=2.0, alpha=0.9, zorder=10)
             self.draw_prompt_markers(ax, time_start, time_end, show_text=True)
@@ -2656,8 +2720,8 @@ class CalibrateWidget(QWidget):
         # 记录播放基准：起始位置 + 起始真实时间
         self._playback_start_pos = self.current_pos
         self._playback_start_time = time.time()
-        # 50ms 定时器用于刷新画面，但位置始终由真实时间决定
-        self.full_playback_timer.start(50)
+        # 33ms 定时器用于刷新画面（≈30fps，对齐视频帧率），位置始终由真实时间决定
+        self.full_playback_timer.start(33)
 
         print(f'[CalibrateTool] ▶ 完整播放开始: pos={self.current_pos}, '
               f'sr={self._playback_sample_rate}Hz (实时追钟)')
@@ -2679,6 +2743,51 @@ class CalibrateWidget(QWidget):
         self.full_playback_timer.stop()
         self._update_playback_buttons(playing=False)
         print(f'[CalibrateTool] ⏹ 播放已停止: pos={self.current_pos}')
+
+    def _get_frame_step_samples(self):
+        """计算1个视频帧对应的 EMG 样本数（基于视频实际帧率）"""
+        sr = self._active_emg_sample_rate()
+        fps = 30.0  # 默认名义帧率
+        for side in ('left', 'right'):
+            if side not in self.video_caps:
+                continue
+            first = self.video_first_frame_unix.get(side, 0)
+            last = self.video_last_frame_unix.get(side, 0)
+            total = self.video_frame_count.get(side, 0)
+            if total > 1 and last > first:
+                efps = total / (last - first)
+                if fps == 30.0 or efps < fps:
+                    fps = efps
+        return max(1, int(sr / fps))
+
+    def _step_frames(self, delta_frames):
+        """步进 N 个视频帧（精细观察 EMG/视频对齐）"""
+        self._stop_full_playback()
+        self._stop_playback()
+
+        step_samples = self._get_frame_step_samples()
+        delta = delta_frames * step_samples
+
+        max_pos = self.slider.maximum()
+        new_pos = max(0, min(self.current_pos + delta, max_pos))
+
+        self.current_pos = new_pos
+        self.slider.blockSignals(True)
+        self.slider.setValue(new_pos)
+        self.slider.blockSignals(False)
+        self.lbl_pos.setText(f'位置: {new_pos}')
+
+        # 立即刷新显示（绕过 debounce 和视频 throttle）
+        self._last_video_update = 0
+        self.update_timer.stop()
+        self._show_position_line = True
+        self._do_update_plots()
+        self._show_position_line = False
+
+        # 更新步进信息提示
+        step_ms = (step_samples / self._active_emg_sample_rate()) * 1000
+        self.lbl_step_info.setToolTip(
+            f'1帧 ≈ {step_samples}样本 ({step_ms:.1f}ms) @ {self._active_emg_sample_rate()}Hz EMG')
 
     def reset_progress(self):
         """重置进度到数据起始位置"""
