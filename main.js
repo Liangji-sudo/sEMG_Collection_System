@@ -64,13 +64,21 @@ async function createWindow() {
       width: 1200,
       height: 800,
       webPreferences: {
-        contextIsolation: true,
+        contextIsolation: false,
+        nodeIntegration: false,
         sandbox: false
       }
     });
 
     // 加载服务地址
     mainWindow.loadURL(serverUrl);
+
+    // 确保窗口获得焦点（修复偶发输入框无法键入问题）
+    mainWindow.once('ready-to-show', () => {
+      mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.focus();
+    });
 
     // 窗口关闭时的处理
     mainWindow.on('closed', () => {

@@ -217,6 +217,18 @@
             this.loadTemplate();
             this.bindEvents();
             this.render();
+            // 修复 Electron 打包后偶发输入框无法键入问题：
+            // 从 display:none 变为可见的容器中通过 innerHTML 动态创建的 input，
+            // 需要一次 body 级别的重排才能被 Chromium 文本输入控制器正确注册。
+            // 通过创建一个临时不可见元素触发 layout → 下一帧 clean up。
+            const _reflowFix = document.createElement('span');
+            _reflowFix.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;pointer-events:none;';
+            document.body.appendChild(_reflowFix);
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    if (_reflowFix.parentNode) _reflowFix.parentNode.removeChild(_reflowFix);
+                });
+            });
             console.log('[TemplateConfig] 初始化完成');
         }
 
