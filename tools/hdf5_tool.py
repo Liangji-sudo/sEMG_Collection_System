@@ -2410,8 +2410,9 @@ class SyncCalibrationTab(QWidget):
         hint = QLabel(
             '操作步骤:\n'
             '  1. 播放视频，找到同步阶段中"精准对齐同步"prompt 触发时刻的标定动作\n'
-            '  2. 在动作发生的那一帧暂停，点击"标定打标"\n'
-            '  3. 系统自动计算视频偏移量→保存到 H5 →数据可视化自动应用'
+            '  2. 暂停后，使用"左手微调"/"右手微调"按钮分别定位左右视频的标定帧\n'
+            '  3. 左右都对齐后，点击"标定打标" → 保存到 H5 → 数据可视化自动应用\n'
+            '  💡 提示: 两个摄像头启动可能有时间差，左右标定帧号通常不同，需分别微调'
         )
         hint.setStyleSheet('color: #888; font-size: 9pt; padding: 8px; '
                            'background: #f8f9fa; border-radius: 4px;')
@@ -2489,6 +2490,77 @@ class SyncCalibrationTab(QWidget):
         ctrl_layout.addWidget(self.lbl_prompt_info)
 
         layout.addLayout(ctrl_layout)
+
+        # 独立帧微调控件行（左右手各自独立调节）
+        fine_ctrl = QHBoxLayout()
+
+        # ── 左手微调 ──
+        fine_ctrl.addWidget(QLabel('🔵 左手微调:'))
+        fine_ctrl.addSpacing(6)
+        self.btn_left_back5 = QPushButton('◀◀ -5')
+        self.btn_left_back5.clicked.connect(lambda: self._step_frame_side('left', -5))
+        self.btn_left_back5.setToolTip('左手视频回退5帧')
+        self.btn_left_back5.setMaximumWidth(60)
+        fine_ctrl.addWidget(self.btn_left_back5)
+
+        self.btn_left_back1 = QPushButton('◀ -1')
+        self.btn_left_back1.clicked.connect(lambda: self._step_frame_side('left', -1))
+        self.btn_left_back1.setToolTip('左手视频回退1帧')
+        self.btn_left_back1.setMaximumWidth(50)
+        fine_ctrl.addWidget(self.btn_left_back1)
+
+        self.lbl_left_fine_frame = QLabel('#0')
+        self.lbl_left_fine_frame.setStyleSheet(
+            'color: #3b82f6; font-weight: bold; font-size: 11pt; min-width: 50px;')
+        fine_ctrl.addWidget(self.lbl_left_fine_frame)
+
+        self.btn_left_fwd1 = QPushButton('+1 ▶')
+        self.btn_left_fwd1.clicked.connect(lambda: self._step_frame_side('left', 1))
+        self.btn_left_fwd1.setToolTip('左手视频前进1帧')
+        self.btn_left_fwd1.setMaximumWidth(50)
+        fine_ctrl.addWidget(self.btn_left_fwd1)
+
+        self.btn_left_fwd5 = QPushButton('+5 ▶▶')
+        self.btn_left_fwd5.clicked.connect(lambda: self._step_frame_side('left', 5))
+        self.btn_left_fwd5.setToolTip('左手视频前进5帧')
+        self.btn_left_fwd5.setMaximumWidth(60)
+        fine_ctrl.addWidget(self.btn_left_fwd5)
+
+        fine_ctrl.addSpacing(40)
+
+        # ── 右手微调 ──
+        fine_ctrl.addWidget(QLabel('🟢 右手微调:'))
+        self.btn_right_back5 = QPushButton('◀◀ -5')
+        self.btn_right_back5.clicked.connect(lambda: self._step_frame_side('right', -5))
+        self.btn_right_back5.setToolTip('右手视频回退5帧')
+        self.btn_right_back5.setMaximumWidth(60)
+        fine_ctrl.addWidget(self.btn_right_back5)
+
+        self.btn_right_back1 = QPushButton('◀ -1')
+        self.btn_right_back1.clicked.connect(lambda: self._step_frame_side('right', -1))
+        self.btn_right_back1.setToolTip('右手视频回退1帧')
+        self.btn_right_back1.setMaximumWidth(50)
+        fine_ctrl.addWidget(self.btn_right_back1)
+
+        self.lbl_right_fine_frame = QLabel('#0')
+        self.lbl_right_fine_frame.setStyleSheet(
+            'color: #10b981; font-weight: bold; font-size: 11pt; min-width: 50px;')
+        fine_ctrl.addWidget(self.lbl_right_fine_frame)
+
+        self.btn_right_fwd1 = QPushButton('+1 ▶')
+        self.btn_right_fwd1.clicked.connect(lambda: self._step_frame_side('right', 1))
+        self.btn_right_fwd1.setToolTip('右手视频前进1帧')
+        self.btn_right_fwd1.setMaximumWidth(50)
+        fine_ctrl.addWidget(self.btn_right_fwd1)
+
+        self.btn_right_fwd5 = QPushButton('+5 ▶▶')
+        self.btn_right_fwd5.clicked.connect(lambda: self._step_frame_side('right', 5))
+        self.btn_right_fwd5.setToolTip('右手视频前进5帧')
+        self.btn_right_fwd5.setMaximumWidth(60)
+        fine_ctrl.addWidget(self.btn_right_fwd5)
+
+        fine_ctrl.addStretch()
+        layout.addLayout(fine_ctrl)
 
         # 标定按钮行
         calib_layout = QHBoxLayout()
@@ -2835,6 +2907,9 @@ class SyncCalibrationTab(QWidget):
                 f'Unix: {frame_unix:.3f}'
             )
 
+            # 同步更新独立微调控件的帧号显示
+            self._update_fine_frame_labels()
+
     # ─── 播放控制 ───
 
     def _toggle_play(self):
@@ -2897,11 +2972,27 @@ class SyncCalibrationTab(QWidget):
             self._playback_timer.setInterval(max(16, interval))
 
     def _step_frame(self, delta):
-        """单帧步进"""
+        """单帧步进（左右同步）"""
         self._stop_playback()
         for side in self.video_caps:
             new_idx = self._current_frame_idx.get(side, 0) + delta
             self._seek_and_display(side, new_idx)
+
+    def _step_frame_side(self, side, delta):
+        """单侧独立帧步进（用于标定时左右手分别定位标定帧）"""
+        self._stop_playback()
+        if side in self.video_caps:
+            new_idx = self._current_frame_idx.get(side, 0) + delta
+            self._seek_and_display(side, new_idx)
+
+    def _update_fine_frame_labels(self):
+        """更新独立微调控件中的帧号显示"""
+        for side, lbl_attr in [('left', 'lbl_left_fine_frame'), ('right', 'lbl_right_fine_frame')]:
+            lbl = getattr(self, lbl_attr, None)
+            if lbl:
+                frame_idx = self._current_frame_idx.get(side, 0)
+                total = self.video_frame_count.get(side, 0)
+                lbl.setText(f'#{frame_idx}/{total - 1}' if total > 0 else f'#{frame_idx}')
 
     def _on_playback_tick(self):
         """播放定时器回调 — 逐帧推进"""
