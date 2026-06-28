@@ -147,7 +147,7 @@ class CameraCapture:
         # 精简版命令（去掉长路径和版本信息）
         cmd_short = ' '.join(
             ['ffmpeg' if cmd[0] == self.ffmpeg_path else cmd[0]]
-            + [f'"video={c[:60]}..."' if c.startswith('video=') and len(c) > 80 else c
+            + [f'"{c[:60]}..."' if c.startswith('video=') and len(c) > 80 else c
                for c in cmd[1:]]
         )
         print(f'[CameraCapture] [{self.side}] ▶ 尝试: {label} 模式={capture_mode} '
@@ -993,6 +993,18 @@ class CameraServer:
             devices = []
             pending_device = None  # 等待其 Alternative name 的设备
 
+            # 从 @device_pnp_ 路径提取简短USB实例ID用于显示区分
+            _USB_INSTANCE_RE = re.compile(
+                r'@device_pnp_.*?usb#vid_[0-9a-f]+&pid_[0-9a-f]+(?:&mi_\d+)?#([^#]+)'
+            )
+
+            def _extract_short_id(alt_name):
+                """从 @device_pnp_ 路径提取 USB 实例 ID（如 7&ee095dd）"""
+                if not alt_name:
+                    return None
+                m = _USB_INSTANCE_RE.search(alt_name)
+                return m.group(1) if m else None
+
             def _flush_pending():
                 """将待定设备加入列表，同名设备用 alt_name 区分"""
                 nonlocal pending_device
@@ -1000,6 +1012,7 @@ class CameraServer:
                     return
                 name = pending_device['name']
                 alt = pending_device.get('alt_name')
+                short_id = _extract_short_id(alt)
                 # 同名设备：优先用 @device_pnp 作为唯一 id；无 alt_name 则保留名称
                 existing_names = [d['name'] for d in devices]
                 if name in existing_names:
@@ -1007,6 +1020,13 @@ class CameraServer:
                     pending_device['id'] = alt if alt else f'{name}#{existing_names.count(name)+1}'
                 else:
                     pending_device['id'] = alt if alt else name
+                # 生成可区分的显示名称
+                if short_id:
+                    pending_device['short_id'] = short_id
+                    pending_device['display_name'] = f'{name} [{short_id}]'
+                else:
+                    pending_device['short_id'] = None
+                    pending_device['display_name'] = name
                 devices.append(pending_device)
                 pending_device = None
 

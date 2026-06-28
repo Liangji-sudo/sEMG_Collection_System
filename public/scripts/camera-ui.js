@@ -255,7 +255,7 @@
             const deviceId = side === 'left' ? leftDeviceId : rightDeviceId;
             if (!deviceId) continue;
 
-            const deviceName = select.options[select.selectedIndex].text;
+            const deviceName = select.options[select.selectedIndex].dataset.deviceName || select.options[select.selectedIndex].text;
             try {
                 const resp = await fetch('/api/camera/set-camera', {
                     method: 'POST',
@@ -402,17 +402,24 @@
             rightSelect.innerHTML = '<option value="">请选择摄像头...</option>';
 
             devices.forEach((camera, index) => {
+                const displayName = camera.display_name || camera.name || `USB摄像头 ${index + 1}`;
                 const name = camera.name || `USB摄像头 ${index + 1}`;
                 const id = camera.id || camera.name;
 
                 const opt1 = document.createElement('option');
                 opt1.value = id;
-                opt1.textContent = name;
+                opt1.textContent = displayName;
+                opt1.dataset.deviceName = name;
+                opt1.dataset.deviceId = id;
+                opt1.title = `${name}\nID: ${id}`;
                 leftSelect.appendChild(opt1);
 
                 const opt2 = document.createElement('option');
                 opt2.value = id;
-                opt2.textContent = name;
+                opt2.textContent = displayName;
+                opt2.dataset.deviceName = name;
+                opt2.dataset.deviceId = id;
+                opt2.title = `${name}\nID: ${id}`;
                 rightSelect.appendChild(opt2);
             });
 
@@ -512,7 +519,7 @@
 
         // 配置并打开左手摄像头
         if (leftDeviceId) {
-            const leftDeviceName = leftSelect.options[leftSelect.selectedIndex].text;
+            const leftDeviceName = leftSelect.options[leftSelect.selectedIndex].dataset.deviceName || leftSelect.options[leftSelect.selectedIndex].text;
 
             if (useDirectWS) {
                 const setResult = await window.CameraControl.setCamera('left', leftDeviceName, leftDeviceId);
@@ -555,7 +562,7 @@
 
         // 配置并打开右手摄像头
         if (rightDeviceId) {
-            const rightDeviceName = rightSelect.options[rightSelect.selectedIndex].text;
+            const rightDeviceName = rightSelect.options[rightSelect.selectedIndex].dataset.deviceName || rightSelect.options[rightSelect.selectedIndex].text;
 
             if (useDirectWS) {
                 const setResult = await window.CameraControl.setCamera('right', rightDeviceName, rightDeviceId);
