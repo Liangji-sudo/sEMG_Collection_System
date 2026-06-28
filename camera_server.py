@@ -146,8 +146,8 @@ class CameraCapture:
         cmd = self._build_ffmpeg_args(device_id, capture_mode)
         # 精简版命令（去掉长路径和版本信息）
         cmd_short = ' '.join(
-            [c if c != self.ffmpeg_path else 'ffmpeg']
-            + [f'"video={device_id[:60]}..."' if c.startswith('video=') and len(c) > 80 else c
+            ['ffmpeg' if cmd[0] == self.ffmpeg_path else cmd[0]]
+            + [f'"video={c[:60]}..."' if c.startswith('video=') and len(c) > 80 else c
                for c in cmd[1:]]
         )
         print(f'[CameraCapture] [{self.side}] ▶ 尝试: {label} 模式={capture_mode} '
@@ -165,7 +165,6 @@ class CameraCapture:
         except Exception as e:
             print(f'[CameraCapture] [{self.side}] ❌ subprocess启动异常: {e}')
             return False, None
-            return False, None
 
     def start(self):
         """启动 MJPEG 采集（快速失败策略：不重试，尽快返回结果）"""
@@ -175,11 +174,13 @@ class CameraCapture:
 
         self._startup_time = time.time()
 
-        # 候选设备ID列表：优先友好名称，后备 @device_pnp
+        # 候选设备ID列表：优先 @device_pnp（唯一标识，两个同名摄像头也能区分），
+        # 后备友好名称
         friendly_name = re.sub(r'\s*\([0-9a-fA-F:]+\)\s*$', '', self.device_name).strip()
-        device_candidates = [('友好名称', friendly_name)]
+        device_candidates = []
         if self.alt_name:
             device_candidates.append(('设备路径', self.alt_name))
+        device_candidates.append(('友好名称', friendly_name))
 
         # 采集模式：从最宽松到最严格
         capture_modes = ['auto', '1080p30', 'yuy2']
