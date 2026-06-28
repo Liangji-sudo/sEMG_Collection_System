@@ -908,6 +908,26 @@ class CameraServer:
                 self.preview_subscribers[side].discard(websocket)
         with self.clients_lock:
             self.all_clients.discard(websocket)
+
+        # 修复：最后一个客户端断开时，检查并清理僵尸录制器
+        # （CameraCapture已停止但recorder仍残留的场景，例如浏览器异常关闭）
+        with self.clients_lock:
+            remaining = len(self.all_clients)
+        if remaining == 0 and self.recorders:
+            for side in list(self.recorders.keys()):
+                rec = self.recorders[side]
+                capture_alive = side in self.captures and self.captures[side].running
+                if not capture_alive:
+                    print(f'[CameraServer] [{side}] ⚠️ 客户端全部断开，清理僵尸录制器 (recording={rec.recording})')
+                    if rec.recording:
+                        try:
+                            rec.stop_and_save()
+                        except Exception as e:
+                            print(f'[CameraServer] [{side}] 清理异常: {e}')
+                    del self.recorders[side]
+                else:
+                    print(f'[CameraServer] [{side}] ⚠️ 客户端断开但Capture仍运行中，保留录制器')
+
         print(f'[CameraServer] 客户端已清理: {client_addr}')
 
     async def _dispatch(self, command, data, websocket):
@@ -919,7 +939,7 @@ class CameraServer:
         elif command == 'open_camera':
             return await self._cmd_open_camera(data, websocket)
         elif command == 'close_camera':
-            return self._cmd_close_camera(data)
+            return await self._cmd_close_camera(data)
         elif command == 'subscribe_preview':
             return self._cmd_subscribe_preview(data, websocket)
         elif command == 'unsubscribe_preview':
@@ -1162,7 +1182,17 @@ class CameraServer:
 
         # 如果正在帧录制，不能打开新的MJPEG（摄像头只能被一个进程占用）
         if side in self.recorders and self.recorders[side].recording:
-            return {'success': False, 'error': f'{side}侧正在录制中，不能同时重新打开摄像头'}
+            # 但如果 CameraCapture 已经不在了（预览已停止），
+            # 录制器处于僵尸状态（帧写入线程已随 capture 停止），可以安全清理
+            if side not in self.captures or not self.captures[side].running:
+                print(f'[CameraServer] [{side}] ⚠️ 发现僵尸录制器（CameraCapture已停止），自动清理')
+                try:
+                    self.recorders[side].stop_and_save()
+                except Exception as e:
+                    print(f'[CameraServer] [{side}] 僵尸录制器清理异常: {e}')
+                del self.recorders[side]
+            else:
+                return {'success': False, 'error': f'{side}侧正在录制中，不能同时重新打开摄像头'}
 
         camera = self.cameras[side]
         alt_name = camera.get('alt_name')  # 备用设备路径（@device_pnp_...），用于 fallback
@@ -1188,8 +1218,8 @@ class CameraServer:
         else:
             return {'success': False, 'error': f'{side}侧摄像头打开失败'}
 
-    def _cmd_close_camera(self, data):
-        """关闭摄像头，停止MJPEG采集"""
+    async def _cmd_close_camera(self, data):
+        """关闭摄像头，停止MJPEG采集，同时清理可能残留的录制器"""
         side = data.get('side')
 
         if not side or side not in ['left', 'right']:
@@ -1205,6 +1235,20 @@ class CameraServer:
         # 清理预览订阅
         with self.subscribers_lock:
             self.preview_subscribers[side].clear()
+
+        # 清理残留的录制器（修复：关闭摄像头时忘记清理录制器导致无法重新打开）
+        if side in self.recorders:
+            recorder = self.recorders[side]
+            print(f'[CameraServer] [{side}] ⚠️ 关闭摄像头时发现残留录制器 (recording={recorder.recording})，强制清理')
+            if recorder.recording:
+                try:
+                    recorder.stop_and_save()
+                except Exception as e:
+                    print(f'[CameraServer] [{side}] 残留录制器保存失败: {e}')
+            del self.recorders[side]
+
+        # 推送更新后的录制状态（修复：前端UI能立即看到"写盘中"消失）
+        await self._push_recording_status()
 
         return {'success': True, 'side': side, 'message': f'{side}侧摄像头已关闭'}
 

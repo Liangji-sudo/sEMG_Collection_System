@@ -243,15 +243,18 @@
          */
         showBackend() {
             console.log('[PageSwitch] 切换到后台页面');
-            
+
             const welcomeScreen = document.getElementById('welcomeScreen');
             const collectionScreen = document.getElementById('collectionScreen');
             const backendPage = document.getElementById('backend-page');
-            
+
             if (welcomeScreen) welcomeScreen.classList.add('hidden');
             if (collectionScreen) collectionScreen.style.display = 'none';
             if (backendPage) backendPage.classList.remove('hidden');
-            
+
+            // 【修复】进入后台前确保摄像头已关闭，避免录制器残留
+            this._stopAllCameras();
+
             // 【新增】离开采集页后隐藏质量颜色指示
             if (window.waveformController) {
                 window.waveformController.refreshQualityVisibility();
@@ -272,6 +275,26 @@
          */
         backToWelcomeFromBackend() {
             this.showWelcome();
+        }
+
+        /**
+         * 【修复】关闭所有摄像头预览，释放设备资源。
+         * 用于页面离开时确保摄像头状态被清理，避免 FrameRecorder 残留在 camera_server
+         * 导致"正在录制中，不能同时重新打开摄像头"的错误。
+         */
+        async _stopAllCameras() {
+            if (window.CameraControl && window.CameraControl.isConnected()) {
+                console.log('[PageSwitch] 关闭所有摄像头...');
+                try {
+                    await Promise.all([
+                        window.CameraControl.closeCamera('left').catch(e => console.warn('[PageSwitch] 左手摄像头关闭失败:', e)),
+                        window.CameraControl.closeCamera('right').catch(e => console.warn('[PageSwitch] 右手摄像头关闭失败:', e))
+                    ]);
+                    console.log('[PageSwitch] 摄像头已关闭');
+                } catch (err) {
+                    console.warn('[PageSwitch] 关闭摄像头异常:', err);
+                }
+            }
         }
 
         /**
@@ -313,7 +336,10 @@
                 window.BleControl.stopAnyStream();
                 console.log('[PageSwitch] 发送 stop_any_stream 命令');
             }
-            
+
+            // 【修复】关闭摄像头预览，释放设备资源，避免录制器残留导致无法重新打开
+            this._stopAllCameras();
+
             this.showWelcome();
         }
 
