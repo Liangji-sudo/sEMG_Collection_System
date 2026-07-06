@@ -183,7 +183,7 @@ class CameraCapture:
         device_candidates.append(('友好名称', friendly_name))
 
         # 采集模式：从最宽松到最严格
-        capture_modes = ['auto', '1080p30', 'yuy2']
+        capture_modes = ['1080p30', 'yuy2', 'auto']
 
         # 遍历候选组合，第一个成功的直接返回
         for label, device_id in device_candidates:
@@ -533,8 +533,7 @@ class FrameRecorder:
                 '-f', 'mjpeg',
                 '-i', str(self.raw_path),
                 '-r', '30',
-                '-c:v', 'mjpeg',
-                '-q:v', '12',
+                '-c:v', 'copy',
                 '-y',
                 str(self.output_path)
             ], capture_output=True, text=True, timeout=60,
