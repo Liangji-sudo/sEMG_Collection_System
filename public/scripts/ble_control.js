@@ -475,7 +475,8 @@ async function decodeData(buffer) {
             // 【修改】扫描按钮只需要控制端连接即可（8764端口）
             // 数据端（8080端口）是用于波形显示的，扫描蓝牙不需要
             const controlConnected = BleState.connected;
-            btn.disabled = scanning || !controlConnected;
+            const connecting = anyDeviceConnecting();
+            btn.disabled = scanning || !controlConnected || connecting;
             btn.innerHTML = scanning
                 ? '<i class="fas fa-spinner fa-spin"></i> 扫描中'
                 : '<i class="fas fa-search"></i> 扫描';
@@ -483,6 +484,8 @@ async function decodeData(buffer) {
             // 【新增】如果控制端未连接，显示提示
             if (!controlConnected && !scanning) {
                 btn.title = '等待BLE服务器连接...';
+            } else if (connecting && !scanning) {
+                btn.title = '正在连接手环，请等待连接完成后再扫描';
             } else {
                 btn.title = '';
             }
@@ -725,6 +728,10 @@ async function decodeData(buffer) {
         
         // 扫描
         scan: () => {
+            if (anyDeviceConnecting()) {
+                showToast('正在连接手环，请等待连接完成后再扫描', 'warning');
+                return false;
+            }
             updateScanButton(true);
             const result = send({ action: 'scan' });
             if (!result) {

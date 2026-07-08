@@ -337,8 +337,9 @@ def init_filters():
 
 # ================= 连接配置 =================
 CONNECT_TIMEOUT = 20.0
+CONNECT_SCAN_TIMEOUT = 6.0
 SCAN_TIMEOUT = 3.0
-MAX_RETRIES = 1
+MAX_RETRIES = 2
 RETRY_DELAY = 1.0
 
 # ================= 批量发送配置 =================
@@ -1090,9 +1091,11 @@ async def scan_devices(ws):
         )
         
         targets = []
+        seen_macs = set()
         
         for d, adv in devices.values():
-            if d.address and not any(_d['mac'] == d.address for _d in targets):
+            if d.address and d.address.upper() not in seen_macs:
+                seen_macs.add(d.address.upper())
 
                 display = f"{d.name} ({d.address})"
                 state.devices_found[display] = d
@@ -1166,6 +1169,19 @@ async def send_control_command(dev: DeviceState, payload: bytes, timeout: float 
             raise
 
 
+async def refresh_device_for_connect(mac: str, fallback_device=None):
+    """连接前刷新目标 BLEDevice，避免 Windows 使用旧扫描对象卡住。"""
+    target = mac.upper()
+    try:
+        log(f"[BLE] 连接前刷新目标设备: {target} ({CONNECT_SCAN_TIMEOUT}s)")
+        device = await BleakScanner.find_device_by_address(target, timeout=CONNECT_SCAN_TIMEOUT)
+        if device:
+            return device
+    except Exception as e:
+        log(f"[BLE] 连接前刷新目标设备失败: {e}")
+    return fallback_device
+
+
 async def connect_device(ws, device_id: int, mac_or_name: str):
     """连接设备"""
     dev = state.get_device(device_id)
@@ -1207,6 +1223,12 @@ async def connect_device(ws, device_id: int, mac_or_name: str):
     
     mac = device.address.upper()
     log(f"[Dev{device_id}] 连接: {device.name} ({mac})")
+
+    other_dev = state.dev2 if device_id == 1 else state.dev1
+    if other_dev.mac and other_dev.mac.upper() == mac and other_dev.is_connected():
+        log(f"[Dev{device_id}] 目标设备已挂在 Dev{other_dev.device_id}，先断开旧连接")
+        await disconnect_device(ws, other_dev.device_id, silent=True)
+        await asyncio.sleep(1.0)
     
     if dev.is_connected():
         await disconnect_device(ws, device_id, silent=True)
@@ -1222,18 +1244,31 @@ async def connect_device(ws, device_id: int, mac_or_name: str):
         })
 
     async with state.connection_lock:
+        device = await refresh_device_for_connect(mac, fallback_device=device)
+        if device is None:
+            await send_to_control(ws, action, {
+                'success': False,
+                'device_id': device_id,
+                'error': f"连接前无法重新发现设备 {mac}，请确认手环仍在广播",
+                'mac': mac,
+            })
+            return
+
         for retry in range(MAX_RETRIES):
+            client = None
             try:
+                strategy = "BLEDevice" if retry == 0 else "address"
                 await send_to_control(ws, action, {
                     'success': None,
                     'device_id': device_id,
                     'message': f"连接中 ({retry+1}/{MAX_RETRIES})，最长等待 {int(CONNECT_TIMEOUT)} 秒...",
                     'mac': mac,
                 })
-                log(f"[Dev{device_id}] GATT connect start: timeout={CONNECT_TIMEOUT}s, retry={retry+1}/{MAX_RETRIES}")
+                log(f"[Dev{device_id}] GATT connect start: strategy={strategy}, timeout={CONNECT_TIMEOUT}s, retry={retry+1}/{MAX_RETRIES}")
 
-                client = BleakClient(device, timeout=CONNECT_TIMEOUT)
-                await client.connect()
+                connect_target = device if retry == 0 else mac
+                client = BleakClient(connect_target, timeout=CONNECT_TIMEOUT)
+                await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
             
                 if client.is_connected:
                     dev.client = client
@@ -1306,13 +1341,15 @@ async def connect_device(ws, device_id: int, mac_or_name: str):
                     return
                 
             except TimeoutError:
-                log(f"[Dev{device_id}] 连接超时（GATT connect 未在 {CONNECT_TIMEOUT}s 内返回）")
+                log(f"[Dev{device_id}] 连接超时（strategy={strategy}, GATT connect 未在 {CONNECT_TIMEOUT}s 内返回）")
             except BleakError as e:
-                log(f"[Dev{device_id}] BLE 错误: {e}")
+                log(f"[Dev{device_id}] BLE 错误 (strategy={strategy}): {e}")
             except Exception as e:
-                log(f"[Dev{device_id}] 连接异常: {e}")
+                log(f"[Dev{device_id}] 连接异常 (strategy={strategy}): {e}")
 
             try:
+                if client and client.is_connected:
+                    await client.disconnect()
                 if dev.client and dev.client.is_connected:
                     await dev.client.disconnect()
             except Exception:
@@ -2100,7 +2137,15 @@ async def handle_control_client(websocket):
                 
                 # 扫描
                 if action == 'scan':
-                    await scan_devices(websocket)
+                    if state.connection_lock.locked():
+                        await send_to_control(websocket, 'scan', {
+                            'success': False,
+                            'error': '蓝牙设备正在连接中，请等待连接完成或失败后再扫描',
+                            'devices': state.scan_results,
+                            'count': len(state.scan_results),
+                        })
+                    else:
+                        await scan_devices(websocket)
                 
                 # 设备1
                 elif action == 'connect1':
