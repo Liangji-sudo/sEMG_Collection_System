@@ -160,24 +160,82 @@
                 .camera-emergency-dismiss { background: #e5e7eb; color: #374151; }
                 .camera-encoding-panel {
                     position: fixed;
-                    right: 18px;
-                    bottom: 18px;
+                    right: 24px;
+                    bottom: 24px;
                     z-index: 10000;
                     display: none;
-                    min-width: 280px;
-                    max-width: min(380px, calc(100vw - 36px));
-                    padding: 12px 14px;
-                    border: 1px solid #fbbf24;
+                    width: min(520px, calc(100vw - 48px));
+                    min-height: 128px;
+                    padding: 18px 20px;
+                    border: 2px solid #f59e0b;
                     border-radius: 8px;
                     background: #fffbeb;
-                    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.18);
+                    box-shadow: 0 16px 42px rgba(15, 23, 42, 0.24);
                     color: #78350f;
-                    font-size: 13px;
+                    font-size: 16px;
                     line-height: 1.45;
                 }
                 .camera-encoding-panel.active { display: block; }
-                .camera-encoding-title { font-weight: 800; margin-bottom: 4px; }
-                .camera-encoding-detail { color: #92400e; }
+                .camera-encoding-panel.working { animation: camera-panel-pulse 1.8s ease-in-out infinite; }
+                .camera-encoding-head {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 16px;
+                    margin-bottom: 12px;
+                }
+                .camera-encoding-title { font-weight: 900; font-size: 20px; color: #78350f; }
+                .camera-encoding-dot {
+                    width: 14px;
+                    height: 14px;
+                    border-radius: 999px;
+                    background: #f59e0b;
+                }
+                .camera-encoding-panel.working .camera-encoding-dot {
+                    animation: camera-dot-pulse 0.9s ease-in-out infinite;
+                }
+                .camera-encoding-percent {
+                    font-size: 32px;
+                    font-weight: 900;
+                    color: #92400e;
+                    margin-bottom: 8px;
+                }
+                .camera-encoding-detail { color: #92400e; font-weight: 700; }
+                .camera-encoding-bar {
+                    position: relative;
+                    height: 14px;
+                    margin: 12px 0 10px;
+                    overflow: hidden;
+                    border-radius: 999px;
+                    background: #fde68a;
+                }
+                .camera-encoding-fill {
+                    width: 0%;
+                    height: 100%;
+                    border-radius: inherit;
+                    background: #f59e0b;
+                    transition: width 0.35s ease;
+                }
+                .camera-encoding-panel.working .camera-encoding-fill::after {
+                    content: '';
+                    display: block;
+                    width: 100%;
+                    height: 100%;
+                    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.45), transparent);
+                    animation: camera-progress-shimmer 1.1s linear infinite;
+                }
+                @keyframes camera-panel-pulse {
+                    0%, 100% { box-shadow: 0 16px 42px rgba(15, 23, 42, 0.24); }
+                    50% { box-shadow: 0 18px 50px rgba(245, 158, 11, 0.35); }
+                }
+                @keyframes camera-dot-pulse {
+                    0%, 100% { transform: scale(0.85); opacity: 0.55; }
+                    50% { transform: scale(1.2); opacity: 1; }
+                }
+                @keyframes camera-progress-shimmer {
+                    from { transform: translateX(-100%); }
+                    to { transform: translateX(100%); }
+                }
                 @keyframes camera-spin { to { transform: rotate(360deg); } }
             `;
             document.head.appendChild(style);
@@ -223,7 +281,14 @@
             panel.id = 'cameraEncodingPanel';
             panel.className = 'camera-encoding-panel';
             panel.innerHTML = `
-                <div class="camera-encoding-title">视频后台压缩中</div>
+                <div class="camera-encoding-head">
+                    <div class="camera-encoding-title">视频后台压缩中</div>
+                    <div class="camera-encoding-dot" aria-hidden="true"></div>
+                </div>
+                <div id="cameraEncodingPercent" class="camera-encoding-percent">0.0%</div>
+                <div class="camera-encoding-bar" aria-hidden="true">
+                    <div id="cameraEncodingFill" class="camera-encoding-fill"></div>
+                </div>
                 <div id="cameraEncodingDetail" class="camera-encoding-detail">正在计算剩余时间...</div>
             `;
             document.body.appendChild(panel);
@@ -1171,12 +1236,15 @@
     function updateCameraEncodingStatus(details) {
         ensureCameraRuntimeUi();
         const panel = document.getElementById('cameraEncodingPanel');
+        const percentEl = document.getElementById('cameraEncodingPercent');
+        const fillEl = document.getElementById('cameraEncodingFill');
         const detailEl = document.getElementById('cameraEncodingDetail');
         if (!panel || !detailEl) return;
 
         const jobs = Array.isArray(details) ? details : [];
         if (jobs.length === 0) {
             _cameraEncodingActive = false;
+            panel.classList.remove('working');
             panel.classList.remove('active');
             return;
         }
@@ -1196,8 +1264,14 @@
             const percent = Number(first.progress_percent || 0).toFixed(1);
             const eta = formatDuration(first.eta_seconds);
             const extra = active.length > 1 ? `，另有 ${active.length - 1} 个任务排队/压缩中` : '';
+            panel.classList.add('working');
+            if (percentEl) percentEl.textContent = `${percent}%`;
+            if (fillEl) fillEl.style.width = `${Math.max(1, Math.min(100, Number(percent)))}%`;
             detailEl.textContent = `${first.side || ''} ${percent}% · 预计剩余 ${eta}${extra}`;
         } else if (failed.length > 0) {
+            panel.classList.remove('working');
+            if (percentEl) percentEl.textContent = '失败';
+            if (fillEl) fillEl.style.width = '100%';
             detailEl.textContent = `视频压缩失败：${failed[0].error || '请查看 camera_server 日志'}`;
         } else if (done.length > 0) {
             const newlyDone = done.filter(job => {
@@ -1207,12 +1281,15 @@
                 return true;
             });
             if (newlyDone.length > 0) {
+                panel.classList.remove('working');
+                if (percentEl) percentEl.textContent = '100%';
+                if (fillEl) fillEl.style.width = '100%';
                 detailEl.textContent = '视频压缩已完成，临时 MJPEG 已清理';
+                _encodingHideTimer = setTimeout(() => {
+                    const current = document.getElementById('cameraEncodingPanel');
+                    if (current) current.classList.remove('active');
+                }, 8000);
             }
-            _encodingHideTimer = setTimeout(() => {
-                const current = document.getElementById('cameraEncodingPanel');
-                if (current) current.classList.remove('active');
-            }, 5000);
         }
     }
 
