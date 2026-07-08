@@ -839,7 +839,7 @@ class RealtimeEngine extends EventEmitter {
         // 左手 bin → 摄像头
         if (binFileNameLeft) {
             const cameraSide = mapBinToCamera('left');
-            const videoFileName = `${binFileNameLeft}.avi`;
+            const videoFileName = `${binFileNameLeft}.mp4`;
             console.log(`[realtimeEngine] ${cameraSide}侧摄像头 ← 左手bin: ${videoFileName}`);
 
             try {
@@ -864,7 +864,7 @@ class RealtimeEngine extends EventEmitter {
         // 右手 bin → 摄像头
         if (binFileNameRight) {
             const cameraSide = mapBinToCamera('right');
-            const videoFileName = `${binFileNameRight}.avi`;
+            const videoFileName = `${binFileNameRight}.mp4`;
             console.log(`[realtimeEngine] ${cameraSide}侧摄像头 ← 右手bin: ${videoFileName}`);
 
             try {

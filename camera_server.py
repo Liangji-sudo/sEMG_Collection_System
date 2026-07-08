@@ -31,6 +31,7 @@ import shutil
 import glob
 import re
 import base64
+from concurrent.futures import ThreadPoolExecutor
 
 # ==================== ffmpeg 查找 ====================
 
@@ -472,6 +473,8 @@ class FrameRecorder:
             return False
 
         self.output_path = self.output_dir / safe_name
+        if self.output_path.suffix.lower() != '.mp4':
+            self.output_path = self.output_path.with_suffix('.mp4')
         self.raw_path = self.output_path.with_suffix('.mjpeg')
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -506,8 +509,8 @@ class FrameRecorder:
             except Exception as e:
                 print(f'[FrameRecorder] [{self.side}] 写入帧失败: {e}')
 
-    def stop_and_save(self):
-        """停止录制，将 MJPEG → AVI 转换"""
+    def stop_recording_only(self):
+        """Stop writing frames and return metadata immediately; encoding can run later."""
         if not self.recording:
             return {'success': False, 'error': '录制器未在运行'}
 
@@ -522,56 +525,122 @@ class FrameRecorder:
             return {'success': False, 'error': f'MJPEG文件未生成: {self.raw_path}'}
 
         raw_size = os.path.getsize(self.raw_path)
-        print(f'[FrameRecorder] [{self.side}] raw MJPEG: {self.raw_path} '
-              f'({raw_size} bytes, {self.frame_count} frames, '
-              f'{self.recording_stopped_at - self.recording_started_at:.1f}s elapsed)')
+        elapsed = self.recording_stopped_at - self.recording_started_at
+        print(f'[FrameRecorder] [{self.side}] raw MJPEG closed: {self.raw_path} '
+              f'({raw_size} bytes, {self.frame_count} frames, {elapsed:.1f}s elapsed)')
 
-        # 用 ffmpeg 将 MJPEG 流封装为 AVI（保持原始 1920x1080@30fps）
+        timing = self._extract_timing(self.output_path)
+        return {
+            'success': True,
+            'path': str(self.output_path),
+            'raw_path': str(self.raw_path),
+            'size': 0,
+            'raw_size': raw_size,
+            'frame_count': self.frame_count,
+            'timing': timing
+        }
+
+    def encode_stopped_recording(self):
+        """Encode a closed MJPEG temp file to H.264 MP4."""
+        if not self.raw_path or not self.raw_path.exists():
+            return {'success': False, 'error': f'MJPEG文件未生成: {self.raw_path}'}
+
+        raw_size = os.path.getsize(self.raw_path)
         try:
-            result = subprocess.run([
+            wall_duration = 0
+            if self.first_frame_real_time and self.last_frame_real_time:
+                wall_duration = max(0.001, self.last_frame_real_time - self.first_frame_real_time)
+            effective_fps = (self.frame_count / wall_duration) if wall_duration > 0 else 30.0
+            effective_fps = max(1.0, min(60.0, effective_fps))
+            video_seconds = self.frame_count / max(effective_fps, 1.0)
+            encode_timeout = int(max(300, min(10800, video_seconds * 3 + 300)))
+
+            def run_ffmpeg(args):
+                return subprocess.run(
+                    args,
+                    capture_output=True,
+                    text=True,
+                    timeout=encode_timeout,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                )
+
+            result = run_ffmpeg([
                 self.ffmpeg_path,
                 '-f', 'mjpeg',
+                '-framerate', f'{effective_fps:.6f}',
                 '-i', str(self.raw_path),
-                '-r', '30',
-                '-c:v', 'copy',
+                '-an',
+                '-c:v', 'libx264',
+                '-preset', 'veryfast',
+                '-crf', '23',
+                '-g', '30',
+                '-bf', '0',
+                '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart',
                 '-y',
                 str(self.output_path)
-            ], capture_output=True, text=True, timeout=60,
-               creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
+            ])
 
-            if not self.output_path.exists():
+            if result.returncode != 0 or not self.output_path.exists():
+                stderr_tail = result.stderr[-1000:] if result.stderr else ''
+                if 'Unknown encoder' in stderr_tail or 'libx264' in stderr_tail:
+                    print(f'[FrameRecorder] [{self.side}] libx264 unavailable, fallback to MPEG-4')
+                    result = run_ffmpeg([
+                        self.ffmpeg_path,
+                        '-f', 'mjpeg',
+                        '-framerate', f'{effective_fps:.6f}',
+                        '-i', str(self.raw_path),
+                        '-an',
+                        '-c:v', 'mpeg4',
+                        '-q:v', '5',
+                        '-g', '30',
+                        '-bf', '0',
+                        '-pix_fmt', 'yuv420p',
+                        '-y',
+                        str(self.output_path)
+                    ])
+
+            if result.returncode != 0 or not self.output_path.exists():
                 stderr_tail = result.stderr[-500:] if result.stderr else '(none)'
-                print(f'[FrameRecorder] [{self.side}] \u274C ffmpeg 封装失败')
+                print(f'[FrameRecorder] [{self.side}] \u274C ffmpeg encode failed')
                 print(f'[FrameRecorder] [{self.side}]   stderr: {stderr_tail}')
-                return {'success': False, 'error': f'AVI封装失败: {stderr_tail[:200]}'}
+                return {'success': False, 'error': f'MP4编码失败: {stderr_tail[:200]}'}
 
-            avi_size = os.path.getsize(self.output_path)
-            print(f'[FrameRecorder] [{self.side}] \u2705 AVI已封装: {self.output_path} '
-                  f'({avi_size} bytes, {avi_size/(1024*1024):.1f} MB)')
+            video_size = os.path.getsize(self.output_path)
+            ratio = raw_size / video_size if video_size > 0 else 0
+            print(f'[FrameRecorder] [{self.side}] \u2705 MP4 saved: {self.output_path} '
+                  f'({video_size} bytes, {video_size/(1024*1024):.1f} MB, '
+                  f'fps={effective_fps:.2f}, raw/mp4={ratio:.1f}x)')
 
-            # 清理原始 MJPEG 文件
             try:
                 os.remove(str(self.raw_path))
                 print(f'[FrameRecorder] [{self.side}]   已清理 raw MJPEG')
             except Exception as e:
                 print(f'[FrameRecorder] [{self.side}]   清理 raw MJPEG 失败: {e}')
 
-            # 提取时间戳
-            timing = self._extract_timing(self.output_path)
-
             return {
                 'success': True,
                 'path': str(self.output_path),
-                'size': avi_size,
+                'size': video_size,
                 'frame_count': self.frame_count,
-                'timing': timing
+                'timing': self._extract_timing(self.output_path)
             }
 
         except Exception as e:
-            print(f'[FrameRecorder] [{self.side}] \u274C 封装异常: {e}')
+            print(f'[FrameRecorder] [{self.side}] \u274C 编码异常: {e}')
             import traceback
             traceback.print_exc()
             return {'success': False, 'error': str(e)}
+
+    def stop_and_save(self):
+        """Stop recording and synchronously encode the video."""
+        stopped = self.stop_recording_only()
+        if not stopped.get('success'):
+            return stopped
+        encoded = self.encode_stopped_recording()
+        if encoded.get('success') and not encoded.get('timing'):
+            encoded['timing'] = stopped.get('timing', {})
+        return encoded
 
     def _extract_timing(self, avi_path):
         """提取视频时间戳
@@ -751,6 +820,9 @@ class CameraServer:
 
         # 帧队列（跨线程通信）
         self.frame_queue = asyncio.Queue(maxsize=30)
+        self.encode_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='video-encoder')
+        self.encoding_jobs = {}
+        self.encoding_lock = threading.Lock()
 
         # 预览订阅者: {side: set(websocket)}
         self.preview_subscribers = {'left': set(), 'right': set()}
@@ -965,7 +1037,7 @@ class CameraServer:
             side = data.get('side')
             if side and side in self.recorders:
                 timestamp = datetime.now().strftime('%y%m%d_%H%M%S')
-                output_filename = f'recording_{side}_{timestamp}.avi'
+                output_filename = f'recording_{side}_{timestamp}.mp4'
                 return await self._do_stop_and_save(side, output_filename)
             return {'success': True, 'message': '未在录制中'}
         else:
@@ -1360,19 +1432,41 @@ class CameraServer:
         if side in self.captures:
             self.captures[side].frame_recorder = None
 
-        # stop_and_save 包含 subprocess.run（ffmpeg封装），放到 executor 避免阻塞
+        # First close the raw MJPEG quickly, then let ffmpeg encode in the background.
         loop = asyncio.get_running_loop()
-        save_result = await loop.run_in_executor(None, recorder.stop_and_save)
+        save_result = await loop.run_in_executor(None, recorder.stop_recording_only)
 
         if save_result and save_result.get('success'):
             del self.recorders[side]
+            output_path = save_result.get('path', '')
+            job_key = output_path or f'{side}:{time.time()}'
+            future = self.encode_executor.submit(recorder.encode_stopped_recording)
+
+            def _on_encode_done(done_future):
+                try:
+                    encode_result = done_future.result()
+                    if encode_result and encode_result.get('success'):
+                        print(f'[CameraServer] [{side}] 后台视频压缩完成: {encode_result.get("path", output_path)}')
+                    else:
+                        print(f'[CameraServer] [{side}] 后台视频压缩失败: {(encode_result or {}).get("error")}')
+                except Exception as e:
+                    print(f'[CameraServer] [{side}] 后台视频压缩异常: {e}')
+                finally:
+                    with self.encoding_lock:
+                        self.encoding_jobs.pop(job_key, None)
+
+            with self.encoding_lock:
+                self.encoding_jobs[job_key] = future
+            future.add_done_callback(_on_encode_done)
+
             result = {
                 'success': True,
                 'side': side,
-                'output_path': save_result.get('path', ''),
-                'filename': output_filename,
+                'output_path': output_path,
+                'filename': os.path.basename(save_result.get('path', output_filename)),
                 'file_size': save_result.get('size', 0),
-                'timing': save_result.get('timing', {})
+                'timing': save_result.get('timing', {}),
+                'encoding': 'background'
             }
         else:
             error_detail = (save_result or {}).get('error', '录制保存失败(无详细错误)')
@@ -1531,6 +1625,7 @@ class CameraServer:
                 side: rec.recording if rec else False
                 for side, rec in self.recorders.items()
             },
+            'encoding_jobs': len(self.encoding_jobs),
             'preview_subscribers': {
                 side: len(subs)
                 for side, subs in self.preview_subscribers.items()
@@ -1564,6 +1659,20 @@ class CameraServer:
                 except:
                     pass
         self.recorders.clear()
+
+        with self.encoding_lock:
+            pending_jobs = list(self.encoding_jobs.values())
+        if pending_jobs:
+            print(f'[CameraServer] 等待后台视频压缩任务完成: {len(pending_jobs)}')
+            loop = asyncio.get_running_loop()
+            def wait_jobs():
+                for job in pending_jobs:
+                    try:
+                        job.result(timeout=300)
+                    except Exception as e:
+                        print(f'[CameraServer] 后台视频压缩收尾异常: {e}')
+            await loop.run_in_executor(None, wait_jobs)
+        self.encode_executor.shutdown(wait=False, cancel_futures=False)
 
         # 再停止所有MJPEG采集
         for side, capture in list(self.captures.items()):
