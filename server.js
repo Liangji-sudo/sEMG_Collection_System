@@ -515,13 +515,22 @@ function stopCameraServer() {
     return new Promise((resolve) => {
         if (cameraServerProcess) {
             console.log('[server.js] 正在停止 camera_server...');
-            cameraServerProcess.kill('SIGTERM');
-            setTimeout(() => {
-                if (cameraServerProcess) {
-                    cameraServerProcess.kill('SIGKILL');
-                }
+            const proc = cameraServerProcess;
+            let resolved = false;
+            const finish = () => {
+                if (resolved) return;
+                resolved = true;
                 resolve();
-            }, 2000);
+            };
+            proc.once('exit', finish);
+            proc.kill('SIGTERM');
+            setTimeout(() => {
+                if (!resolved && cameraServerProcess === proc) {
+                    console.warn('[server.js] camera_server 仍未退出，强制结束（可能仍有未完成视频压缩）');
+                    proc.kill('SIGKILL');
+                }
+                finish();
+            }, 300000);
         } else {
             resolve();
         }

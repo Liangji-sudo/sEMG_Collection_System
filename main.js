@@ -115,7 +115,7 @@ app.on('before-quit', async (event) => {
 
   console.log('[Main] 应用即将退出，先优雅关闭采集服务...');
   try {
-    const timeout = new Promise((resolve) => setTimeout(resolve, 8000));
+    const timeout = new Promise((resolve) => setTimeout(resolve, 300000));
     const shutdown = serverModule && typeof serverModule.shutdown === 'function'
       ? serverModule.shutdown('electron-before-quit')
       : Promise.resolve();

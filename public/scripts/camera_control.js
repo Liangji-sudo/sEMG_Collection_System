@@ -361,7 +361,7 @@
         try {
             // 先取消订阅
             sendCommandFireAndForget('unsubscribe_preview', { side });
-            const result = await sendCommand('close_camera', { side });
+            const result = await sendCommand('close_camera', { side }, 30000);
             if (result.success) {
                 CamState.cameras[side].opened = false;
                 CamState.previewFrames[side] = null;
@@ -418,6 +418,14 @@
     function getCameraState(side) {
         if (side) return CamState.cameras[side];
         return CamState.cameras;
+    }
+
+    async function getStatus() {
+        try {
+            return await sendCommand('get_status', {}, 5000);
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
     }
 
     /**
@@ -505,6 +513,7 @@
         setCamera,
         openCamera,
         closeCamera,
+        getStatus,
         subscribePreview,
         unsubscribePreview,
         captureSnapshot,

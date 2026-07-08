@@ -540,7 +540,7 @@ class FrameRecorder:
             'timing': timing
         }
 
-    def encode_stopped_recording(self):
+    def encode_stopped_recording(self, progress_callback=None):
         """Encode a closed MJPEG temp file to H.264 MP4."""
         if not self.raw_path or not self.raw_path.exists():
             return {'success': False, 'error': f'MJPEG文件未生成: {self.raw_path}'}
@@ -556,13 +556,47 @@ class FrameRecorder:
             encode_timeout = int(max(300, min(10800, video_seconds * 3 + 300)))
 
             def run_ffmpeg(args):
-                return subprocess.run(
-                    args,
-                    capture_output=True,
+                cmd = args[:-2] + ['-progress', 'pipe:1', '-nostats'] + args[-2:]
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
                     text=True,
-                    timeout=encode_timeout,
                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
                 )
+                started = time.time()
+                output_tail = ''
+                progress = {}
+
+                while True:
+                    if proc.stdout:
+                        line = proc.stdout.readline()
+                    else:
+                        line = ''
+
+                    if line:
+                        output_tail = (output_tail + line)[-8000:]
+                        if '=' in line:
+                            key, value = line.strip().split('=', 1)
+                            progress[key] = value
+                            if key == 'out_time_ms' and progress_callback:
+                                try:
+                                    encoded_seconds = max(0.0, float(value) / 1000000.0)
+                                    percent = min(99.0, (encoded_seconds / max(video_seconds, 0.001)) * 100.0)
+                                    elapsed = max(0.001, time.time() - started)
+                                    eta_seconds = max(0.0, (elapsed / max(percent, 0.001)) * (100.0 - percent))
+                                    speed = progress.get('speed', '')
+                                    progress_callback(percent, eta_seconds, speed)
+                                except Exception:
+                                    pass
+                    elif proc.poll() is not None:
+                        break
+                    elif time.time() - started > encode_timeout:
+                        proc.kill()
+                        raise subprocess.TimeoutExpired(cmd, encode_timeout, output_tail)
+
+                returncode = proc.wait(timeout=5)
+                return subprocess.CompletedProcess(cmd, returncode, stdout=output_tail, stderr=output_tail)
 
             result = run_ffmpeg([
                 self.ffmpeg_path,
@@ -607,6 +641,8 @@ class FrameRecorder:
                 return {'success': False, 'error': f'MP4编码失败: {stderr_tail[:200]}'}
 
             video_size = os.path.getsize(self.output_path)
+            if progress_callback:
+                progress_callback(100.0, 0.0, '')
             ratio = raw_size / video_size if video_size > 0 else 0
             print(f'[FrameRecorder] [{self.side}] \u2705 MP4 saved: {self.output_path} '
                   f'({video_size} bytes, {video_size/(1024*1024):.1f} MB, '
@@ -1296,6 +1332,15 @@ class CameraServer:
         if not side or side not in ['left', 'right']:
             return {'success': False, 'error': '无效的side参数'}
 
+        if side in self.recorders:
+            recorder = self.recorders[side]
+            print(f'[CameraServer] [{side}] 关闭摄像头前先停止残留录制器 (recording={recorder.recording})')
+            output_filename = os.path.basename(str(recorder.output_path or f'recording_{side}_{datetime.now().strftime("%y%m%d_%H%M%S")}.mp4'))
+            try:
+                await self._do_stop_and_save(side, output_filename)
+            except Exception as e:
+                print(f'[CameraServer] [{side}] 残留录制器停止失败: {e}')
+
         if side in self.captures:
             self.captures[side].stop()
             del self.captures[side]
@@ -1306,17 +1351,6 @@ class CameraServer:
         # 清理预览订阅
         with self.subscribers_lock:
             self.preview_subscribers[side].clear()
-
-        # 清理残留的录制器（修复：关闭摄像头时忘记清理录制器导致无法重新打开）
-        if side in self.recorders:
-            recorder = self.recorders[side]
-            print(f'[CameraServer] [{side}] ⚠️ 关闭摄像头时发现残留录制器 (recording={recorder.recording})，强制清理')
-            if recorder.recording:
-                try:
-                    recorder.stop_and_save()
-                except Exception as e:
-                    print(f'[CameraServer] [{side}] 残留录制器保存失败: {e}')
-            del self.recorders[side]
 
         # 推送更新后的录制状态（修复：前端UI能立即看到"写盘中"消失）
         await self._push_recording_status()
@@ -1440,23 +1474,79 @@ class CameraServer:
             del self.recorders[side]
             output_path = save_result.get('path', '')
             job_key = output_path or f'{side}:{time.time()}'
-            future = self.encode_executor.submit(recorder.encode_stopped_recording)
+            job_meta = {
+                'side': side,
+                'output_path': output_path,
+                'raw_path': save_result.get('raw_path', ''),
+                'frame_count': save_result.get('frame_count', 0),
+                'raw_size': save_result.get('raw_size', 0),
+                'status': 'encoding',
+                'progress_percent': 0.0,
+                'eta_seconds': None,
+                'speed': '',
+                'started_at': time.time(),
+                'updated_at': time.time()
+            }
+
+            def _update_encode_progress(percent, eta_seconds, speed):
+                with self.encoding_lock:
+                    current = self.encoding_jobs.get(job_key)
+                    if not current:
+                        return
+                    current.update({
+                        'progress_percent': round(float(percent), 1),
+                        'eta_seconds': round(float(eta_seconds), 1) if eta_seconds is not None else None,
+                        'speed': speed or current.get('speed', ''),
+                        'updated_at': time.time()
+                    })
+
+            future = self.encode_executor.submit(recorder.encode_stopped_recording, _update_encode_progress)
+            job_meta['future'] = future
 
             def _on_encode_done(done_future):
                 try:
                     encode_result = done_future.result()
                     if encode_result and encode_result.get('success'):
+                        with self.encoding_lock:
+                            current = self.encoding_jobs.get(job_key)
+                            if current:
+                                current.update({
+                                    'status': 'done',
+                                    'progress_percent': 100.0,
+                                    'eta_seconds': 0.0,
+                                    'file_size': encode_result.get('size', 0),
+                                    'updated_at': time.time()
+                                })
                         print(f'[CameraServer] [{side}] 后台视频压缩完成: {encode_result.get("path", output_path)}')
                     else:
+                        with self.encoding_lock:
+                            current = self.encoding_jobs.get(job_key)
+                            if current:
+                                current.update({
+                                    'status': 'failed',
+                                    'error': (encode_result or {}).get('error'),
+                                    'updated_at': time.time()
+                                })
                         print(f'[CameraServer] [{side}] 后台视频压缩失败: {(encode_result or {}).get("error")}')
                 except Exception as e:
+                    with self.encoding_lock:
+                        current = self.encoding_jobs.get(job_key)
+                        if current:
+                            current.update({
+                                'status': 'failed',
+                                'error': str(e),
+                                'updated_at': time.time()
+                            })
                     print(f'[CameraServer] [{side}] 后台视频压缩异常: {e}')
                 finally:
-                    with self.encoding_lock:
-                        self.encoding_jobs.pop(job_key, None)
+                    def remove_finished_job():
+                        time.sleep(30)
+                        with self.encoding_lock:
+                            self.encoding_jobs.pop(job_key, None)
+                    threading.Thread(target=remove_finished_job, daemon=True).start()
 
             with self.encoding_lock:
-                self.encoding_jobs[job_key] = future
+                self.encoding_jobs[job_key] = job_meta
             future.add_done_callback(_on_encode_done)
 
             result = {
@@ -1614,6 +1704,14 @@ class CameraServer:
 
     def _cmd_get_status(self):
         """获取服务器状态"""
+        with self.encoding_lock:
+            encoding_details = []
+            for job in self.encoding_jobs.values():
+                encoding_details.append({
+                    key: value for key, value in job.items()
+                    if key != 'future'
+                })
+
         status = {
             'success': True,
             'cameras': self.cameras,
@@ -1625,7 +1723,8 @@ class CameraServer:
                 side: rec.recording if rec else False
                 for side, rec in self.recorders.items()
             },
-            'encoding_jobs': len(self.encoding_jobs),
+            'encoding_jobs': len(encoding_details),
+            'encoding_details': encoding_details,
             'preview_subscribers': {
                 side: len(subs)
                 for side, subs in self.preview_subscribers.items()
@@ -1661,7 +1760,10 @@ class CameraServer:
         self.recorders.clear()
 
         with self.encoding_lock:
-            pending_jobs = list(self.encoding_jobs.values())
+            pending_jobs = [
+                job.get('future') for job in self.encoding_jobs.values()
+                if job.get('future') and not job.get('future').done()
+            ]
         if pending_jobs:
             print(f'[CameraServer] 等待后台视频压缩任务完成: {len(pending_jobs)}')
             loop = asyncio.get_running_loop()
@@ -1686,6 +1788,7 @@ class CameraServer:
 
 async def main():
     camera_server = CameraServer()
+    stop_event = asyncio.Event()
 
     # 启动帧广播任务
     await camera_server.start_broadcast_task()
@@ -1703,15 +1806,16 @@ async def main():
     # 处理退出信号
     def signal_handler(sig, frame):
         print('\n[CameraServer] 收到退出信号，正在关闭...')
-        asyncio.create_task(camera_server.cleanup())
-        server.close()
-        sys.exit(0)
+        stop_event.set()
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    # 保持运行
-    await asyncio.Future()
+    # 保持运行，退出时先清理相机和后台编码任务
+    await stop_event.wait()
+    server.close()
+    await server.wait_closed()
+    await camera_server.cleanup()
 
 
 if __name__ == '__main__':

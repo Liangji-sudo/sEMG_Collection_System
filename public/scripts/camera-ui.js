@@ -154,6 +154,26 @@
                 .camera-emergency-abort { background: #dc2626; color: #fff; }
                 .camera-emergency-reconnect { background: #2563eb; color: #fff; }
                 .camera-emergency-dismiss { background: #e5e7eb; color: #374151; }
+                .camera-encoding-panel {
+                    position: fixed;
+                    right: 18px;
+                    bottom: 18px;
+                    z-index: 10000;
+                    display: none;
+                    min-width: 280px;
+                    max-width: min(380px, calc(100vw - 36px));
+                    padding: 12px 14px;
+                    border: 1px solid #fbbf24;
+                    border-radius: 8px;
+                    background: #fffbeb;
+                    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.18);
+                    color: #78350f;
+                    font-size: 13px;
+                    line-height: 1.45;
+                }
+                .camera-encoding-panel.active { display: block; }
+                .camera-encoding-title { font-weight: 800; margin-bottom: 4px; }
+                .camera-encoding-detail { color: #92400e; }
                 @keyframes camera-spin { to { transform: rotate(360deg); } }
             `;
             document.head.appendChild(style);
@@ -192,6 +212,17 @@
                 swapBtn.innerHTML = '<i class="fas fa-exchange-alt"></i> 左右互换';
                 actions.insertBefore(swapBtn, applyBtn);
             }
+        }
+
+        if (!document.getElementById('cameraEncodingPanel')) {
+            const panel = document.createElement('div');
+            panel.id = 'cameraEncodingPanel';
+            panel.className = 'camera-encoding-panel';
+            panel.innerHTML = `
+                <div class="camera-encoding-title">视频后台压缩中</div>
+                <div id="cameraEncodingDetail" class="camera-encoding-detail">正在计算剩余时间...</div>
+            `;
+            document.body.appendChild(panel);
         }
     }
 
@@ -292,6 +323,10 @@
                     updateCameraStatus(side, '预览中', true);
                 });
             }
+        };
+
+        window.CameraControl.onCameraStateChange = function(status) {
+            updateCameraEncodingStatus(status.encoding_details || []);
         };
     }
 
@@ -848,6 +883,14 @@
 
     async function stopAllCameras() {
         console.log('[CameraUI] 停止所有摄像头...');
+        const btn = document.getElementById('cameraStreamBtn');
+        const btnText = document.getElementById('cameraStreamBtnText');
+        const oldText = btnText ? btnText.textContent : '';
+        if (btn) {
+            btn.disabled = true;
+            btn.style.cursor = 'wait';
+        }
+        if (btnText) btnText.textContent = '正在关闭摄像头...';
 
         if (window.CameraControl && window.CameraControl.isConnected()) {
             const results = await Promise.all([
@@ -855,6 +898,13 @@
                 window.CameraControl.closeCamera('right').catch(() => ({ success: false }))
             ]);
             console.log('[CameraUI] 关闭结果:', results);
+            const status = await window.CameraControl.getStatus?.();
+            if (status && status.success !== false) {
+                updateCameraEncodingStatus(status.encoding_details || []);
+                if ((status.encoding_jobs || 0) > 0) {
+                    showToast(`摄像头已断开，${status.encoding_jobs} 个视频仍在后台压缩`, 'info');
+                }
+            }
         }
 
         // 清空所有预览帧，避免残留上一次的画面
@@ -868,6 +918,11 @@
 
         isCameraStreaming = false;
         updateCameraStreamButton(false);
+        if (btn) {
+            btn.disabled = false;
+            btn.style.cursor = '';
+        }
+        if (btnText && oldText && isCameraStreaming) btnText.textContent = oldText;
         updateCameraStatus('left', '已配置', false);
         updateCameraStatus('right', '已配置', false);
         showToast('摄像头已关闭', 'info');
@@ -1098,6 +1153,51 @@
         updateCameraCardState();
     }
 
+    function formatDuration(seconds) {
+        if (seconds === null || seconds === undefined || Number.isNaN(Number(seconds))) {
+            return '估算中';
+        }
+        const total = Math.max(0, Math.round(Number(seconds)));
+        const min = Math.floor(total / 60);
+        const sec = total % 60;
+        if (min <= 0) return `${sec} 秒`;
+        return `${min} 分 ${sec} 秒`;
+    }
+
+    function updateCameraEncodingStatus(details) {
+        ensureCameraRuntimeUi();
+        const panel = document.getElementById('cameraEncodingPanel');
+        const detailEl = document.getElementById('cameraEncodingDetail');
+        if (!panel || !detailEl) return;
+
+        const jobs = Array.isArray(details) ? details : [];
+        if (jobs.length === 0) {
+            panel.classList.remove('active');
+            return;
+        }
+
+        const active = jobs.filter(job => job.status === 'encoding');
+        const failed = jobs.filter(job => job.status === 'failed');
+        const done = jobs.filter(job => job.status === 'done');
+
+        panel.classList.add('active');
+        if (active.length > 0) {
+            const first = active[0];
+            const percent = Number(first.progress_percent || 0).toFixed(1);
+            const eta = formatDuration(first.eta_seconds);
+            const extra = active.length > 1 ? `，另有 ${active.length - 1} 个任务排队/压缩中` : '';
+            detailEl.textContent = `${first.side || ''} ${percent}% · 预计剩余 ${eta}${extra}`;
+        } else if (failed.length > 0) {
+            detailEl.textContent = `视频压缩失败：${failed[0].error || '请查看 camera_server 日志'}`;
+        } else if (done.length > 0) {
+            detailEl.textContent = '视频压缩已完成，临时 MJPEG 已清理';
+            setTimeout(() => {
+                const current = document.getElementById('cameraEncodingPanel');
+                if (current) current.classList.remove('active');
+            }, 5000);
+        }
+    }
+
     /**
      * 更新相机卡片整体状态：绿色边框/背景 + 左右手连接指示
      */
@@ -1184,6 +1284,17 @@
 
                     const usedEl = document.getElementById('diskUsedPercent');
                     if (usedEl) usedEl.textContent = `${usedPercent.toFixed(1)}% 已用`;
+                }
+            } catch (error) {
+                // 静默处理
+            }
+
+            try {
+                if (window.CameraControl && window.CameraControl.isConnected() && window.CameraControl.getStatus) {
+                    const cameraStatus = await window.CameraControl.getStatus();
+                    if (cameraStatus && cameraStatus.success !== false) {
+                        updateCameraEncodingStatus(cameraStatus.encoding_details || []);
+                    }
                 }
             } catch (error) {
                 // 静默处理
