@@ -1440,7 +1440,12 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 window.waveformController.refreshQualityVisibility();
             }
 
-            this.sendToRealtimeEngine('collection_stop', { completed: false });
+            try {
+                await this.sendToRealtimeEngineAndWait('collection_stop_and_wait', { completed: false });
+            } catch (error) {
+                console.error('[Collection] 等待 H5 关闭失败:', error);
+                this.showToast('等待 H5 关闭失败: ' + error.message, 'error');
+            }
 
             // 【修复 Issue 5】停止采集后切换回 preview stream（除非被抑制）
             if (restartPreview && !this._switchInProgress && window.BleControl && window.BleControl.isConnected) {
@@ -2542,7 +2547,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             }, 1000);
         }
 
-        onAllGesturesComplete() {
+        async onAllGesturesComplete() {
             console.log('[Collection] ===== 当前Stage所有手势采集完成 =====');
 
             this.currentPhase = 'complete';
@@ -2558,7 +2563,14 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 stageName: currentStage?.name || currentStage?.id
             });
 
-            this.sendToRealtimeEngine('collection_stop', { completed: true });
+            try {
+                await this.sendToRealtimeEngineAndWait('collection_stop_and_wait', { completed: true });
+            } catch (error) {
+                console.error('[Collection] 等待 H5 关闭失败:', error);
+                this.updateStatus('H5关闭失败');
+                this.showToast('等待 H5 关闭失败: ' + error.message, 'error');
+                return;
+            }
 
             this._isRunning = false;
 
@@ -2802,7 +2814,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this.onContinualStageComplete();
         }
 
-        onContinualStageComplete() {
+        async onContinualStageComplete() {
             console.log('[Collection] 连续手势Stage完成');
 
             // 【新增】隐藏手势示范 GIF
@@ -2820,7 +2832,14 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                     showCountdown: false
                 });
             } else {
-                this.sendToRealtimeEngine('collection_stop', { completed: true });
+                try {
+                    await this.sendToRealtimeEngineAndWait('collection_stop_and_wait', { completed: true });
+                } catch (error) {
+                    console.error('[Collection] 等待 H5 关闭失败:', error);
+                    this.updateStatus('H5关闭失败');
+                    this.showToast('等待 H5 关闭失败: ' + error.message, 'error');
+                    return;
+                }
             }
 
             this._isRunning = false;
@@ -2905,6 +2924,58 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 });
                 ws.send(message);
             }
+        }
+
+        sendToRealtimeEngineAndWait(action, data, timeoutMs = 120000) {
+            console.log(`[Collection] >>> realtimeEngine(wait): ${action}`, data);
+
+            const ws = this.getWebSocket();
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                return Promise.reject(new Error('realtimeEngine WebSocket 未连接'));
+            }
+
+            const commandId = `${action}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+            return new Promise((resolve, reject) => {
+                const cleanup = () => {
+                    clearTimeout(timer);
+                    ws.removeEventListener('message', onMessage);
+                };
+
+                const timer = setTimeout(() => {
+                    cleanup();
+                    reject(new Error(`${action} 等待响应超时`));
+                }, timeoutMs);
+
+                const onMessage = (event) => {
+                    let packet = null;
+                    try {
+                        packet = JSON.parse(event.data);
+                    } catch (err) {
+                        return;
+                    }
+
+                    if (packet.type !== 'control_response' || packet.commandId !== commandId) {
+                        return;
+                    }
+
+                    cleanup();
+                    if (packet.status === 'success') {
+                        resolve(packet.result);
+                    } else {
+                        reject(new Error(packet.error || `${action} 执行失败`));
+                    }
+                };
+
+                ws.addEventListener('message', onMessage);
+                ws.send(JSON.stringify({
+                    type: 'control_command',
+                    action,
+                    data,
+                    commandId,
+                    timestamp: Date.now() / 1000
+                }));
+            });
         }
 
         getWebSocket() {

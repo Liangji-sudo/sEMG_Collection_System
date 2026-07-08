@@ -165,7 +165,12 @@ VALIDATION_CONFIG = {
 
 def log(message):
     """打印日志"""
-    print(f"[bin_sync_tool] {message}")
+    text = f"[bin_sync_tool] {message}"
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        encoding = sys.stdout.encoding or 'utf-8'
+        print(text.encode(encoding, errors='replace').decode(encoding, errors='replace'))
 
 
 # ===================== 校验辅助函数 =====================
@@ -605,6 +610,40 @@ class IMUBinParser:
 
         log(f"解析完成: 共 {self.frame_count} 帧")
         return self
+
+
+class SyntheticEMGParser:
+    """EMG parser facade for rescue sync across multiple reset-frame-id bins."""
+
+    def __init__(self, parsers, segment_bases):
+        self.parsers = parsers
+        self.segment_bases = segment_bases
+        self.bin_path = " + ".join(os.path.basename(p.bin_path) for p in parsers)
+        self.lsb_uv = parsers[0].lsb_uv if parsers else 0
+        self.frames = {}
+        for parser, base in zip(parsers, segment_bases):
+            for fid, row in parser.frames.items():
+                self.frames[int(base) + int(fid)] = row
+
+    def get_frame(self, frame_id):
+        return self.frames.get(int(frame_id))
+
+
+class SyntheticIMUParser:
+    """IMU parser facade aligned to SyntheticEMGParser synthetic frame ids."""
+
+    def __init__(self, parsers, segment_bases):
+        self.parsers = [p for p in parsers if p is not None]
+        self.segment_bases = segment_bases
+        self.bin_path = " + ".join(os.path.basename(p.bin_path) for p in self.parsers) if self.parsers else ""
+        self.num_imus = self.parsers[0].num_imus if self.parsers else 2
+        self.frames = {}
+        for parser, base in zip(parsers, segment_bases):
+            if parser is None:
+                continue
+            imu_base = int(base) // EMG_IMU_RATIO
+            for fid, row in parser.frames.items():
+                self.frames[imu_base + int(fid)] = row
 
 
 def _format_validation_report(validation_report):
@@ -1793,6 +1832,202 @@ def _recover_one_to_one_anchors(parser, channels_250hz, channel_map):
             anchors[i] = last_anchor + (i - last_pos) * DOWNSAMPLE_RATIO
 
     return anchors, row_result
+
+
+def _round_to_imu_boundary(value):
+    return int(round(float(value) / EMG_IMU_RATIO) * EMG_IMU_RATIO)
+
+
+def _build_multibin_rescue_anchors(segments, total_rows):
+    anchors = np.full(total_rows, -1, dtype=np.int64)
+    segment_bases = []
+    metadata = []
+
+    first_filled_row = None
+    prev_last_row = None
+    prev_last_anchor = None
+    for seg_idx, seg in enumerate(segments):
+        row_map = seg['row_result'].get('matched_row_map', {})
+        ordered = sorted((int(r), int(sd)) for r, sd in row_map.items())
+        if not ordered:
+            continue
+
+        first_row, first_sd = ordered[0]
+        last_row, last_sd = ordered[-1]
+        if seg_idx == 0 or prev_last_row is None:
+            base = 0
+        else:
+            expected_first_anchor = prev_last_anchor + (first_row - prev_last_row) * DOWNSAMPLE_RATIO
+            base = _round_to_imu_boundary(expected_first_anchor - first_sd)
+            if base < 0:
+                base = 0
+
+        segment_bases.append(base)
+        if first_filled_row is None:
+            first_filled_row = first_row
+
+        # Fill the whole matched span with the expected 250 Hz stride. Rows that
+        # do not exist in the actual bin will become interpolated/missing frames.
+        for row in range(first_row, last_row + 1):
+            anchors[row] = base + first_sd + (row - first_row) * DOWNSAMPLE_RATIO
+
+        if prev_last_row is not None and first_row > prev_last_row + 1:
+            for row in range(prev_last_row + 1, first_row):
+                anchors[row] = prev_last_anchor + (row - prev_last_row) * DOWNSAMPLE_RATIO
+
+        prev_last_row = last_row
+        prev_last_anchor = base + first_sd + (last_row - first_row) * DOWNSAMPLE_RATIO
+        metadata.append({
+            'bin': os.path.basename(seg['parser'].bin_path),
+            'synthetic_base': int(base),
+            'first_h5_row': int(first_row),
+            'last_h5_row': int(last_row),
+            'matched_rows': int(len(row_map)),
+            'original_start_sd': int(first_sd),
+            'original_end_sd': int(last_sd),
+            'match_rate_partial': float(len(row_map) / max(1, last_row - first_row + 1)),
+        })
+
+    if first_filled_row is not None and first_filled_row > 0:
+        first_anchor = int(anchors[first_filled_row])
+        for row in range(first_filled_row - 1, -1, -1):
+            anchors[row] = first_anchor - (first_filled_row - row) * DOWNSAMPLE_RATIO
+
+    if prev_last_row is not None and prev_last_row < total_rows - 1:
+        for row in range(prev_last_row + 1, total_rows):
+            anchors[row] = prev_last_anchor + (row - prev_last_row) * DOWNSAMPLE_RATIO
+
+    return anchors, segment_bases, metadata
+
+
+def sync_h5_one_to_one_multibin_rescue(h5_path, emg_bin_paths, imu_bin_paths=None, device_id=1,
+                                       verify=True, set_synced=True, channel_map_name='V2',
+                                       manual_num_imus=None, min_matched_rows=40,
+                                       min_single_segment_coverage=0.50):
+    """Rescue an H5 that accidentally spans adjacent collection bins.
+
+    This mode is intentionally conservative: every segment must be supported by
+    direct ADC row matches. Uncovered H5 rows are kept as missing/interpolated
+    2 kHz data and the segment metadata is written into H5 attrs.
+    """
+    emg_bin_paths = [p for p in (emg_bin_paths or []) if p]
+    imu_bin_paths = list(imu_bin_paths or [])
+    if len(emg_bin_paths) < 1:
+        return {'status': 'error', 'reason': 'rescue needs at least 1 EMG bin'}
+
+    log("=" * 60)
+    log("[one_to_one_multibin_rescue] 开始相邻 bin 补救同步")
+    log(f"  H5: {os.path.basename(h5_path)}")
+    for p in emg_bin_paths:
+        log(f"  EMG segment: {os.path.basename(p)}")
+    log("=" * 60)
+
+    with h5py.File(h5_path, 'r+') as f:
+        ds_250hz_name = f"emg{device_id}_250hz_adc"
+        if ds_250hz_name not in f:
+            return {'status': 'error', 'reason': f'dataset {ds_250hz_name} not found'}
+        ds_250hz = f[ds_250hz_name]
+        num_frames_250hz = ds_250hz.shape[0]
+        if num_frames_250hz == 0:
+            return {'status': 'error', 'reason': 'empty_250hz_dataset'}
+        data_250hz = ds_250hz[:]
+        channels_250hz = data_250hz['channels']
+        channel_map, resolved_name = _resolve_channel_map(f, ds_250hz_name, channel_map_name)
+
+    emg_parsers = [EMGBinParser(p).parse() for p in emg_bin_paths]
+    segments = []
+    used_row_ranges = []
+    for parser in emg_parsers:
+        row_result = _scan_bin_for_h5_rows(parser, channels_250hz, channel_map)
+        matched_rows = int(row_result.get('matched_rows', 0))
+        if matched_rows < min_matched_rows:
+            log(f"  skip segment {os.path.basename(parser.bin_path)}: matched_rows={matched_rows} < {min_matched_rows}")
+            continue
+        first_row = int(row_result.get('first_h5_row', 0))
+        last_row = int(row_result.get('last_h5_row', first_row))
+        overlaps = any(not (last_row < a or first_row > b) for a, b in used_row_ranges)
+        if overlaps:
+            log(f"  skip overlapping segment {os.path.basename(parser.bin_path)}: rows={first_row}-{last_row}")
+            continue
+        used_row_ranges.append((first_row, last_row))
+        segments.append({'parser': parser, 'row_result': row_result})
+        log(f"  segment matched: {os.path.basename(parser.bin_path)} rows={first_row}-{last_row}, matched={matched_rows}")
+
+    segments.sort(key=lambda s: int(s['row_result'].get('first_h5_row', 0)))
+    if len(segments) < 2:
+        if len(segments) != 1:
+            return {'status': 'validation_failed', 'reason': 'could not find any reliable matched bin segment'}
+        only_rate = float(segments[0]['row_result'].get('match_rate', 0.0))
+        only_first = int(segments[0]['row_result'].get('first_h5_row', 0))
+        if only_rate < min_single_segment_coverage or only_first > 100:
+            return {'status': 'validation_failed',
+                    'reason': f'only one matched segment, coverage={only_rate:.3f} < {min_single_segment_coverage:.2f}'}
+        log(f"  partial rescue: only one reliable segment found, coverage={only_rate:.3f}")
+
+    anchor_sd_frame_ids, segment_bases, segment_meta = _build_multibin_rescue_anchors(segments, num_frames_250hz)
+    matched_total = int(sum(m['matched_rows'] for m in segment_meta))
+    anchored_rows = int(np.count_nonzero(anchor_sd_frame_ids >= 0))
+    coverage = anchored_rows / max(1, num_frames_250hz)
+    direct_match_rate = matched_total / max(1, num_frames_250hz)
+
+    _ni = 2
+    try:
+        with h5py.File(h5_path, 'r') as _f:
+            _ni = _resolve_num_imus(_f, device_id, imu_bin_paths[0] if imu_bin_paths else None,
+                                    manual_num_imus=manual_num_imus)
+    except Exception:
+        pass
+    selected_emg_parsers = [seg['parser'] for seg in segments]
+    selected_indices = [emg_bin_paths.index(seg['parser'].bin_path) for seg in segments]
+
+    imu_parsers_all = []
+    for p in imu_bin_paths[:len(emg_bin_paths)]:
+        imu_parsers_all.append(IMUBinParser(p, num_imus=_ni).parse() if p else None)
+    while len(imu_parsers_all) < len(emg_bin_paths):
+        imu_parsers_all.append(None)
+
+    imu_parsers = []
+    for idx in selected_indices:
+        parser = imu_parsers_all[idx] if idx < len(imu_parsers_all) else None
+        imu_parsers.append(parser)
+
+    rescue_emg_parser = SyntheticEMGParser(selected_emg_parsers, segment_bases)
+    rescue_imu_parser = SyntheticIMUParser(imu_parsers, segment_bases) if any(imu_parsers) else None
+
+    rescue_mode = 'one_to_one_partial_rescue' if len(segments) == 1 else 'one_to_one_multibin_rescue'
+
+    result = _build_and_write_2khz(
+        h5_path, rescue_emg_parser, rescue_imu_parser, device_id, channel_map, resolved_name,
+        data_250hz, num_frames_250hz, 0, set_synced,
+        sync_mode=rescue_mode,
+        sync_match_rate=direct_match_rate,
+        verify_passed=verify,
+        anchor_sd_frame_ids=anchor_sd_frame_ids,
+        sync_frame_id_mode='multibin_rescue_adc_rows',
+        anchor_position=DOWNSAMPLE_RATIO - 1,
+    )
+
+    with h5py.File(h5_path, 'r+') as f:
+        f.attrs[f'sync_rescue_segments_dev{device_id}'] = json.dumps(segment_meta, ensure_ascii=False)
+        f.attrs[f'sync_rescue_anchored_rows_dev{device_id}'] = int(anchored_rows)
+        f.attrs[f'sync_rescue_direct_match_rate_dev{device_id}'] = float(direct_match_rate)
+        f.attrs[f'sync_rescue_coverage_dev{device_id}'] = float(coverage)
+        if rescue_mode == 'one_to_one_partial_rescue':
+            f.attrs[f'sync_rescue_warning_dev{device_id}'] = (
+                'partial rescue: only one bin segment matched; uncovered rows are interpolated from H5 250Hz anchors'
+            )
+        append_sync_history(f, action='sync_rescue', status='synced', details={
+            'mode': rescue_mode,
+            'segments': segment_meta,
+            'anchored_rows': anchored_rows,
+            'direct_match_rate': direct_match_rate,
+            'coverage': coverage,
+        })
+
+    result['rescue_segments'] = segment_meta
+    result['match_rate'] = direct_match_rate
+    result['coverage'] = coverage
+    return result
 
 
 def sync_h5_one_to_one(h5_path, emg_bin_path, imu_bin_path=None, device_id=1,

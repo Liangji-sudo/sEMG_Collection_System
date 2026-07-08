@@ -99,6 +99,7 @@ class RealtimeEngine extends EventEmitter {
         this.currentSessionNumber = 1;
         this.sessionCount = 3;
         this.isClosingStageFile = false;
+        this.activeCloseStageFilePromise = null;
 
         // 动捕数据存储
         this.saveMocapData = false;
@@ -168,7 +169,9 @@ class RealtimeEngine extends EventEmitter {
                     }));
 
                     ws.on('message', (message) => {
-                        this.handleFrontendMessage(message, ws);
+                        this.handleFrontendMessage(message, ws).catch((error) => {
+                            console.error('[realtimeEngine] handleFrontendMessage failed:', error);
+                        });
                     });
 
                     ws.on('close', () => {
@@ -202,9 +205,10 @@ class RealtimeEngine extends EventEmitter {
         });
     }
 
-    handleFrontendMessage(rawMessage, ws) {
+    async handleFrontendMessage(rawMessage, ws) {
+        let message = null;
         try {
-            const message = JSON.parse(rawMessage.toString());
+            message = JSON.parse(rawMessage.toString());
 
             // 【新增】处理客户端自报身份
             if (message.type === 'client_identify') {
@@ -217,10 +221,28 @@ class RealtimeEngine extends EventEmitter {
 
             if (message.type !== 'control_command') return;
 
-            const { action, data } = message;
+            const { action, data = {}, commandId } = message;
             // 【修改】打印时包含客户端信息
             const clientInfo = ws ? `(来自: ${ws.clientName})` : '';
             console.log(`[realtimeEngine] <<< 收到前端命令: ${action} ${clientInfo}`, data);
+
+            if (action === 'collection_stop_and_wait') {
+                const result = await this.onCollectionStop(data.completed);
+                if (result?.h5_close?.status && result.h5_close.status !== 'success') {
+                    throw new Error(result.h5_close.msg || result.h5_close.error || 'H5 close failed');
+                }
+                if (commandId && ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        type: 'control_response',
+                        commandId,
+                        action,
+                        status: 'success',
+                        result,
+                        timestamp: Date.now()
+                    }));
+                }
+                return;
+            }
 
             switch (action) {
                 case 'task_change': this.onTaskChange(data.taskId); break;
@@ -259,6 +281,16 @@ class RealtimeEngine extends EventEmitter {
 
         } catch (error) {
             console.error('[realtimeEngine] 解析前端消息失败:', error);
+            if (message?.commandId && ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'control_response',
+                    commandId: message.commandId,
+                    action: message.action || null,
+                    status: 'error',
+                    error: error.message,
+                    timestamp: Date.now()
+                }));
+            }
         }
     }
 
@@ -398,6 +430,10 @@ class RealtimeEngine extends EventEmitter {
     onCollectionResume() { this.collectionPaused = false; }
 
     async onCollectionStop(completed) {
+        // Freeze H5 append immediately at the logical collection boundary.
+        this.isCollecting = false;
+        this.collectionPaused = true;
+
         // 停止视频录制并保存 AVI
         if (this.videoRecordingStarted && this.camera_connected) {
             console.log('[realtimeEngine] 🎥 停止视频录制并保存 AVI...');
@@ -458,11 +494,12 @@ class RealtimeEngine extends EventEmitter {
             this.videoFileNames = null;
         }
 
-        if (this.stageFileOpen && !this.isClosingStageFile) {
+        let closeResponse = { status: 'success', msg: 'no_open_file' };
+        if (this.stageFileOpen || this.isClosingStageFile) {
             // 显式传 collection_status：
             // completed === true  → "completed"（Stage 正常完成）
             // completed === false → "manual_stopped"（工作人员手动点停止）
-            await this.closeStageFile({
+            closeResponse = await this.closeStageFile({
                 collection_status: completed ? 'completed' : 'manual_stopped',
                 video_timing: {
                     left: this.videoTimingLeft || null,
@@ -472,7 +509,6 @@ class RealtimeEngine extends EventEmitter {
                 video_right: this.videoPathRight || null
             });
         }
-        this.isCollecting = false;
         this.collectionPaused = false;
         // 【新增】重置测试模式标志
         this.isTestMode = false;
@@ -483,6 +519,11 @@ class RealtimeEngine extends EventEmitter {
         this.collectionBins = null;  // 【新增】重置collectionBins
         this.collectionDataStartTs = 0;
         // 【修复】不在 stop 时清空 sd_filenames（由 sd_filenames_updated 事件管理）
+        return {
+            status: 'success',
+            h5_close: closeResponse,
+            collection_status: completed ? 'completed' : 'manual_stopped'
+        };
     }
 
     // 【新增】异常中断冻结 — 立即停止 append，不关闭 H5
@@ -1053,11 +1094,16 @@ class RealtimeEngine extends EventEmitter {
     }
 
     async closeStageFile(extraParams = {}) {
-        if (!this.stageFileOpen || this.isClosingStageFile) return;
+        if (this.isClosingStageFile && this.activeCloseStageFilePromise) {
+            return this.activeCloseStageFilePromise;
+        }
+        if (!this.stageFileOpen) {
+            return { status: 'success', msg: 'no_open_file' };
+        }
 
         this.isClosingStageFile = true;
 
-        try {
+        this.activeCloseStageFilePromise = (async () => {
             const params = { end_time: Date.now() / 1000, ...extraParams };
             const response = await this.sendStorageCommand('close', params);
             this.stageFileOpen = false;
@@ -1066,11 +1112,16 @@ class RealtimeEngine extends EventEmitter {
                 console.log(`[realtimeEngine] ✅ 文件已关闭 (collection_status: ${status})`);
             }
             return response;
+        })();
+
+        try {
+            return await this.activeCloseStageFilePromise;
         } catch (error) {
             console.error('[realtimeEngine] 关闭Stage文件失败:', error);
             return { status: 'error', msg: error.message };
         } finally {
             this.isClosingStageFile = false;
+            this.activeCloseStageFilePromise = null;
         }
     }
 

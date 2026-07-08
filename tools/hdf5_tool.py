@@ -41,6 +41,7 @@ try:
         sys.path.insert(0, _tools_dir)
     from bin_sync_tool import (EMGBinParser, IMUBinParser, sync_h5_with_bin,
                                sync_h5_one_to_one, sync_h5_one_to_many_adc_search,
+                               sync_h5_one_to_one_multibin_rescue,
                                find_bin_offset_by_adc,
                                diagnose_frame_ids, clear_sync_outputs,
                                append_sync_history)
@@ -129,6 +130,42 @@ class SyncWorker(QThread):
             self.log.emit(f"    读取H5属性失败: {str(e)}")
             return None, None
 
+    def _find_next_bin_pair(self, emg_bin_path):
+        """Find the next chronological EMG/IMU bin for the same subject/device."""
+        if not emg_bin_path:
+            return None, None
+
+        current_name = os.path.basename(emg_bin_path)
+        parts = current_name.split('_')
+        if len(parts) < 5 or not current_name.endswith('_emg.bin'):
+            return None, None
+        family_prefix = '_'.join(parts[:3]) + '_'
+
+        emg_files = []
+        for root, dirs, files in os.walk(self.bin_dir):
+            for name in files:
+                if name.startswith(family_prefix) and name.endswith('_emg.bin'):
+                    emg_files.append(os.path.join(root, name))
+
+        emg_files.sort(key=lambda p: os.path.basename(p))
+        names = [os.path.basename(p) for p in emg_files]
+        try:
+            idx = names.index(current_name)
+        except ValueError:
+            return None, None
+
+        if idx + 1 >= len(emg_files):
+            return None, None
+
+        next_emg = emg_files[idx + 1]
+        next_imu_name = os.path.basename(next_emg).replace('_emg.bin', '_imu.bin')
+        next_imu = None
+        for root, dirs, files in os.walk(self.bin_dir):
+            if next_imu_name in files:
+                next_imu = os.path.join(root, next_imu_name)
+                break
+        return next_emg, next_imu
+
     def run(self):
         if not HAS_SYNC_TOOL:
             self.finished_signal.emit(False, "同步功能不可用：无法导入bin_sync_tool")
@@ -213,6 +250,27 @@ class SyncWorker(QThread):
                                 verify=self.validate_data,
                                 set_synced=is_last_device,
                             )
+                            if result.get('status') == 'validation_failed':
+                                next_emg, next_imu = self._find_next_bin_pair(emg_bin)
+                                self.log.emit(f"    [rescue] 一对一校验失败，尝试补救同步")
+                                emg_candidates = [emg_bin]
+                                imu_candidates = [imu_bin]
+                                if next_emg:
+                                    self.log.emit(f"    [rescue] next EMG bin: {os.path.basename(next_emg)}")
+                                    if next_imu:
+                                        self.log.emit(f"    [rescue] next IMU bin: {os.path.basename(next_imu)}")
+                                    emg_candidates.append(next_emg)
+                                    imu_candidates.append(next_imu)
+                                else:
+                                    self.log.emit(f"    [rescue] 未找到下一组 bin，将尝试单 bin partial rescue")
+                                result = sync_h5_one_to_one_multibin_rescue(
+                                    h5_path=h5_file,
+                                    emg_bin_paths=emg_candidates,
+                                    imu_bin_paths=imu_candidates,
+                                    device_id=device_id,
+                                    verify=self.validate_data,
+                                    set_synced=is_last_device,
+                                )
                         elif self.sync_mode == 'one_to_many':
                             # 旧格式：ADC 搜索 offset
                             result = sync_h5_one_to_many_adc_search(
