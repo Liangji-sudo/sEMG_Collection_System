@@ -19,6 +19,10 @@
     let _cameraWatchdogTimer = null;
     let _cameraEmergencyVisible = false;
     let _cameraDisconnectAlerted = false;
+    let _cameraStatusPollInFlight = false;
+    let _encodingHideTimer = null;
+    let _cameraEncodingActive = false;
+    const _announcedEncodingDone = new Set();
     const _lastPreviewFrameAt = { left: 0, right: 0 };
     const _thumbFailureCount = { left: 0, right: 0 };
     const CAMERA_FRAME_STALE_MS = 7000;
@@ -1172,6 +1176,7 @@
 
         const jobs = Array.isArray(details) ? details : [];
         if (jobs.length === 0) {
+            _cameraEncodingActive = false;
             panel.classList.remove('active');
             return;
         }
@@ -1179,8 +1184,13 @@
         const active = jobs.filter(job => job.status === 'encoding');
         const failed = jobs.filter(job => job.status === 'failed');
         const done = jobs.filter(job => job.status === 'done');
+        _cameraEncodingActive = active.length > 0;
 
         panel.classList.add('active');
+        if (_encodingHideTimer) {
+            clearTimeout(_encodingHideTimer);
+            _encodingHideTimer = null;
+        }
         if (active.length > 0) {
             const first = active[0];
             const percent = Number(first.progress_percent || 0).toFixed(1);
@@ -1190,8 +1200,16 @@
         } else if (failed.length > 0) {
             detailEl.textContent = `视频压缩失败：${failed[0].error || '请查看 camera_server 日志'}`;
         } else if (done.length > 0) {
-            detailEl.textContent = '视频压缩已完成，临时 MJPEG 已清理';
-            setTimeout(() => {
+            const newlyDone = done.filter(job => {
+                const key = job.output_path || `${job.side || 'video'}:${job.started_at || ''}`;
+                if (_announcedEncodingDone.has(key)) return false;
+                _announcedEncodingDone.add(key);
+                return true;
+            });
+            if (newlyDone.length > 0) {
+                detailEl.textContent = '视频压缩已完成，临时 MJPEG 已清理';
+            }
+            _encodingHideTimer = setTimeout(() => {
                 const current = document.getElementById('cameraEncodingPanel');
                 if (current) current.classList.remove('active');
             }, 5000);
@@ -1289,8 +1307,11 @@
                 // 静默处理
             }
 
+            let didCameraStatusPoll = false;
             try {
-                if (window.CameraControl && window.CameraControl.isConnected() && window.CameraControl.getStatus) {
+                if (!_cameraStatusPollInFlight && window.CameraControl && window.CameraControl.isConnected() && window.CameraControl.getStatus) {
+                    _cameraStatusPollInFlight = true;
+                    didCameraStatusPoll = true;
                     const cameraStatus = await window.CameraControl.getStatus();
                     if (cameraStatus && cameraStatus.success !== false) {
                         updateCameraEncodingStatus(cameraStatus.encoding_details || []);
@@ -1298,6 +1319,8 @@
                 }
             } catch (error) {
                 // 静默处理
+            } finally {
+                if (didCameraStatusPoll) _cameraStatusPollInFlight = false;
             }
         }, 2000);
     }
@@ -1346,8 +1369,15 @@
     }
 
     function handleCameraDisconnect(reason) {
-        const shouldAlert = isCameraStreaming || isCollectionRunning();
-        if (!shouldAlert || _cameraDisconnectAlerted) return;
+        const collecting = isCollectionRunning();
+        if (!collecting) {
+            if (isCameraStreaming && !_cameraDisconnectAlerted) {
+                _cameraDisconnectAlerted = true;
+                showToast(reason || '摄像头预览异常，请重新连接摄像头', 'warning');
+            }
+            return;
+        }
+        if (_cameraDisconnectAlerted) return;
         _cameraDisconnectAlerted = true;
         showCameraEmergencyModal(reason || '摄像头连接异常');
     }
@@ -1494,6 +1524,17 @@
         if (openedSides.length === 0) {
             // 没有摄像头打开，停止定时器
             stopCameraThumbTimer();
+            return;
+        }
+
+        if (_cameraEncodingActive && !isCollectionRunning()) {
+            openedSides.forEach(side => {
+                const status = document.getElementById(`thumb${capitalize(side)}Status`);
+                if (status) {
+                    status.textContent = '视频压缩中，暂停缩略图刷新';
+                    status.style.color = '#92400e';
+                }
+            });
             return;
         }
 

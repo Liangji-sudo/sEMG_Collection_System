@@ -560,7 +560,7 @@ class FrameRecorder:
                 proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
+                    stderr=subprocess.DEVNULL,
                     text=True,
                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
                 )
@@ -914,12 +914,15 @@ class CameraServer:
                 subscribers = list(self.preview_subscribers.get(side, set()))
                 for ws in subscribers:
                     try:
-                        await ws.send(json.dumps({
+                        await asyncio.wait_for(ws.send(json.dumps({
                             'type': 'preview_frame',
                             'side': side,
                             'frame': frame_b64
-                        }))
+                        })), timeout=0.5)
                     except websockets.exceptions.ConnectionClosed:
+                        dead.add(ws)
+                    except asyncio.TimeoutError:
+                        print(f'[CameraServer] 发送预览帧超时，移除订阅者: {side}')
                         dead.add(ws)
                     except Exception as e:
                         print(f'[CameraServer] 发送帧给客户端失败: {e}')
@@ -944,7 +947,7 @@ class CameraServer:
             clients = list(self.all_clients)
         for ws in clients:
             try:
-                await ws.send(json.dumps(status_msg))
+                await asyncio.wait_for(ws.send(json.dumps(status_msg)), timeout=1.0)
             except:
                 dead.add(ws)
         if dead:
@@ -990,19 +993,24 @@ class CameraServer:
                         # 回传 request_id 以便客户端匹配
                         if request_id:
                             response['request_id'] = request_id
-                        await websocket.send(json.dumps(response))
+                        await asyncio.wait_for(websocket.send(json.dumps(response)), timeout=2.0)
 
                 except json.JSONDecodeError as e:
-                    await websocket.send(json.dumps({
+                    await asyncio.wait_for(websocket.send(json.dumps({
                         'success': False, 'error': f'JSON解析错误: {str(e)}'
-                    }))
+                    })), timeout=2.0)
+                except websockets.exceptions.ConnectionClosed:
+                    raise
                 except Exception as e:
                     print(f'[CameraServer] 处理消息时出错: {e}')
                     import traceback
                     traceback.print_exc()
-                    await websocket.send(json.dumps({
-                        'success': False, 'error': str(e)
-                    }))
+                    try:
+                        await asyncio.wait_for(websocket.send(json.dumps({
+                            'success': False, 'error': str(e)
+                        })), timeout=2.0)
+                    except Exception:
+                        break
 
         except websockets.exceptions.ConnectionClosed:
             print(f'[CameraServer] 客户端断开连接: {client_addr}')
