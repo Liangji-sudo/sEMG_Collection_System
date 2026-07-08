@@ -3,6 +3,8 @@ const path = require('path');
 const { spawn, execSync } = require('child_process');
 
 let mainWindow;
+let serverModule = null;
+let gracefulQuitStarted = false;
 
 // 需要在退出时杀掉的进程名列表
 const PYTHON_PROCESSES = ['ble_server.exe', 'storage_server.exe', 'mocap_server.exe'];
@@ -38,7 +40,7 @@ function startServer() {
       const PORT = process.env.PORT || 3000;
 
       // 动态加载 server.js
-      require(path.join(__dirname, 'server.js'));
+      serverModule = require(path.join(__dirname, 'server.js'));
 
       // 给服务一点启动时间，然后返回地址
       // 可以根据实际情况调整延时，或改用更可靠的检测方式
@@ -105,10 +107,25 @@ app.on('activate', () => {
   }
 });
 
-// 应用退出前清理子进程
-app.on('before-quit', () => {
-  console.log('[Main] 应用即将退出，清理子进程...');
+// 应用退出前先让服务优雅关闭，确保 H5 文件完成 close
+app.on('before-quit', async (event) => {
+  if (gracefulQuitStarted) return;
+  gracefulQuitStarted = true;
+  event.preventDefault();
+
+  console.log('[Main] 应用即将退出，先优雅关闭采集服务...');
+  try {
+    const timeout = new Promise((resolve) => setTimeout(resolve, 8000));
+    const shutdown = serverModule && typeof serverModule.shutdown === 'function'
+      ? serverModule.shutdown('electron-before-quit')
+      : Promise.resolve();
+    await Promise.race([shutdown, timeout]);
+  } catch (error) {
+    console.error('[Main] 优雅关闭采集服务失败:', error);
+  }
+
   killAllPythonProcesses();
+  app.quit();
 });
 
 // 应用退出时再次确保清理

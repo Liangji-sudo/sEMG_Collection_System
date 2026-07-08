@@ -33,6 +33,109 @@ except ImportError:
 
 import time as _time_module  # 避免与 calibrate_tool 中 time 冲突
 
+HDF5_SIGNATURE = b'\x89HDF\r\n\x1a\n'
+
+
+def _jenkins_lookup3_hashlittle(data, initval=0):
+    """HDF5 superblock v3 checksum uses Bob Jenkins lookup3 hashlittle."""
+    def rot(x, k):
+        return ((x << k) | (x >> (32 - k))) & 0xffffffff
+
+    def mix(a, b, c):
+        a = (a - c) & 0xffffffff; a ^= rot(c, 4);  c = (c + b) & 0xffffffff
+        b = (b - a) & 0xffffffff; b ^= rot(a, 6);  a = (a + c) & 0xffffffff
+        c = (c - b) & 0xffffffff; c ^= rot(b, 8);  b = (b + a) & 0xffffffff
+        a = (a - c) & 0xffffffff; a ^= rot(c,16);  c = (c + b) & 0xffffffff
+        b = (b - a) & 0xffffffff; b ^= rot(a,19);  a = (a + c) & 0xffffffff
+        c = (c - b) & 0xffffffff; c ^= rot(b, 4);  b = (b + a) & 0xffffffff
+        return a, b, c
+
+    def final(a, b, c):
+        c ^= b; c = (c - rot(b,14)) & 0xffffffff
+        a ^= c; a = (a - rot(c,11)) & 0xffffffff
+        b ^= a; b = (b - rot(a,25)) & 0xffffffff
+        c ^= b; c = (c - rot(b,16)) & 0xffffffff
+        a ^= c; a = (a - rot(c,4)) & 0xffffffff
+        b ^= a; b = (b - rot(a,14)) & 0xffffffff
+        c ^= b; c = (c - rot(b,24)) & 0xffffffff
+        return a, b, c
+
+    length = len(data)
+    a = b = c = (0xdeadbeef + length + initval) & 0xffffffff
+    pos = 0
+    while length > 12:
+        a = (a + int.from_bytes(data[pos:pos+4], 'little')) & 0xffffffff
+        b = (b + int.from_bytes(data[pos+4:pos+8], 'little')) & 0xffffffff
+        c = (c + int.from_bytes(data[pos+8:pos+12], 'little')) & 0xffffffff
+        a, b, c = mix(a, b, c)
+        pos += 12
+        length -= 12
+
+    tail = data[pos:]
+    if length >= 12: c = (c + (tail[11] << 24)) & 0xffffffff
+    if length >= 11: c = (c + (tail[10] << 16)) & 0xffffffff
+    if length >= 10: c = (c + (tail[9] << 8)) & 0xffffffff
+    if length >= 9:  c = (c + tail[8]) & 0xffffffff
+    if length >= 8:  b = (b + (tail[7] << 24)) & 0xffffffff
+    if length >= 7:  b = (b + (tail[6] << 16)) & 0xffffffff
+    if length >= 6:  b = (b + (tail[5] << 8)) & 0xffffffff
+    if length >= 5:  b = (b + tail[4]) & 0xffffffff
+    if length >= 4:  a = (a + (tail[3] << 24)) & 0xffffffff
+    if length >= 3:  a = (a + (tail[2] << 16)) & 0xffffffff
+    if length >= 2:  a = (a + (tail[1] << 8)) & 0xffffffff
+    if length >= 1:  a = (a + tail[0]) & 0xffffffff
+    if length == 0:
+        return c
+    return final(a, b, c)[2]
+
+
+def _is_h5_stale_write_error(exc):
+    msg = str(exc).lower()
+    return 'already open for write' in msg or 'clear file consistency flags' in msg
+
+
+def repair_h5_stale_write_flag(h5_path):
+    """Clear stale HDF5 v3 write-access flag left by an ungraceful process exit.
+
+    Returns (ok, message). A backup is created before modifying the file.
+    """
+    with open(h5_path, 'rb') as f:
+        header = bytearray(f.read(48))
+    if len(header) < 48 or bytes(header[:8]) != HDF5_SIGNATURE:
+        return False, '不是可识别的 HDF5 superblock'
+    if header[8] != 3:
+        return False, f'仅支持自动修复 superblock v3，当前版本={header[8]}'
+    if header[11] == 0:
+        return True, 'HDF5 write flag 已经是 0'
+
+    backup_path = h5_path + '.bak_before_h5clear_flag'
+    if not os.path.exists(backup_path):
+        import shutil
+        shutil.copy2(h5_path, backup_path)
+
+    header[11] = 0
+    checksum = _jenkins_lookup3_hashlittle(bytes(header[:44]))
+    header[44:48] = checksum.to_bytes(4, 'little')
+    with open(h5_path, 'r+b') as f:
+        f.write(header)
+
+    try:
+        with h5py.File(h5_path, 'r') as _f:
+            _ = list(_f.keys())
+    except Exception as e:
+        return False, f'已清除 stale flag，但 H5 元数据仍无法打开: {e}'
+    return True, f'已清除 stale write flag，备份: {os.path.basename(backup_path)}'
+
+
+def ensure_h5_openable(h5_path):
+    try:
+        with h5py.File(h5_path, 'r') as _f:
+            return True, 'ok'
+    except Exception as e:
+        if not _is_h5_stale_write_error(e):
+            return False, str(e)
+        return repair_h5_stale_write_flag(h5_path)
+
 # 导入bin_sync_tool中的同步功能
 try:
     # 确保 tools/ 目录在 sys.path 中（无论从哪里启动）
@@ -189,6 +292,13 @@ class SyncWorker(QThread):
             for i, h5_file in enumerate(self.h5_files):
                 self.progress.emit(i + 1, total, os.path.basename(h5_file))
                 self.log.emit(f"\n处理文件: {os.path.basename(h5_file)}")
+
+                ok, repair_msg = ensure_h5_openable(h5_file)
+                if not ok:
+                    self.log.emit(f"  ✗ H5文件无法打开: {repair_msg}")
+                    continue
+                if repair_msg != 'ok':
+                    self.log.emit(f"  [h5clear] {repair_msg}")
 
                 # 【新增】如果需要双设备同步，先检查H5文件是否有两个设备的bin文件配置
                 if require_both_devices:
@@ -1747,6 +1857,11 @@ class ViewerTab(QWidget):
         self.text_view.clear()
 
         try:
+            ok, repair_msg = ensure_h5_openable(file_path)
+            if not ok:
+                raise RuntimeError(repair_msg)
+            if repair_msg != 'ok':
+                QMessageBox.information(self, "HDF5修复", repair_msg)
             self.stats_panel.update_stats(file_path)
             with h5py.File(file_path, 'r') as f:
                 self.populate_tree(f, self.tree.invisibleRootItem())

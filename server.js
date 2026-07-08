@@ -23,6 +23,8 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 const app = express();
 const PORT = process.env.PORT || 3000;
+let httpServer = null;
+let isShuttingDown = false;
 
 // 引入设备协同模块
 const deviceSync = require('./deviceSync');
@@ -422,25 +424,42 @@ function openBrowser() {
 }
 
 // 优雅关闭处理
+async function shutdownServices(signal = 'manual') {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    console.log(`\n收到 ${signal}，正在关闭服务器...`);
+
+    try {
+        await realtimeEngine.stop();
+        await deviceSync.close();
+        await dataStorage.close();
+        await stopCameraServer();  // 【新增】停止 camera_server
+
+        if (httpServer) {
+            await new Promise(resolve => httpServer.close(resolve));
+            httpServer = null;
+        }
+
+        // 关闭日志系统
+        if (logger) {
+            logger.close();
+        }
+
+        console.log('服务器关闭完成');
+    } catch (error) {
+        console.error('关闭过程中发生错误:', error);
+        throw error;
+    } finally {
+        isShuttingDown = false;
+    }
+}
+
 function setupGracefulShutdown() {
     const shutdown = async (signal) => {
-        console.log(`\n收到 ${signal} 信号，正在关闭服务器...`);
-
         try {
-            await deviceSync.close();
-            await realtimeEngine.stop();
-            await dataStorage.close();
-            await stopCameraServer();  // 【新增】停止 camera_server
-
-            // 关闭日志系统
-            if (logger) {
-                logger.close();
-            }
-
-            console.log('服务器关闭完成');
+            await shutdownServices(signal);
             process.exit(0);
         } catch (error) {
-            console.error('关闭过程中发生错误:', error);
             process.exit(1);
         }
     };
@@ -555,6 +574,7 @@ async function startServer() {
 // 启动服务器
 setupGracefulShutdown();
 startServer().then(server => {
+    httpServer = server;
     console.log('服务器启动完成');
 
     // 8秒后打印各模块连接状态汇总（等待所有连接建立）
@@ -564,6 +584,10 @@ startServer().then(server => {
 }).catch(error => {
     console.error('服务器启动失败:', error);
 });
+
+module.exports = {
+    shutdown: shutdownServices
+};
 
 // 打印系统状态汇总
 function printSystemStatus() {

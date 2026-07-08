@@ -2825,21 +2825,21 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 stageName: currentStage?.name || currentStage?.id
             });
 
+            try {
+                await this.sendToRealtimeEngineAndWait('collection_stop_and_wait', { completed: true });
+            } catch (error) {
+                console.error('[Collection] 等待 H5 关闭失败:', error);
+                this.updateStatus('H5关闭失败');
+                this.showToast('等待 H5 关闭失败: ' + error.message, 'error');
+                return;
+            }
+
             if (this.currentStageIndex < this.stages.length - 1) {
                 this.updateGestureDisplay({
                     name: 'Stage完成',
                     instruction: '可以点击开始进行下一个Stage',
                     showCountdown: false
                 });
-            } else {
-                try {
-                    await this.sendToRealtimeEngineAndWait('collection_stop_and_wait', { completed: true });
-                } catch (error) {
-                    console.error('[Collection] 等待 H5 关闭失败:', error);
-                    this.updateStatus('H5关闭失败');
-                    this.showToast('等待 H5 关闭失败: ' + error.message, 'error');
-                    return;
-                }
             }
 
             this._isRunning = false;
