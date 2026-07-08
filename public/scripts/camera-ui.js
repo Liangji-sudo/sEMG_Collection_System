@@ -15,6 +15,13 @@
 
     let isCameraStreaming = false;  // 是否有摄像头已打开
     let updateStatusInterval = null;
+    let _cameraConfigBusy = false;
+    let _cameraWatchdogTimer = null;
+    let _cameraEmergencyVisible = false;
+    let _cameraDisconnectAlerted = false;
+    const _lastPreviewFrameAt = { left: 0, right: 0 };
+    const _thumbFailureCount = { left: 0, right: 0 };
+    const CAMERA_FRAME_STALE_MS = 7000;
 
     // 等待DOM加载完成
     if (document.readyState === 'loading') {
@@ -25,6 +32,7 @@
 
     function init() {
         console.log('[CameraUI] 初始化开始...');
+        ensureCameraRuntimeUi();
 
         // 等待 CameraControl 模块加载（不要求WebSocket已连接）
         waitForCameraControl(() => {
@@ -36,6 +44,7 @@
 
             // 启动状态更新
             startStatusUpdates();
+            startCameraWatchdog();
 
             console.log('[CameraUI] 初始化完成');
         });
@@ -66,6 +75,152 @@
         }, 100);
     }
 
+    function ensureCameraRuntimeUi() {
+        if (!document.getElementById('cameraRuntimeStyles')) {
+            const style = document.createElement('style');
+            style.id = 'cameraRuntimeStyles';
+            style.textContent = `
+                .camera-busy-panel {
+                    display: none;
+                    align-items: center;
+                    gap: 12px;
+                    margin: 0 0 18px 0;
+                    padding: 12px 14px;
+                    border: 1px solid #bfdbfe;
+                    border-radius: 8px;
+                    background: #eff6ff;
+                    color: #1e3a8a;
+                    font-size: 13px;
+                    line-height: 1.45;
+                }
+                .camera-busy-panel.active { display: flex; }
+                .camera-spinner {
+                    width: 18px;
+                    height: 18px;
+                    border: 3px solid #bfdbfe;
+                    border-top-color: #2563eb;
+                    border-radius: 999px;
+                    flex: 0 0 auto;
+                    animation: camera-spin 0.85s linear infinite;
+                }
+                .camera-busy-message { font-weight: 700; color: #1d4ed8; }
+                .camera-busy-detail { margin-top: 2px; color: #475569; }
+                .camera-emergency-overlay {
+                    position: fixed;
+                    inset: 0;
+                    z-index: 12000;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    background: rgba(15, 23, 42, 0.72);
+                }
+                .camera-emergency-card {
+                    width: min(520px, calc(100vw - 32px));
+                    border-radius: 10px;
+                    background: #fff;
+                    box-shadow: 0 24px 72px rgba(15, 23, 42, 0.35);
+                    overflow: hidden;
+                    border: 1px solid #fecaca;
+                }
+                .camera-emergency-head {
+                    padding: 16px 18px;
+                    background: #fef2f2;
+                    border-bottom: 1px solid #fecaca;
+                    color: #991b1b;
+                    font-weight: 800;
+                    font-size: 16px;
+                }
+                .camera-emergency-body {
+                    padding: 18px;
+                    color: #374151;
+                    font-size: 14px;
+                    line-height: 1.6;
+                }
+                .camera-emergency-actions {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 10px;
+                    justify-content: flex-end;
+                    padding: 0 18px 18px;
+                }
+                .camera-emergency-actions button {
+                    border: none;
+                    border-radius: 6px;
+                    padding: 9px 14px;
+                    cursor: pointer;
+                    font-size: 13px;
+                    font-weight: 700;
+                }
+                .camera-emergency-abort { background: #dc2626; color: #fff; }
+                .camera-emergency-reconnect { background: #2563eb; color: #fff; }
+                .camera-emergency-dismiss { background: #e5e7eb; color: #374151; }
+                @keyframes camera-spin { to { transform: rotate(360deg); } }
+            `;
+            document.head.appendChild(style);
+        }
+
+        const modal = document.getElementById('cameraConfigModal');
+        const card = modal ? modal.firstElementChild : null;
+        if (card && !document.getElementById('cameraConfigBusyPanel')) {
+            const panel = document.createElement('div');
+            panel.id = 'cameraConfigBusyPanel';
+            panel.className = 'camera-busy-panel';
+            panel.innerHTML = `
+                <div class="camera-spinner" aria-hidden="true"></div>
+                <div>
+                    <div id="cameraConfigBusyMessage" class="camera-busy-message">正在处理摄像头...</div>
+                    <div id="cameraConfigBusyDetail" class="camera-busy-detail">请稍候，正在等待后端返回。</div>
+                </div>
+            `;
+            const header = card.firstElementChild;
+            if (header && header.nextSibling) {
+                card.insertBefore(panel, header.nextSibling);
+            } else {
+                card.insertBefore(panel, card.firstChild);
+            }
+        }
+
+        if (card && !document.getElementById('swapCameraSidesBtn')) {
+            const applyBtn = document.getElementById('applyCameraConfigBtn');
+            const actions = applyBtn ? applyBtn.parentElement : null;
+            if (actions) {
+                const swapBtn = document.createElement('button');
+                swapBtn.id = 'swapCameraSidesBtn';
+                swapBtn.type = 'button';
+                swapBtn.title = '交换左手和右手摄像头选择';
+                swapBtn.style.cssText = 'background: #0f766e; color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer; font-size: 13px;';
+                swapBtn.innerHTML = '<i class="fas fa-exchange-alt"></i> 左右互换';
+                actions.insertBefore(swapBtn, applyBtn);
+            }
+        }
+    }
+
+    function setCameraConfigBusy(isBusy, message = '正在处理摄像头...', detail = '请稍候，正在等待后端返回。') {
+        ensureCameraRuntimeUi();
+        _cameraConfigBusy = isBusy;
+
+        const panel = document.getElementById('cameraConfigBusyPanel');
+        const msgEl = document.getElementById('cameraConfigBusyMessage');
+        const detailEl = document.getElementById('cameraConfigBusyDetail');
+        if (panel) panel.classList.toggle('active', isBusy);
+        if (msgEl) msgEl.textContent = message;
+        if (detailEl) detailEl.textContent = detail;
+
+        ['leftCameraSelect', 'rightCameraSelect', 'swapCameraSidesBtn', 'refreshCamerasBtn', 'applyCameraConfigBtn'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.disabled = isBusy || (id === 'swapCameraSidesBtn' && !canSwapCameraSides());
+                el.style.opacity = isBusy ? '0.65' : '';
+                el.style.cursor = isBusy ? 'wait' : '';
+            }
+        });
+        if (!isBusy) updateSwapCameraButtonState();
+    }
+
+    function setCameraConfigMessage(message, detail) {
+        setCameraConfigBusy(true, message, detail || '请勿反复点击，正在等待后端返回。');
+    }
+
     function setupCallbacks() {
         if (!window.CameraControl) return;
 
@@ -76,6 +231,7 @@
         // 预览帧回调
         window.CameraControl.onPreviewFrame = function(side, frameBase64) {
             const now = performance.now();
+            markCameraFrame(side);
             const delta = _lastFrameTime ? (now - _lastFrameTime).toFixed(0) : 0;
             _lastFrameTime = now;
             _frameLogCount++;
@@ -97,13 +253,20 @@
         window.CameraControl.onStatusChange = function(status) {
             if (status.connected) {
                 console.log('[CameraUI] Camera Server 已连接');
+                _cameraDisconnectAlerted = false;
             } else {
                 console.log('[CameraUI] Camera Server 断开');
                 updateCameraStatus('left', '未连接', false);
                 updateCameraStatus('right', '未连接', false);
+                handleCameraDisconnect(status.code ? `Camera Server 连接已断开（code ${status.code}）` : 'Camera Server 连接已断开');
                 isCameraStreaming = false;
                 updateCameraStreamButton(false);
             }
+        };
+
+        window.CameraControl.onError = function(message) {
+            console.error('[CameraUI] CameraControl 错误:', message);
+            handleCameraDisconnect(message || 'Camera Server 连接错误');
         };
 
         // 录制状态变化（camera_server主动推送）
@@ -170,6 +333,11 @@
             refreshBtn.addEventListener('click', refreshCameraList);
         }
 
+        const swapBtn = document.getElementById('swapCameraSidesBtn');
+        if (swapBtn) {
+            swapBtn.addEventListener('click', swapCameraSides);
+        }
+
         // 应用配置并打开摄像头
         const applyBtn = document.getElementById('applyCameraConfigBtn');
         if (applyBtn) {
@@ -198,6 +366,11 @@
             refreshBtn.addEventListener('click', refreshCameraListFallback);
         }
 
+        const swapBtn = document.getElementById('swapCameraSidesBtn');
+        if (swapBtn) {
+            swapBtn.addEventListener('click', swapCameraSides);
+        }
+
         const applyBtn = document.getElementById('applyCameraConfigBtn');
         if (applyBtn) {
             applyBtn.addEventListener('click', applyCameraConfigFallback);
@@ -223,6 +396,7 @@
     // ==================== HTTP降级处理函数 ====================
 
     async function refreshCameraListFallback() {
+        setCameraConfigBusy(true, '正在扫描摄像头...', 'Camera Server 正在枚举 USB 摄像头，请稍候。');
         try {
             const response = await fetch('/api/camera/list');
             const result = await response.json();
@@ -234,6 +408,8 @@
             }
         } catch (err) {
             showToast('Camera Server 未连接', 'error');
+        } finally {
+            setCameraConfigBusy(false);
         }
     }
 
@@ -321,28 +497,34 @@
 
         const modal = document.getElementById('cameraConfigModal');
         if (!modal) return;
-
-        // 枚举摄像头：优先WebSocket直连，降级HTTP
-        if (window.CameraControl && window.CameraControl.isConnected()) {
-            const result = await window.CameraControl.scanCameras();
-            if (result.success) {
-                updateCameraSelects(result.devices);
-            } else {
-                showToast('扫描摄像头失败: ' + (result.error || '未知错误'), 'error');
-            }
-        } else {
-            // HTTP降级扫描
-            console.log('[CameraUI] WS未连接，使用HTTP降级扫描');
-            await refreshCameraListFallback();
-        }
-
         modal.style.display = 'flex';
+        setCameraConfigBusy(true, '正在扫描摄像头...', '已打开配置窗口，正在等待后端返回摄像头列表。');
+
+        try {
+            // 枚举摄像头：优先WebSocket直连，降级HTTP
+            if (window.CameraControl && window.CameraControl.isConnected()) {
+                const result = await window.CameraControl.scanCameras();
+                if (result.success) {
+                    updateCameraSelects(result.devices);
+                } else {
+                    showToast('扫描摄像头失败: ' + (result.error || '未知错误'), 'error');
+                }
+            } else {
+                // HTTP降级扫描
+                console.log('[CameraUI] WS未连接，使用HTTP降级扫描');
+                await refreshCameraListFallback();
+            }
+        } finally {
+            setCameraConfigBusy(false);
+        }
     }
 
     async function openCameraConfigFallback() {
         // HTTP降级：通过后端API扫描
         const modal = document.getElementById('cameraConfigModal');
         if (!modal) return;
+        modal.style.display = 'flex';
+        setCameraConfigBusy(true, '正在扫描摄像头...', 'Camera Server 正在枚举 USB 摄像头，请稍候。');
 
         try {
             const response = await fetch('/api/camera/list');
@@ -352,12 +534,13 @@
             }
         } catch (err) {
             showToast('扫描摄像头失败', 'error');
+        } finally {
+            setCameraConfigBusy(false);
         }
-
-        modal.style.display = 'flex';
     }
 
     function closeCameraConfig() {
+        setCameraConfigBusy(false);
         const modal = document.getElementById('cameraConfigModal');
         if (modal) {
             modal.style.display = 'none';
@@ -366,27 +549,60 @@
 
     async function refreshCameraList() {
         console.log('[CameraUI] 刷新摄像头列表...');
+        setCameraConfigBusy(true, '正在刷新摄像头列表...', '正在等待 Camera Server 返回最新设备列表。');
 
-        if (window.CameraControl && window.CameraControl.isConnected()) {
-            const result = await window.CameraControl.scanCameras();
-            if (result.success) {
-                updateCameraSelects(result.devices);
-                showToast(`找到 ${result.devices.length} 个摄像头`, 'info');
+        try {
+            if (window.CameraControl && window.CameraControl.isConnected()) {
+                const result = await window.CameraControl.scanCameras();
+                if (result.success) {
+                    updateCameraSelects(result.devices);
+                    showToast(`找到 ${result.devices.length} 个摄像头`, 'info');
+                } else {
+                    showToast('扫描失败: ' + (result.error || '未知错误'), 'error');
+                }
             } else {
-                showToast('扫描失败: ' + (result.error || '未知错误'), 'error');
-            }
-        } else {
-            // HTTP降级
-            try {
+                // HTTP降级
                 const response = await fetch('/api/camera/list');
                 const result = await response.json();
                 if (result.success && result.devices) {
                     updateCameraSelects(result.devices);
                 }
-            } catch (err) {
-                showToast('Camera Server 未连接', 'error');
             }
+        } catch (err) {
+            showToast('Camera Server 未连接', 'error');
+        } finally {
+            setCameraConfigBusy(false);
         }
+    }
+
+    function canSwapCameraSides() {
+        const leftSelect = document.getElementById('leftCameraSelect');
+        const rightSelect = document.getElementById('rightCameraSelect');
+        return !!(leftSelect && rightSelect && leftSelect.value && rightSelect.value);
+    }
+
+    function updateSwapCameraButtonState() {
+        const swapBtn = document.getElementById('swapCameraSidesBtn');
+        if (!swapBtn) return;
+        const enabled = canSwapCameraSides() && !_cameraConfigBusy;
+        swapBtn.disabled = !enabled;
+        swapBtn.style.opacity = enabled ? '' : '0.5';
+        swapBtn.style.cursor = enabled ? 'pointer' : 'not-allowed';
+    }
+
+    function swapCameraSides() {
+        const leftSelect = document.getElementById('leftCameraSelect');
+        const rightSelect = document.getElementById('rightCameraSelect');
+        if (!leftSelect || !rightSelect || !canSwapCameraSides()) {
+            showToast('左右手摄像头都选择后才能互换', 'warning');
+            return;
+        }
+
+        const leftValue = leftSelect.value;
+        leftSelect.value = rightSelect.value;
+        rightSelect.value = leftValue;
+        updateSwapCameraButtonState();
+        showToast('已互换左右手摄像头', 'info');
     }
 
     function updateCameraSelects(devices) {
@@ -447,13 +663,16 @@
                     alert('同一摄像头不能同时分配给左手和右手');
                     leftSelect.value = '';
                 }
+                updateSwapCameraButtonState();
             };
             rightSelect.onchange = () => {
                 if (rightSelect.value && rightSelect.value === leftSelect.value) {
                     alert('同一摄像头不能同时分配给左手和右手');
                     rightSelect.value = '';
                 }
+                updateSwapCameraButtonState();
             };
+            updateSwapCameraButtonState();
         }
     }
 
@@ -512,6 +731,7 @@
 
         const useDirectWS = window.CameraControl && window.CameraControl.isConnected();
         let hasError = false;
+        setCameraConfigBusy(true, '正在打开摄像头...', '正在向 Camera Server 发送配置命令，请勿重复点击。');
 
         if (!useDirectWS) {
             console.log('[CameraUI] WS未连接，使用HTTP降级配置摄像头');
@@ -522,13 +742,16 @@
             const leftDeviceName = leftSelect.options[leftSelect.selectedIndex].dataset.deviceName || leftSelect.options[leftSelect.selectedIndex].text;
 
             if (useDirectWS) {
+                setCameraConfigMessage('正在配置左手摄像头...', leftDeviceName);
                 const setResult = await window.CameraControl.setCamera('left', leftDeviceName, leftDeviceId);
                 if (!setResult.success) {
                     showToast('左手摄像头配置失败: ' + setResult.error, 'error');
                     hasError = true;
                 } else {
+                    setCameraConfigMessage('正在打开左手摄像头...', '后端正在初始化视频采集，请稍候。');
                     const openResult = await window.CameraControl.openCamera('left');
                     if (openResult.success) {
+                        markCameraFrame('left');
                         updateCameraStatus('left', '预览中', true);
                         startCameraThumbTimer();
                         console.log('[CameraUI] ✅ 左手摄像头已打开（WS）');
@@ -540,6 +763,7 @@
             } else {
                 // HTTP 降级模式：只配置，不打开（旧HLS模式，由realtimeEngine控制录制）
                 try {
+                    setCameraConfigMessage('正在配置左手摄像头...', leftDeviceName);
                     const resp = await fetch('/api/camera/set-camera', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -565,13 +789,16 @@
             const rightDeviceName = rightSelect.options[rightSelect.selectedIndex].dataset.deviceName || rightSelect.options[rightSelect.selectedIndex].text;
 
             if (useDirectWS) {
+                setCameraConfigMessage('正在配置右手摄像头...', rightDeviceName);
                 const setResult = await window.CameraControl.setCamera('right', rightDeviceName, rightDeviceId);
                 if (!setResult.success) {
                     showToast('右手摄像头配置失败: ' + setResult.error, 'error');
                     hasError = true;
                 } else {
+                    setCameraConfigMessage('正在打开右手摄像头...', '后端正在初始化视频采集，请稍候。');
                     const openResult = await window.CameraControl.openCamera('right');
                     if (openResult.success) {
+                        markCameraFrame('right');
                         updateCameraStatus('right', '预览中', true);
                         startCameraThumbTimer();
                         console.log('[CameraUI] ✅ 右手摄像头已打开（WS）');
@@ -582,6 +809,7 @@
                 }
             } else {
                 try {
+                    setCameraConfigMessage('正在配置右手摄像头...', rightDeviceName);
                     const resp = await fetch('/api/camera/set-camera', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -606,12 +834,13 @@
             isCameraStreaming = true;
             updateCameraStreamButton(true);
             if (useDirectWS) {
-                showToast('摄像头已打开，实时预览中 🎥', 'success');
+                showToast('摄像头已打开，实时预览中', 'success');
             } else {
                 showToast('摄像头已配置（HTTP模式），采集时自动录制', 'success');
             }
         }
 
+        setCameraConfigBusy(false);
         closeCameraConfig();
     }
 
@@ -631,6 +860,11 @@
         // 清空所有预览帧，避免残留上一次的画面
         clearPreviewImages();
         stopCameraThumbTimer();  // 停止缩略图定时器
+        ['left', 'right'].forEach(side => {
+            _lastPreviewFrameAt[side] = 0;
+            _thumbFailureCount[side] = 0;
+        });
+        _cameraDisconnectAlerted = false;
 
         isCameraStreaming = false;
         updateCameraStreamButton(false);
@@ -965,6 +1199,121 @@
         }
     }
 
+    function markCameraFrame(side) {
+        if (!side) return;
+        _lastPreviewFrameAt[side] = performance.now();
+        if (_thumbFailureCount[side] !== undefined) {
+            _thumbFailureCount[side] = 0;
+        }
+        _cameraDisconnectAlerted = false;
+    }
+
+    function startCameraWatchdog() {
+        if (_cameraWatchdogTimer) return;
+        _cameraWatchdogTimer = setInterval(() => {
+            if (!window.CameraControl || !window.CameraControl.isConnected()) return;
+
+            const camState = window.CameraControl.getCameraState();
+            const openedSides = ['left', 'right'].filter(side => camState[side] && camState[side].opened);
+            if (openedSides.length === 0) return;
+
+            const now = performance.now();
+            openedSides.forEach(side => {
+                const lastFrameAt = _lastPreviewFrameAt[side] || 0;
+                if (lastFrameAt > 0 && now - lastFrameAt > CAMERA_FRAME_STALE_MS) {
+                    updateCameraStatus(side, '无画面/疑似掉线', false);
+                    handleCameraDisconnect(`${side === 'left' ? '左手' : '右手'}摄像头超过 ${Math.round(CAMERA_FRAME_STALE_MS / 1000)} 秒没有画面更新`);
+                }
+            });
+        }, 2000);
+    }
+
+    function isCollectionRunning() {
+        return !!(window.collectionController &&
+            typeof window.collectionController.isRunning === 'function' &&
+            window.collectionController.isRunning());
+    }
+
+    function handleCameraDisconnect(reason) {
+        const shouldAlert = isCameraStreaming || isCollectionRunning();
+        if (!shouldAlert || _cameraDisconnectAlerted) return;
+        _cameraDisconnectAlerted = true;
+        showCameraEmergencyModal(reason || '摄像头连接异常');
+    }
+
+    function dismissCameraEmergencyModal() {
+        const modal = document.getElementById('cameraEmergencyModal');
+        if (modal) modal.remove();
+        _cameraEmergencyVisible = false;
+    }
+
+    function showCameraEmergencyModal(reason) {
+        if (_cameraEmergencyVisible) return;
+        _cameraEmergencyVisible = true;
+
+        const modal = document.createElement('div');
+        modal.id = 'cameraEmergencyModal';
+        modal.className = 'camera-emergency-overlay';
+        modal.innerHTML = `
+            <div class="camera-emergency-card" role="dialog" aria-modal="true" aria-labelledby="cameraEmergencyTitle">
+                <div class="camera-emergency-head" id="cameraEmergencyTitle">
+                    <i class="fas fa-exclamation-triangle"></i> 摄像头疑似掉线
+                </div>
+                <div class="camera-emergency-body">
+                    <div style="font-weight: 700; color: #991b1b; margin-bottom: 8px;">${escapeHtml(reason || '摄像头连接异常')}</div>
+                    <div>请现场工作人员立即中断当前采集，检查 USB 连接和相机占用情况，然后重新连接摄像头设备。</div>
+                </div>
+                <div class="camera-emergency-actions">
+                    <button type="button" class="camera-emergency-abort" id="cameraEmergencyAbortBtn">
+                        <i class="fas fa-stop-circle"></i> 紧急中断采集
+                    </button>
+                    <button type="button" class="camera-emergency-reconnect" id="cameraEmergencyReconnectBtn">
+                        <i class="fas fa-plug"></i> 重新连接摄像头
+                    </button>
+                    <button type="button" class="camera-emergency-dismiss" id="cameraEmergencyDismissBtn">我知道了</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        const abortBtn = document.getElementById('cameraEmergencyAbortBtn');
+        if (abortBtn) {
+            abortBtn.addEventListener('click', async () => {
+                try {
+                    if (window.collectionController && typeof window.collectionController.abortTask === 'function') {
+                        await window.collectionController.abortTask('camera_disconnected');
+                    }
+                    dismissCameraEmergencyModal();
+                } catch (err) {
+                    console.error('[CameraUI] 紧急中断采集失败:', err);
+                    showToast('紧急中断采集失败，请手动点击中断按钮', 'error');
+                }
+            });
+        }
+
+        const reconnectBtn = document.getElementById('cameraEmergencyReconnectBtn');
+        if (reconnectBtn) {
+            reconnectBtn.addEventListener('click', async () => {
+                dismissCameraEmergencyModal();
+                await openCameraConfig();
+            });
+        }
+
+        const dismissBtn = document.getElementById('cameraEmergencyDismissBtn');
+        if (dismissBtn) {
+            dismissBtn.addEventListener('click', dismissCameraEmergencyModal);
+        }
+    }
+
+    function escapeHtml(text) {
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
     // ==================== 摄像头缩略图自动刷新（左下角小窗，1s间隔） ====================
 
     let _thumbTimer = null;
@@ -1069,6 +1418,7 @@
         const cell = document.getElementById(`thumb${capitalize(side)}Cell`);
 
         if (result && result.success && result.frame) {
+            markCameraFrame(side);
             if (cell) cell.classList.remove('no-signal');
             if (img) img.src = `data:image/jpeg;base64,${result.frame}`;
             if (status) {
@@ -1077,6 +1427,12 @@
                 status.style.color = '#10b981';
             }
         } else {
+            if (_thumbFailureCount[side] !== undefined) {
+                _thumbFailureCount[side]++;
+                if (_thumbFailureCount[side] >= 3) {
+                    handleCameraDisconnect(`${side === 'left' ? '左手' : '右手'}摄像头连续抓帧失败`);
+                }
+            }
             if (cell) cell.classList.add('no-signal');
             if (img) img.removeAttribute('src');
             if (status) {

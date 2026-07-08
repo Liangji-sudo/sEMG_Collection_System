@@ -106,7 +106,12 @@
                 });
 
                 if (CamState.onStatusChange) {
-                    CamState.onStatusChange({ connected: false });
+                    CamState.onStatusChange({
+                        connected: false,
+                        reason: 'ws_closed',
+                        code: event.code,
+                        message: event.reason || ''
+                    });
                 }
 
                 if (event.code !== 1000) {
