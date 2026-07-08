@@ -336,10 +336,10 @@ def init_filters():
     log(f"[滤波器] 双设备滤波器初始化完成 (fs={BLE_SAMPLE_RATE}Hz)")
 
 # ================= 连接配置 =================
-CONNECT_TIMEOUT = 30.0
+CONNECT_TIMEOUT = 20.0
 SCAN_TIMEOUT = 3.0
-MAX_RETRIES = 3
-RETRY_DELAY = 2.0
+MAX_RETRIES = 1
+RETRY_DELAY = 1.0
 
 # ================= 批量发送配置 =================
 BATCH_INTERVAL = 0.005  # 5ms
@@ -457,6 +457,7 @@ class ServerState:
         # 扫描结果
         self.devices_found: Dict[str, Any] = {}
         self.scan_results: List[dict] = []
+        self.connection_lock = asyncio.Lock()
 
         # 消息队列
         self.msg_queue = PriorityQueue()
@@ -1212,102 +1213,119 @@ async def connect_device(ws, device_id: int, mac_or_name: str):
         # 【修复重连】等待 BLE 栈完全释放资源后再建新连接
         await asyncio.sleep(0.5)
 
-    for retry in range(MAX_RETRIES):
-        try:
-            await send_to_control(ws, action, {
-                'success': None,
-                'device_id': device_id,
-                'message': f"连接中 ({retry+1}/{MAX_RETRIES})...",
-                'mac': mac,
-            })
-            
-            client = BleakClient(device, timeout=CONNECT_TIMEOUT)
-            await client.connect()
-            
-            if client.is_connected:
-                dev.client = client
-                dev.device = device
-                dev.mac = mac
-                dev.name = device.name
-                dev.rssi = rssi
-                dev.reset_stats()
+    if state.connection_lock.locked():
+        await send_to_control(ws, action, {
+            'success': None,
+            'device_id': device_id,
+            'message': "等待蓝牙适配器空闲...",
+            'mac': mac,
+        })
 
-                log(f"[Dev{device_id}] 连接成功: {mac}")
-
-                # ===================== V1/V2 检测 (方法A: STATUS_CHAR 特征) ======
-                # 必须在配置命令之前检测，以便配置正确的 channel_map 和 num_imus
-                try:
-                    await dev.client.start_notify(
-                        STATUS_CHAR_UUID,
-                        create_status_handler(dev)
-                    )
-                    dev.hw_version = "V2"
-                    dev.channel_map = CHANNELS_MAP_V2
-                    dev.num_imus = 0  # 等待 Snapshot 更新实际值
-                    log(f"[Dev{device_id}] 检测到 V2 设备，已订阅状态通知")
-                except Exception as e:
-                    dev.hw_version = "V1"
-                    dev.channel_map = CHANNELS_MAP_V1
-                    dev.num_imus = MAX_NUM_IMUS_V1
-                    log(f"[Dev{device_id}] V1 设备 (STATUS_CHAR 不可用: {e})")
-                # ===================== V1/V2 检测结束 =====================
-
-                # ===================== 连接成功后发送配置命令 =====================
-                try:
-                    # 1. 发送采样率配置 (2kHz = 0x12)
-                    sample_rate_cmd = bytes([CMD_MAP['2kHz']])
-                    await send_control_command(dev, sample_rate_cmd)
-                    log(f"[Dev{device_id}] 已发送采样率配置: 2kHz (0x12)")
-                    await asyncio.sleep(0.1)  # 等待ESP32处理
-
-                    # 2. 发送复合配置命令 (0xC0 + [gain_index, mode, shift, imu_en])
-                    config = dev.config
-                    config_cmd = bytes([
-                        CMD_MAP['CONFIG'],
-                        config['gain_index'],
-                        0 if not config['is_16bit'] else 1,
-                        config['shift'],
-                        1 if config['imu_enabled'] else 0,
-                    ])
-                    await send_control_command(dev, config_cmd)
-                    log(f"[Dev{device_id}] 已发送复合配置: Gain={config['gain_index']}, Mode={'16bit' if config['is_16bit'] else '24bit'}, Shift={config['shift']}, IMU={config['imu_enabled']}")
-                    await asyncio.sleep(0.1)  # 等待ESP32处理
-
-                except Exception as e:
-                    log(f"[Dev{device_id}] 配置命令发送失败: {e}")
-                # ===================== 配置命令结束 =====================
-
+    async with state.connection_lock:
+        for retry in range(MAX_RETRIES):
+            try:
                 await send_to_control(ws, action, {
-                    'success': True,
+                    'success': None,
                     'device_id': device_id,
+                    'message': f"连接中 ({retry+1}/{MAX_RETRIES})，最长等待 {int(CONNECT_TIMEOUT)} 秒...",
                     'mac': mac,
-                    'name': device.name,
-                    'rssi': rssi,
-                    'connected': state.get_connected_devices(),
                 })
+                log(f"[Dev{device_id}] GATT connect start: timeout={CONNECT_TIMEOUT}s, retry={retry+1}/{MAX_RETRIES}")
 
-                # 广播连接事件
-                await broadcast_event('device_connected', {
-                    'device_id': device_id,
-                    'mac': mac,
-                    'name': device.name,
-                })
-                return
+                client = BleakClient(device, timeout=CONNECT_TIMEOUT)
+                await client.connect()
+            
+                if client.is_connected:
+                    dev.client = client
+                    dev.device = device
+                    dev.mac = mac
+                    dev.name = device.name
+                    dev.rssi = rssi
+                    dev.reset_stats()
+
+                    log(f"[Dev{device_id}] 连接成功: {mac}")
+
+                    # ===================== V1/V2 检测 (方法A: STATUS_CHAR 特征) ======
+                    # 必须在配置命令之前检测，以便配置正确的 channel_map 和 num_imus
+                    try:
+                        await dev.client.start_notify(
+                            STATUS_CHAR_UUID,
+                            create_status_handler(dev)
+                        )
+                        dev.hw_version = "V2"
+                        dev.channel_map = CHANNELS_MAP_V2
+                        dev.num_imus = 0  # 等待 Snapshot 更新实际值
+                        log(f"[Dev{device_id}] 检测到 V2 设备，已订阅状态通知")
+                    except Exception as e:
+                        dev.hw_version = "V1"
+                        dev.channel_map = CHANNELS_MAP_V1
+                        dev.num_imus = MAX_NUM_IMUS_V1
+                        log(f"[Dev{device_id}] V1 设备 (STATUS_CHAR 不可用: {e})")
+                    # ===================== V1/V2 检测结束 =====================
+
+                    # ===================== 连接成功后发送配置命令 =====================
+                    try:
+                        # 1. 发送采样率配置 (2kHz = 0x12)
+                        sample_rate_cmd = bytes([CMD_MAP['2kHz']])
+                        await send_control_command(dev, sample_rate_cmd)
+                        log(f"[Dev{device_id}] 已发送采样率配置: 2kHz (0x12)")
+                        await asyncio.sleep(0.1)  # 等待ESP32处理
+
+                        # 2. 发送复合配置命令 (0xC0 + [gain_index, mode, shift, imu_en])
+                        config = dev.config
+                        config_cmd = bytes([
+                            CMD_MAP['CONFIG'],
+                            config['gain_index'],
+                            0 if not config['is_16bit'] else 1,
+                            config['shift'],
+                            1 if config['imu_enabled'] else 0,
+                        ])
+                        await send_control_command(dev, config_cmd)
+                        log(f"[Dev{device_id}] 已发送复合配置: Gain={config['gain_index']}, Mode={'16bit' if config['is_16bit'] else '24bit'}, Shift={config['shift']}, IMU={config['imu_enabled']}")
+                        await asyncio.sleep(0.1)  # 等待ESP32处理
+
+                    except Exception as e:
+                        log(f"[Dev{device_id}] 配置命令发送失败: {e}")
+                    # ===================== 配置命令结束 =====================
+
+                    await send_to_control(ws, action, {
+                        'success': True,
+                        'device_id': device_id,
+                        'mac': mac,
+                        'name': device.name,
+                        'rssi': rssi,
+                        'connected': state.get_connected_devices(),
+                    })
+
+                    # 广播连接事件
+                    await broadcast_event('device_connected', {
+                        'device_id': device_id,
+                        'mac': mac,
+                        'name': device.name,
+                    })
+                    return
                 
-        except TimeoutError:
-            log(f"[Dev{device_id}] 连接超时")
-        except BleakError as e:
-            log(f"[Dev{device_id}] BLE 错误: {e}")
-        except Exception as e:
-            log(f"[Dev{device_id}] 连接异常: {e}")
-        
-        if retry < MAX_RETRIES - 1:
-            await asyncio.sleep(RETRY_DELAY)
+            except TimeoutError:
+                log(f"[Dev{device_id}] 连接超时（GATT connect 未在 {CONNECT_TIMEOUT}s 内返回）")
+            except BleakError as e:
+                log(f"[Dev{device_id}] BLE 错误: {e}")
+            except Exception as e:
+                log(f"[Dev{device_id}] 连接异常: {e}")
+
+            try:
+                if dev.client and dev.client.is_connected:
+                    await dev.client.disconnect()
+            except Exception:
+                pass
+            dev.client = None
+
+            if retry < MAX_RETRIES - 1:
+                await asyncio.sleep(RETRY_DELAY)
     
     await send_to_control(ws, action, {
         'success': False,
         'device_id': device_id,
-        'error': f"连接失败（已重试 {MAX_RETRIES} 次）",
+        'error': f"连接失败：蓝牙 GATT 连接超时或系统蓝牙栈无响应，请关闭手环电源重启/重新扫描后再试",
         'mac': mac,
     })
 

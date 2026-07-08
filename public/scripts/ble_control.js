@@ -19,6 +19,7 @@
     const HEARTBEAT_INTERVAL = 30000;
     const STATUS_UPDATE_INTERVAL = 5000;  // 【新增】状态更新间隔：5秒（用于电池和流模式显示）
     const MAX_RECONNECT_ATTEMPTS = 10;  // 【新增】最大重连次数
+    const BLE_CONNECT_UI_TIMEOUT_MS = 30000;
 
     // ================= 状态 =================
     const BleState = {
@@ -33,6 +34,10 @@
         devices: {
             1: { connected: false, streaming: false, mac: null, name: null, rssi: null },
             2: { connected: false, streaming: false, mac: null, name: null, rssi: null },
+        },
+        connectingDevices: {
+            1: { active: false, startedAt: 0, timer: null, mac: null },
+            2: { active: false, startedAt: 0, timer: null, mac: null },
         },
 
         // 扫描结果
@@ -305,6 +310,7 @@ async function decodeData(buffer) {
             const deviceId = parseInt(action.slice(-1));
             
             if (msg.success === true) {
+                clearDeviceConnecting(deviceId);
                 BleState.devices[deviceId] = {
                     connected: true,
                     streaming: false,
@@ -318,11 +324,12 @@ async function decodeData(buffer) {
                 updateDeviceUI(deviceId);
                 showToast(`设备 ${deviceId} 连接成功`);
             } else if (msg.success === false) {
+                clearDeviceConnecting(deviceId);
                 updateDeviceUI(deviceId);
                 showToast(`设备 ${deviceId} 连接失败: ${msg.error}`, 'error');
             } else {
                 // 连接中
-                updateDeviceStatus(deviceId, 'connecting');
+                setDeviceConnecting(deviceId, msg.mac || BleState.connectingDevices[deviceId].mac, msg.message);
             }
             updateConnectButton(deviceId, msg.success !== null);
         }
@@ -524,8 +531,76 @@ async function decodeData(buffer) {
             BleState.onScanResult(devices);
         }
     }
+
+    function anyDeviceConnecting() {
+        return BleState.connectingDevices[1].active || BleState.connectingDevices[2].active;
+    }
+
+    function setDeviceConnecting(deviceId, mac, message) {
+        const state = BleState.connectingDevices[deviceId];
+        if (!state.active) {
+            state.startedAt = Date.now();
+        }
+        state.active = true;
+        state.mac = mac || state.mac;
+        state.message = message || '正在等待蓝牙连接返回...';
+
+        if (!state.timer) {
+            state.timer = setInterval(() => updateConnectingUI(deviceId), 1000);
+        }
+
+        updateDeviceStatus(deviceId, 'connecting');
+        updateConnectingUI(deviceId);
+        updateConnectButton(1, false);
+        updateConnectButton(2, false);
+    }
+
+    function clearDeviceConnecting(deviceId) {
+        const state = BleState.connectingDevices[deviceId];
+        if (state.timer) {
+            clearInterval(state.timer);
+        }
+        state.active = false;
+        state.startedAt = 0;
+        state.timer = null;
+        state.mac = null;
+        state.message = '';
+        updateConnectButton(1, true);
+        updateConnectButton(2, true);
+    }
+
+    function updateConnectingUI(deviceId) {
+        const state = BleState.connectingDevices[deviceId];
+        if (!state.active) return;
+
+        const elapsed = Math.floor((Date.now() - state.startedAt) / 1000);
+        const btn = document.getElementById(`connect${deviceId}Btn`);
+        if (btn) {
+            btn.disabled = true;
+            btn.className = 'bt-connect-btn connect';
+            btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> 连接中 ${elapsed}s`;
+            btn.title = state.message || '正在等待蓝牙连接返回';
+        }
+
+        const nameEl = document.getElementById(`device${deviceId}Name`);
+        if (nameEl) {
+            nameEl.textContent = state.message || `正在连接... ${elapsed}s`;
+        }
+
+        if (elapsed * 1000 >= BLE_CONNECT_UI_TIMEOUT_MS) {
+            clearDeviceConnecting(deviceId);
+            updateDeviceStatus(deviceId, 'disconnected');
+            showToast(`设备 ${deviceId} 连接等待超时，请重启手环或重新扫描后再试`, 'error');
+        }
+    }
     
     function updateDeviceUI(deviceId) {
+        if (BleState.connectingDevices[deviceId].active) {
+            updateDeviceStatus(deviceId, 'connecting');
+            updateConnectingUI(deviceId);
+            return;
+        }
+
         const dev = BleState.devices[deviceId];
         
         updateDeviceStatus(deviceId, dev.connected ? 'connected' : 'disconnected');
@@ -581,16 +656,22 @@ async function decodeData(buffer) {
     function updateConnectButton(deviceId, enabled) {
         const btn = document.getElementById(`connect${deviceId}Btn`);
         const dev = BleState.devices[deviceId];
+        const connecting = BleState.connectingDevices[deviceId].active;
+        const blockedByOther = anyDeviceConnecting() && !connecting;
         
         if (btn) {
-            btn.disabled = !enabled;
+            btn.disabled = !enabled || connecting || blockedByOther;
             
-            if (dev.connected) {
+            if (connecting) {
+                updateConnectingUI(deviceId);
+            } else if (dev.connected) {
                 btn.innerHTML = '<i class="fas fa-unlink"></i> 断开';
                 btn.className = 'bt-connect-btn disconnect';
+                btn.title = blockedByOther ? '等待另一只手环连接完成' : '';
             } else {
                 btn.innerHTML = '<i class="fas fa-link"></i> 连接';
                 btn.className = 'bt-connect-btn connect';
+                btn.title = blockedByOther ? '等待另一只手环连接完成' : '';
             }
         }
     }
@@ -655,9 +736,14 @@ async function decodeData(buffer) {
         
         // 连接设备
         connectDevice: (deviceId, mac) => {
-            updateConnectButton(deviceId, false);
-            updateDeviceStatus(deviceId, 'connecting');
-            return send({ action: `connect${deviceId}`, mac: mac });
+            setDeviceConnecting(deviceId, mac, '正在等待蓝牙连接返回...');
+            const ok = send({ action: `connect${deviceId}`, mac: mac });
+            if (!ok) {
+                clearDeviceConnecting(deviceId);
+                updateDeviceStatus(deviceId, 'disconnected');
+                showToast('未连接到BLE服务器，无法连接设备', 'error');
+            }
+            return ok;
         },
         
         // 断开设备
