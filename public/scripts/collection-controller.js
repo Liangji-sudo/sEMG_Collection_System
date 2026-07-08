@@ -1985,6 +1985,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                     label: '精准对齐同步',
                     icon: '🎯',
                     color: '#ef4444',
+                    gifFile: 'sync_alignment.gif',
                     _isSyncPrompt: true
                 };
 
