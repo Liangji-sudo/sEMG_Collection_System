@@ -395,7 +395,7 @@
         };
 
         window.CameraControl.onCameraStateChange = function(status) {
-            updateCameraEncodingStatus(status.encoding_details || []);
+            updateCameraEncodingStatus(status.encoding_details || [], status);
         };
     }
 
@@ -969,9 +969,11 @@
             console.log('[CameraUI] 关闭结果:', results);
             const status = await window.CameraControl.getStatus?.();
             if (status && status.success !== false) {
-                updateCameraEncodingStatus(status.encoding_details || []);
+                updateCameraEncodingStatus(status.encoding_details || [], status);
                 if ((status.encoding_jobs || 0) > 0) {
-                    showToast(`摄像头已断开，${status.encoding_jobs} 个视频仍在后台压缩`, 'info');
+                    const queued = status.encoding_queued_jobs || 0;
+                    const active = status.encoding_active_jobs || 0;
+                    showToast(`摄像头已断开，视频任务 ${status.encoding_jobs} 个（压缩中 ${active}，排队 ${queued}）`, 'info');
                 }
             }
         }
@@ -1233,7 +1235,20 @@
         return `${min} 分 ${sec} 秒`;
     }
 
-    function updateCameraEncodingStatus(details) {
+    function formatBytes(bytes) {
+        const value = Number(bytes || 0);
+        if (!Number.isFinite(value) || value <= 0) return '0 MB';
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let size = value;
+        let idx = 0;
+        while (size >= 1024 && idx < units.length - 1) {
+            size /= 1024;
+            idx += 1;
+        }
+        return `${size.toFixed(idx >= 2 ? 1 : 0)} ${units[idx]}`;
+    }
+
+    function updateCameraEncodingStatus(details, status) {
         ensureCameraRuntimeUi();
         const panel = document.getElementById('cameraEncodingPanel');
         const percentEl = document.getElementById('cameraEncodingPercent');
@@ -1250,6 +1265,7 @@
         }
 
         const active = jobs.filter(job => job.status === 'encoding');
+        const queued = jobs.filter(job => job.status === 'queued');
         const failed = jobs.filter(job => job.status === 'failed');
         const done = jobs.filter(job => job.status === 'done');
         _cameraEncodingActive = active.length > 0;
@@ -1268,6 +1284,19 @@
             if (percentEl) percentEl.textContent = `${percent}%`;
             if (fillEl) fillEl.style.width = `${Math.max(1, Math.min(100, Number(percent)))}%`;
             detailEl.textContent = `${first.side || ''} ${percent}% · 预计剩余 ${eta}${extra}`;
+        } else if (queued.length > 0) {
+            const queuedRawBytes = status && status.encoding_raw_bytes !== undefined
+                ? status.encoding_raw_bytes
+                : queued.reduce((sum, job) => sum + Number(job.raw_size || 0), 0);
+            const freeBytes = status ? status.disk_free_bytes : null;
+            const grace = status && status.encoding_idle_grace_seconds !== undefined
+                ? status.encoding_idle_grace_seconds
+                : (queued[0].idle_grace_seconds || 0);
+            panel.classList.remove('working');
+            if (percentEl) percentEl.textContent = `${queued.length} 个排队`;
+            if (fillEl) fillEl.style.width = '1%';
+            const freeText = freeBytes === null || freeBytes === undefined ? '' : `，磁盘剩余 ${formatBytes(freeBytes)}`;
+            detailEl.textContent = `采集优先：${queued.length} 个视频等待空闲 ${grace}s 后单线程压缩，原始占用 ${formatBytes(queuedRawBytes)}${freeText}`;
         } else if (failed.length > 0) {
             panel.classList.remove('working');
             if (percentEl) percentEl.textContent = '失败';
@@ -1391,7 +1420,7 @@
                     didCameraStatusPoll = true;
                     const cameraStatus = await window.CameraControl.getStatus();
                     if (cameraStatus && cameraStatus.success !== false) {
-                        updateCameraEncodingStatus(cameraStatus.encoding_details || []);
+                        updateCameraEncodingStatus(cameraStatus.encoding_details || [], cameraStatus);
                     }
                 }
             } catch (error) {
