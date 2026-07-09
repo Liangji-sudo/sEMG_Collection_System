@@ -49,6 +49,7 @@ ENCODING_THREADS = _env_int('VIDEO_ENCODING_THREADS', 2, 1)
 ENCODING_X264_PRESET = os.environ.get('VIDEO_ENCODING_PRESET', 'superfast').strip() or 'superfast'
 ENCODING_X264_CRF = os.environ.get('VIDEO_ENCODING_CRF', '24').strip() or '24'
 ENCODING_MPEG4_QV = os.environ.get('VIDEO_ENCODING_MPEG4_QV', '5').strip() or '5'
+RECORDING_STALE_SECONDS = _env_int('CAMERA_RECORDING_STALE_SECONDS', 5, 2)
 
 # ==================== ffmpeg 查找 ====================
 
@@ -470,6 +471,10 @@ class FrameRecorder:
         self.frame_count = 0
         self.first_frame_real_time = None   # 第一帧实际到达的 wall-clock 时间
         self.last_frame_real_time = None    # 最后一帧实际到达的 wall-clock 时间（每帧更新）
+        self.write_error = None
+        self.last_write_error_at = None
+        self.write_error = None
+        self.last_write_error_at = None
 
     def start(self, output_filename, start_timestamp=None):
         """开始录制 — 打开原始 MJPEG 文件
@@ -508,6 +513,10 @@ class FrameRecorder:
         else:
             self.recording_started_at = time.time()
         self.frame_count = 0
+        self.first_frame_real_time = None
+        self.last_frame_real_time = None
+        self.write_error = None
+        self.last_write_error_at = None
         print(f'[FrameRecorder] [{self.side}] \u25B6 开始录制: {self.output_path}')
         print(f'[FrameRecorder] [{self.side}]   原始MJPEG: {self.raw_path}')
         return True
@@ -524,6 +533,8 @@ class FrameRecorder:
                 self.raw_file.write(frame_bytes)
                 self.frame_count += 1
             except Exception as e:
+                self.write_error = str(e)
+                self.last_write_error_at = time.time()
                 print(f'[FrameRecorder] [{self.side}] 写入帧失败: {e}')
 
     def stop_recording_only(self):
@@ -1047,7 +1058,8 @@ class CameraServer:
             'type': 'recording_status',
             'recording': len(recording_sides) > 0,
             'recording_sides': recording_sides,
-            'preview_available': opened_sides
+            'preview_available': opened_sides,
+            'recording_health': self._get_recording_health()
         })
 
     # ==================== WebSocket 客户端处理 ====================
@@ -1551,6 +1563,56 @@ class CameraServer:
     def _has_active_recording(self):
         return any(rec.recording for rec in self.recorders.values())
 
+    def _get_recording_health(self):
+        now = time.time()
+        health = {}
+        for side in ['left', 'right']:
+            rec = self.recorders.get(side)
+            if not rec or not rec.recording:
+                continue
+
+            capture = self.captures.get(side)
+            capture_running = bool(capture and capture.running)
+            last_write_at = rec.last_frame_real_time
+            started_at = rec.recording_started_at or now
+            seconds_since_write = (now - last_write_at) if last_write_at else None
+            seconds_since_start = max(0.0, now - started_at)
+            raw_size = 0
+            try:
+                if rec.raw_path and rec.raw_path.exists():
+                    raw_size = os.path.getsize(rec.raw_path)
+            except Exception:
+                raw_size = 0
+
+            ok = True
+            reason = ''
+            if rec.write_error:
+                ok = False
+                reason = f'视频写盘失败: {rec.write_error}'
+            elif not capture_running:
+                ok = False
+                reason = '摄像头采集进程已停止，录像无法继续写入'
+            elif rec.frame_count <= 0 and seconds_since_start > RECORDING_STALE_SECONDS:
+                ok = False
+                reason = f'录像启动后 {RECORDING_STALE_SECONDS}s 内没有写入任何帧'
+            elif seconds_since_write is not None and seconds_since_write > RECORDING_STALE_SECONDS:
+                ok = False
+                reason = f'录像已 {seconds_since_write:.1f}s 没有写入新帧'
+
+            health[side] = {
+                'recording': True,
+                'ok': ok,
+                'reason': reason,
+                'capture_running': capture_running,
+                'frame_count': rec.frame_count,
+                'raw_size': raw_size,
+                'started_at': started_at,
+                'last_write_at': last_write_at,
+                'seconds_since_write': round(seconds_since_write, 1) if seconds_since_write is not None else None,
+                'stale_threshold_seconds': RECORDING_STALE_SECONDS,
+            }
+        return health
+
     def _schedule_encoding_dispatch(self, delay=None):
         delay = ENCODING_IDLE_GRACE_SECONDS if delay is None else max(0, float(delay))
         now = time.time()
@@ -1911,6 +1973,7 @@ class CameraServer:
                 side: rec.recording if rec else False
                 for side, rec in self.recorders.items()
             },
+            'recording_health': self._get_recording_health(),
             'encoding_jobs': len(encoding_details),
             'encoding_active_jobs': encoding_active_jobs,
             'encoding_queued_jobs': encoding_queued_jobs,

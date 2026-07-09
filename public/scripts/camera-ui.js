@@ -23,6 +23,7 @@
     let _encodingHideTimer = null;
     let _cameraEncodingActive = false;
     let _cameraEncodingDrag = null;
+    const _cameraRecordingFaultKeys = new Set();
     const _announcedEncodingDone = new Set();
     const _lastPreviewFrameAt = { left: 0, right: 0 };
     const _thumbFailureCount = { left: 0, right: 0 };
@@ -468,6 +469,7 @@
         window.CameraControl.onRecordingStatus = function(status) {
             console.log('[CameraUI] 录制状态更新:', status);
             syncCameraAvailabilityStatus(status);
+            checkCameraRecordingHealth(status);
             if (status.recording) {
                 // 正在录制中 → 显示"写盘中"，禁用预览
                 status.recording_sides.forEach(side => {
@@ -492,6 +494,7 @@
 
         window.CameraControl.onCameraStateChange = function(status) {
             syncCameraAvailabilityStatus(status);
+            checkCameraRecordingHealth(status);
             updateCameraEncodingStatus(status.encoding_details || [], status);
         };
     }
@@ -1537,6 +1540,7 @@
                     const cameraStatus = await window.CameraControl.getStatus();
                     if (cameraStatus && cameraStatus.success !== false) {
                         syncCameraAvailabilityStatus(cameraStatus);
+                        checkCameraRecordingHealth(cameraStatus);
                         updateCameraEncodingStatus(cameraStatus.encoding_details || [], cameraStatus);
                     }
                 }
@@ -1598,6 +1602,47 @@
         }
     }
 
+    function checkCameraRecordingHealth(status) {
+        if (!status || !isCollectionRunning()) {
+            _cameraRecordingFaultKeys.clear();
+            return;
+        }
+
+        const health = status.recording_health || {};
+        const recording = status.recording || {};
+        const activeSides = new Set(Array.isArray(status.recording_sides) ? status.recording_sides : []);
+        if (recording && typeof recording === 'object') {
+            ['left', 'right'].forEach(side => {
+                if (recording[side]) activeSides.add(side);
+            });
+        }
+
+        if (activeSides.size === 0) {
+            _cameraRecordingFaultKeys.clear();
+            return;
+        }
+
+        ['left', 'right'].forEach(side => {
+            const item = health[side];
+            if (!item || !item.recording || item.ok !== false) return;
+
+            const key = `${side}:${item.reason || 'recording_fault'}:${item.started_at || ''}`;
+            if (_cameraRecordingFaultKeys.has(key)) return;
+            _cameraRecordingFaultKeys.add(key);
+
+            const label = side === 'left' ? '左手' : '右手';
+            const frames = Number.isFinite(Number(item.frame_count)) ? `，已写入 ${item.frame_count} 帧` : '';
+            const stale = item.seconds_since_write !== null && item.seconds_since_write !== undefined
+                ? `，距上一帧 ${item.seconds_since_write}s`
+                : '';
+            updateCameraStatus(side, '录像异常', false);
+            showCameraEmergencyModal(
+                `${label}摄像头录像出现问题：${item.reason || '后端录像健康检查失败'}${frames}${stale}`,
+                '摄像头录像异常'
+            );
+        });
+    }
+
     function markCameraFrame(side) {
         if (!side) return;
         _lastPreviewFrameAt[side] = performance.now();
@@ -1611,6 +1656,7 @@
         if (_cameraWatchdogTimer) return;
         _cameraWatchdogTimer = setInterval(() => {
             if (!window.CameraControl || !window.CameraControl.isConnected()) return;
+            if (isCollectionRunning()) return;
 
             const camState = window.CameraControl.getCameraState();
             const openedSides = ['left', 'right'].filter(side => camState[side] && camState[side].opened);
@@ -1653,7 +1699,7 @@
         _cameraEmergencyVisible = false;
     }
 
-    function showCameraEmergencyModal(reason) {
+    function showCameraEmergencyModal(reason, title = '摄像头疑似掉线') {
         if (_cameraEmergencyVisible) return;
         _cameraEmergencyVisible = true;
 
@@ -1663,7 +1709,7 @@
         modal.innerHTML = `
             <div class="camera-emergency-card" role="dialog" aria-modal="true" aria-labelledby="cameraEmergencyTitle">
                 <div class="camera-emergency-head" id="cameraEmergencyTitle">
-                    <i class="fas fa-exclamation-triangle"></i> 摄像头疑似掉线
+                    <i class="fas fa-exclamation-triangle"></i> ${escapeHtml(title)}
                 </div>
                 <div class="camera-emergency-body">
                     <div style="font-weight: 700; color: #991b1b; margin-bottom: 8px;">${escapeHtml(reason || '摄像头连接异常')}</div>
