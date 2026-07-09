@@ -504,8 +504,8 @@ class FrameRecorder:
             return False
 
         self.output_path = self.output_dir / safe_name
-        if self.output_path.suffix.lower() != '.mp4':
-            self.output_path = self.output_path.with_suffix('.mp4')
+        if self.output_path.suffix.lower() != '.avi':
+            self.output_path = self.output_path.with_suffix('.avi')
         self.raw_path = self.output_path.with_suffix('.mjpeg')
         self.recording_marker_path = self.raw_path.with_suffix(self.raw_path.suffix + VIDEO_ENCODER_RECORDING_SUFFIX)
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -729,6 +729,70 @@ class FrameRecorder:
 
         except Exception as e:
             print(f'[FrameRecorder] [{self.side}] \u274C 编码异常: {e}')
+            import traceback
+            traceback.print_exc()
+            return {'success': False, 'error': str(e)}
+
+    def encode_stopped_recording(self, progress_callback=None):
+        """Wrap a closed MJPEG temp file into AVI without H.264/MP4 compression."""
+        if not self.raw_path or not self.raw_path.exists():
+            return {'success': False, 'error': f'MJPEG file not found: {self.raw_path}'}
+
+        raw_size = os.path.getsize(self.raw_path)
+        try:
+            wall_duration = 0
+            if self.first_frame_real_time and self.last_frame_real_time:
+                wall_duration = max(0.001, self.last_frame_real_time - self.first_frame_real_time)
+            effective_fps = (self.frame_count / wall_duration) if wall_duration > 0 else 30.0
+            effective_fps = max(1.0, min(60.0, effective_fps))
+            video_seconds = self.frame_count / max(effective_fps, 1.0)
+            remux_timeout = int(max(60, min(1800, video_seconds * 0.5 + 120)))
+
+            result = subprocess.run([
+                self.ffmpeg_path,
+                '-f', 'mjpeg',
+                '-framerate', f'{effective_fps:.6f}',
+                '-i', str(self.raw_path),
+                '-an',
+                '-c:v', 'copy',
+                '-y',
+                str(self.output_path)
+            ], capture_output=True, text=True, timeout=remux_timeout,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
+
+            if result.returncode != 0 or not self.output_path.exists():
+                stderr_tail = result.stderr[-500:] if result.stderr else '(none)'
+                print(f'[FrameRecorder] [{self.side}] ffmpeg AVI remux failed: {stderr_tail}')
+                return {'success': False, 'error': f'AVI remux failed: {stderr_tail[:200]}'}
+
+            video_size = os.path.getsize(self.output_path)
+            if progress_callback:
+                progress_callback(100.0, 0.0, '')
+            ratio = raw_size / video_size if video_size > 0 else 0
+            print(f'[FrameRecorder] [{self.side}] AVI saved: {self.output_path} '
+                  f'({video_size} bytes, {video_size/(1024*1024):.1f} MB, '
+                  f'fps={effective_fps:.2f}, raw/avi={ratio:.1f}x)')
+
+            try:
+                os.remove(str(self.raw_path))
+            except Exception as e:
+                print(f'[FrameRecorder] [{self.side}] cleanup raw MJPEG failed: {e}')
+            try:
+                meta_path = self.raw_path.with_suffix(self.raw_path.suffix + VIDEO_ENCODER_META_SUFFIX)
+                if meta_path.exists():
+                    meta_path.unlink()
+            except Exception:
+                pass
+
+            return {
+                'success': True,
+                'path': str(self.output_path),
+                'size': video_size,
+                'frame_count': self.frame_count,
+                'timing': self._extract_timing(self.output_path)
+            }
+        except Exception as e:
+            print(f'[FrameRecorder] [{self.side}] AVI remux exception: {e}')
             import traceback
             traceback.print_exc()
             return {'success': False, 'error': str(e)}
@@ -957,6 +1021,7 @@ class CameraServer:
             f'workers={max(1, ENCODING_WORKERS)}, threads={ENCODING_THREADS}, '
             f'preset={ENCODING_X264_PRESET}, crf={ENCODING_X264_CRF}'
         )
+        print('[CameraServer] video compression disabled; recordings are finalized as AVI')
         self._queue_orphan_mjpeg_files()
 
     # ==================== 帧广播任务 ====================
@@ -1066,6 +1131,46 @@ class CameraServer:
         except Exception as e:
             print(f'[CameraServer] 启动独立视频转码 worker 失败: {e}')
             return False
+
+    def _queue_orphan_mjpeg_files(self):
+        """Background video compression is disabled; do not queue old MJPEG files."""
+        return
+
+    def _read_video_encoder_status(self):
+        """Ignore stale worker status files when AVI/no-compression mode is enabled."""
+        return {}
+
+    def _launch_video_encoder_worker(self):
+        """Keep the old API as a no-op so no detached MP4 worker is started."""
+        print('[CameraServer] video_encoder_worker disabled; skip launch')
+        return False
+
+    def _set_video_collection_active(self, active, data=None):
+        marker_path = self._video_collection_active_path()
+        if active:
+            payload = {
+                'active': True,
+                'mode': (data or {}).get('mode') or 'all_sessions',
+                'recordingSessionId': (data or {}).get('recordingSessionId') or (data or {}).get('sessionId'),
+                'sessionCount': (data or {}).get('sessionCount'),
+                'updated_at': time.time(),
+                'video_encoding': 'disabled'
+            }
+            try:
+                tmp_path = marker_path.with_suffix(marker_path.suffix + '.tmp')
+                with open(tmp_path, 'w', encoding='utf-8') as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
+                os.replace(tmp_path, marker_path)
+            except Exception as e:
+                return {'success': False, 'error': str(e)}
+            return {'success': True, 'active': True, 'video_encoding': 'disabled'}
+
+        try:
+            if marker_path.exists():
+                marker_path.unlink()
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+        return {'success': True, 'active': False, 'video_encoding': 'disabled'}
 
     async def start_broadcast_task(self):
         """启动帧广播后台任务"""
@@ -1270,7 +1375,7 @@ class CameraServer:
             side = data.get('side')
             if side and side in self.recorders:
                 timestamp = datetime.now().strftime('%y%m%d_%H%M%S')
-                output_filename = f'recording_{side}_{timestamp}.mp4'
+                output_filename = f'recording_{side}_{timestamp}.avi'
                 return await self._do_stop_and_save(side, output_filename)
             return {'success': True, 'message': '未在录制中'}
         else:
@@ -1532,7 +1637,7 @@ class CameraServer:
         if side in self.recorders:
             recorder = self.recorders[side]
             print(f'[CameraServer] [{side}] 关闭摄像头前先停止残留录制器 (recording={recorder.recording})')
-            output_filename = os.path.basename(str(recorder.output_path or f'recording_{side}_{datetime.now().strftime("%y%m%d_%H%M%S")}.mp4'))
+            output_filename = os.path.basename(str(recorder.output_path or f'recording_{side}_{datetime.now().strftime("%y%m%d_%H%M%S")}.avi'))
             try:
                 await self._do_stop_and_save(side, output_filename)
             except Exception as e:
@@ -2004,6 +2109,41 @@ class CameraServer:
         """
         return {'success': True, 'server_time': time.time()}
 
+    async def _do_stop_and_save(self, side, output_filename):
+        """Stop recording and save a valid AVI immediately; no background MP4 worker."""
+        if side not in self.recorders:
+            return {'success': False, 'error': f'{side} side recorder not started'}
+
+        recorder = self.recorders[side]
+        if side in self.captures:
+            self.captures[side].frame_recorder = None
+
+        loop = asyncio.get_running_loop()
+        save_result = await loop.run_in_executor(None, recorder.stop_and_save)
+
+        if side in self.recorders:
+            del self.recorders[side]
+
+        if save_result and save_result.get('success'):
+            result = {
+                'success': True,
+                'side': side,
+                'output_path': save_result.get('path', ''),
+                'filename': os.path.basename(save_result.get('path', output_filename or '')),
+                'file_size': save_result.get('size', 0),
+                'timing': save_result.get('timing', {}),
+                'encoding': 'disabled',
+                'container': 'avi'
+            }
+            print(f'[CameraServer] [{side}] AVI saved without background compression: {result["output_path"]}')
+        else:
+            error_detail = (save_result or {}).get('error', 'recording save failed')
+            result = {'success': False, 'error': f'recording save failed: {error_detail}'}
+
+        await self._push_recording_status()
+        print(f'[CameraServer] [{side}] recording ended; MJPEG preview continues')
+        return result
+
     def _cmd_get_status(self):
         """获取服务器状态"""
         now = time.time()
@@ -2081,6 +2221,51 @@ class CameraServer:
             }
         }
         return status
+
+    def _cmd_get_status(self):
+        """Get server status; MP4 background encoding is disabled in AVI mode."""
+        try:
+            disk_usage = shutil.disk_usage(str(self.output_dir))
+            disk_free_bytes = disk_usage.free
+        except Exception:
+            disk_free_bytes = None
+
+        return {
+            'success': True,
+            'cameras': self.cameras,
+            'captures': {
+                side: cap.get_status() if cap else None
+                for side, cap in self.captures.items()
+            },
+            'recording': {
+                side: rec.recording if rec else False
+                for side, rec in self.recorders.items()
+            },
+            'recording_health': self._get_recording_health(),
+            'encoding_jobs': 0,
+            'encoding_active_jobs': 0,
+            'encoding_queued_jobs': 0,
+            'encoding_raw_bytes': 0,
+            'encoding_idle_grace_seconds': 0,
+            'encoding_dispatch_due_at': None,
+            'encoding_countdown_seconds': None,
+            'encoding_mode': 'disabled',
+            'encoding_mode_reason': 'avi_no_compression',
+            'encoding_workers': 0,
+            'encoding_threads': 0,
+            'encoding_preset': None,
+            'encoding_crf': None,
+            'encoding_worker_running': False,
+            'encoding_worker_pid': None,
+            'worker_start_skipped': True,
+            'worker_skip_reason': 'video compression disabled',
+            'disk_free_bytes': disk_free_bytes,
+            'encoding_details': [],
+            'preview_subscribers': {
+                side: len(subs)
+                for side, subs in self.preview_subscribers.items()
+            }
+        }
 
     async def _send_status(self, websocket):
         """向新客户端发送当前状态"""
