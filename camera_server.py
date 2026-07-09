@@ -45,7 +45,7 @@ def _env_int(name, default, minimum=None):
 
 ENCODING_IDLE_GRACE_SECONDS = _env_int('VIDEO_ENCODING_IDLE_GRACE_SECONDS', 30, 0)
 ENCODING_WORKERS = _env_int('VIDEO_ENCODING_WORKERS', 1, 1)
-ENCODING_THREADS = _env_int('VIDEO_ENCODING_THREADS', 2, 1)
+ENCODING_THREADS = _env_int('VIDEO_ENCODING_THREADS', 4, 1)
 ENCODING_X264_PRESET = os.environ.get('VIDEO_ENCODING_PRESET', 'superfast').strip() or 'superfast'
 ENCODING_X264_CRF = os.environ.get('VIDEO_ENCODING_CRF', '24').strip() or '24'
 ENCODING_MPEG4_QV = os.environ.get('VIDEO_ENCODING_MPEG4_QV', '5').strip() or '5'
