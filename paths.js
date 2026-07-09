@@ -64,6 +64,32 @@ const PATHS = {
     log: path.join(getDataRoot(), 'log'),
 };
 
+function seedDefaultConfigFiles() {
+    const bundledConfigDir = path.join(getSourceRoot(), 'config');
+    const runtimeConfigDir = PATHS.config;
+
+    if (path.resolve(bundledConfigDir) === path.resolve(runtimeConfigDir)) {
+        return;
+    }
+    if (!fs.existsSync(bundledConfigDir)) {
+        return;
+    }
+
+    try {
+        const files = fs.readdirSync(bundledConfigDir).filter(file => file.toLowerCase().endsWith('.json'));
+        files.forEach(file => {
+            const sourcePath = path.join(bundledConfigDir, file);
+            const targetPath = path.join(runtimeConfigDir, file);
+            if (!fs.existsSync(targetPath)) {
+                fs.copyFileSync(sourcePath, targetPath);
+                console.log(`[Paths] Seed default config: ${file}`);
+            }
+        });
+    } catch (error) {
+        console.error('[Paths] Failed to seed default config files:', error);
+    }
+}
+
 // 确保必要的目录存在
 function ensureDirectories() {
     const dirs = [PATHS.storage, PATHS.config, PATHS.log];
@@ -73,6 +99,7 @@ function ensureDirectories() {
             console.log(`[Paths] 创建目录: ${dir}`);
         }
     });
+    seedDefaultConfigFiles();
 }
 
 // 初始化时创建目录

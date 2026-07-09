@@ -1,0 +1,742 @@
+{
+  "templateName": "Config1-final",
+  "version": "2.0",
+  "categoryLabels": {
+    "category1": "大类",
+    "category2": "大场景",
+    "category3": "子场景",
+    "category4": "人群"
+  },
+  "tasks": [
+    {
+      "id": "discrete_gesture",
+      "name": "离散手势采集",
+      "enabled": true
+    },
+    {
+      "id": "continual_gesture_1",
+      "name": "连续手势采集1",
+      "enabled": false
+    },
+    {
+      "id": "continual_gesture_2",
+      "name": "连续手势采集2",
+      "enabled": false
+    },
+    {
+      "id": "continual_gesture_3",
+      "name": "连续手势采集3",
+      "enabled": false
+    }
+  ],
+  "category1": [
+    {
+      "id": "static",
+      "name": "静态采集",
+      "enabled": true
+    }
+  ],
+  "category2": [
+    {
+      "id": "sitting",
+      "name": "坐姿",
+      "enabled": true
+    },
+    {
+      "id": "站姿",
+      "name": "站姿",
+      "enabled": false
+    }
+  ],
+  "category3": [
+    {
+      "id": "(正向)_坐姿_小臂自然抬起-四向",
+      "name": "(正向)_坐姿_小臂自然抬起-四向",
+      "instruction": "无需动捕+离散手势stage+四向",
+      "enabled": true,
+      "gestures": [
+        "放松",
+        "拇指外滑",
+        "拇指内滑",
+        "拇指前滑",
+        "拇指后滑"
+      ],
+      "shuffleGestures": true,
+      "needMocap": false
+    },
+    {
+      "id": "(正向)_站姿_小臂自然抬起",
+      "name": "(正向)_站姿_小臂自然抬起",
+      "instruction": "无需动捕+离散手势stage",
+      "enabled": false,
+      "gestures": [
+        "手部自然放松",
+        "拇指和食指敲击",
+        "拇指和中指敲击",
+        "拇指贴着食指左滑",
+        "拇指贴着食指右滑",
+        "拇指贴着食指前滑",
+        "拇指贴着食指后滑",
+        "拇指和食指捏住后向左拖动",
+        "拇指和食指捏住后向右拖动",
+        "拇指和食指捏住后向上拖动",
+        "拇指和食指捏住后向下拖动",
+        "拇指贴着食指连续敲击2次边缘",
+        "拇指贴着食指边缘敲击后保持1s",
+        "拇指贴着食指边缘敲击后保持2s",
+        "拇指贴着食指边缘敲击后保持3s",
+        "拇指和中指连续敲击2次",
+        "拇指和中指捏住并维持1s",
+        "拇指和中指捏住并维持2s",
+        "拇指和中指捏住并维持3s",
+        "拇指和食指捏合后外旋",
+        "拇指和食指捏合后内旋"
+      ],
+      "shuffleGestures": true
+    },
+    {
+      "id": "(正向)_站姿_手臂自然下垂",
+      "name": "(正向)_站姿_手臂自然下垂",
+      "instruction": "无需动捕+离散手势stage",
+      "enabled": false,
+      "gestures": [
+        "手部自然放松",
+        "拇指和食指敲击",
+        "拇指和中指敲击",
+        "拇指贴着食指左滑",
+        "拇指贴着食指右滑",
+        "拇指贴着食指前滑",
+        "拇指贴着食指后滑",
+        "拇指和食指捏住后向左拖动",
+        "拇指和食指捏住后向右拖动",
+        "拇指贴着食指连续敲击2次边缘",
+        "拇指贴着食指边缘敲击后保持1s",
+        "拇指贴着食指边缘敲击后保持2s",
+        "拇指贴着食指边缘敲击后保持3s",
+        "拇指和中指连续敲击2次",
+        "拇指和中指捏住并维持1s",
+        "拇指和中指捏住并维持2s",
+        "拇指和中指捏住并维持3s",
+        "拇指和食指捏合后外旋",
+        "拇指和食指捏合后内旋"
+      ],
+      "shuffleGestures": true
+    },
+    {
+      "id": "(负向)_坐姿_小臂自然抬起",
+      "name": "(负向)_坐姿_小臂自然抬起",
+      "instruction": "无需动捕+离散手势stage",
+      "enabled": false,
+      "gestures": [
+        "持续手机打字（给出指定段落）",
+        "持续键盘打字（给出指定段落）"
+      ],
+      "shuffleGestures": true
+    },
+    {
+      "id": "(负向)_站姿_手臂自然抬起",
+      "name": "(负向)_站姿_手臂自然抬起",
+      "enabled": false,
+      "instruction": "无需动捕+离散手势stage",
+      "gestures": [
+        "甩手，自然力度",
+        "五指抓握矿泉水瓶",
+        "拇指食指抓握矿泉水瓶",
+        "持续手机打字（给出指定段落）"
+      ],
+      "shuffleGestures": true
+    },
+    {
+      "id": "(连续手势1)_坐姿_食指角度",
+      "name": "(连续手势1)_坐姿_食指角度",
+      "enabled": false,
+      "instruction": "需要动捕+连续手势stage",
+      "gestures": []
+    },
+    {
+      "id": "(连续手势2)_坐姿_拇指食指捏合张开",
+      "name": "(连续手势2)_坐姿_拇指食指捏合张开",
+      "enabled": false,
+      "instruction": "需要动捕+连续手势stage",
+      "gestures": []
+    },
+    {
+      "id": "测试",
+      "name": "测试",
+      "enabled": false,
+      "instruction": "",
+      "gestures": [
+        "手部自然放松",
+        "拇指和食指敲击",
+        "拇指和中指敲击",
+        "拇指贴着食指左滑",
+        "拇指贴着食指右滑"
+      ],
+      "shuffleGestures": true
+    },
+    {
+      "id": "同步测试",
+      "name": "同步测试",
+      "enabled": false,
+      "instruction": "",
+      "gestures": [
+        "拇指贴着食指右滑",
+        "拇指和食指捏住后向右拖动"
+      ],
+      "shuffleGestures": true
+    },
+    {
+      "id": "（正向）-坐姿-小臂自然抬起",
+      "name": "（正向）-坐姿-小臂自然抬起",
+      "enabled": false,
+      "instruction": "无需动捕-离散动作STAGE",
+      "gestures": [
+        "放松",
+        "食指捏",
+        "中指捏",
+        "拇指外滑",
+        "拇指内滑",
+        "拇指前滑",
+        "拇指后滑",
+        "食指捏外拖",
+        "食指捏内拖",
+        "食指捏上拖",
+        "食指捏下拖",
+        "拇指敲2次",
+        "拇指敲1s",
+        "拇指敲2s",
+        "拇指敲3s",
+        "中指捏2次",
+        "中指捏1s",
+        "中指捏2s",
+        "中指捏3s",
+        "食指捏外旋",
+        "拇指敲1次",
+        "食指捏内旋"
+      ],
+      "shuffleGestures": true
+    },
+    {
+      "id": "（负向）-坐姿-小臂自然抬起",
+      "name": "（负向）-坐姿-小臂自然抬起",
+      "enabled": false,
+      "instruction": "无需动捕-负向离散手势stage",
+      "gestures": [
+        "甩手",
+        "抓握水杯",
+        "捏水杯",
+        "手机打字",
+        "键盘打字"
+      ],
+      "shuffleGestures": true
+    }
+  ],
+  "category4": [
+    {
+      "id": "normal",
+      "name": "正常状态",
+      "enabled": true
+    }
+  ],
+  "gestures": {
+    "discrete": [
+      {
+        "id": "放松",
+        "name": "放松",
+        "icon": "✋",
+        "enabled": true,
+        "gifFile": "放松.gif",
+        "iconImage": "img_v3_0210c_4aefcd36-d81f-4db9-9782-d927a4131e4g.png"
+      },
+      {
+        "id": "食指捏",
+        "name": "食指捏",
+        "icon": "👌",
+        "enabled": true,
+        "gifFile": "食指捏.gif",
+        "iconImage": "Snipaste_2026-04-12_10-43-03.png"
+      },
+      {
+        "id": "中指捏",
+        "name": "中指捏",
+        "icon": "🤌",
+        "enabled": true,
+        "gifFile": "中指捏1次.gif"
+      },
+      {
+        "id": "拇指外滑",
+        "name": "拇指外滑",
+        "icon": "⬅️",
+        "enabled": true,
+        "gifFile": "拇指外滑.gif"
+      },
+      {
+        "id": "拇指内滑",
+        "name": "拇指内滑",
+        "icon": "➡️",
+        "enabled": true,
+        "gifFile": "拇指内滑.gif"
+      },
+      {
+        "id": "拇指前滑",
+        "name": "拇指前滑",
+        "icon": "⬆️",
+        "enabled": true,
+        "gifFile": "拇指前滑.gif"
+      },
+      {
+        "id": "拇指后滑",
+        "name": "拇指后滑",
+        "icon": "⬇️",
+        "enabled": true,
+        "gifFile": "拇指后滑.gif"
+      },
+      {
+        "id": "食指捏外拖",
+        "name": "食指捏外拖",
+        "icon": "👌⬅️",
+        "enabled": true,
+        "gifFile": "食指捏外拖.gif"
+      },
+      {
+        "id": "食指捏内拖",
+        "name": "食指捏内拖",
+        "icon": "👌➡️",
+        "enabled": true,
+        "gifFile": "食指捏内拖.gif"
+      },
+      {
+        "id": "食指捏上拖",
+        "name": "食指捏上拖",
+        "icon": "👌⬆️",
+        "enabled": true,
+        "gifFile": "食指捏上拖.gif"
+      },
+      {
+        "id": "食指捏下拖",
+        "name": "食指捏下拖",
+        "icon": "👌⬇️",
+        "enabled": true,
+        "gifFile": "食指捏下拖.gif"
+      },
+      {
+        "id": "拇指敲2次",
+        "name": "拇指敲2次",
+        "icon": "👌👌",
+        "enabled": true,
+        "gifFile": "拇指敲2次.gif",
+        "gestureType": "instant"
+      },
+      {
+        "id": "拇指敲1s",
+        "name": "拇指敲1s",
+        "icon": "👌1️⃣",
+        "enabled": true,
+        "gifFile": "拇指敲1s.gif",
+        "gestureType": "sustained",
+        "duration": 1
+      },
+      {
+        "id": "拇指敲2s",
+        "name": "拇指敲2s",
+        "icon": "👌2️⃣",
+        "enabled": true,
+        "gifFile": "拇指敲2s.gif",
+        "gestureType": "sustained",
+        "duration": 2
+      },
+      {
+        "id": "拇指敲3s",
+        "name": "拇指敲3s",
+        "icon": "👌3️⃣",
+        "enabled": true,
+        "gifFile": "拇指敲3s.gif",
+        "gestureType": "sustained",
+        "duration": 3
+      },
+      {
+        "id": "中指捏2次",
+        "name": "中指捏2次",
+        "icon": "🤌🤌",
+        "enabled": true,
+        "gifFile": "中指捏2次.gif",
+        "gestureType": "instant"
+      },
+      {
+        "id": "中指捏1s",
+        "name": "中指捏1s",
+        "icon": "🤌1️⃣",
+        "enabled": true,
+        "gifFile": "中指捏1s.gif",
+        "gestureType": "sustained",
+        "duration": 1
+      },
+      {
+        "id": "中指捏2s",
+        "name": "中指捏2s",
+        "icon": "🤌2️⃣",
+        "enabled": true,
+        "gestureType": "sustained",
+        "duration": 2,
+        "gifFile": "中指捏2s.gif"
+      },
+      {
+        "id": "中指捏3s",
+        "name": "中指捏3s",
+        "icon": "🤌3️⃣",
+        "enabled": true,
+        "gestureType": "sustained",
+        "duration": 3,
+        "gifFile": "中指捏3s.gif"
+      },
+      {
+        "id": "食指捏外旋",
+        "name": "食指捏外旋",
+        "icon": "🔄",
+        "enabled": true,
+        "gifFile": "食指捏外旋.gif",
+        "gestureType": "instant"
+      },
+      {
+        "id": "甩手",
+        "name": "甩手",
+        "icon": "👋",
+        "enabled": true,
+        "gifFile": "甩手.gif"
+      },
+      {
+        "id": "抓握水杯",
+        "name": "抓握水杯",
+        "icon": "🫳",
+        "enabled": true,
+        "gifFile": "五指抓握.gif"
+      },
+      {
+        "id": "捏水杯",
+        "name": "捏水杯",
+        "icon": "🤏",
+        "enabled": true,
+        "gifFile": "捏水杯.gif"
+      },
+      {
+        "id": "手机打字",
+        "name": "手机打字",
+        "icon": "abcd",
+        "enabled": true,
+        "gifFile": "手机打字.gif"
+      },
+      {
+        "id": "键盘打字",
+        "name": "键盘打字",
+        "icon": "wsad",
+        "enabled": true,
+        "gifFile": "键盘打字.gif"
+      },
+      {
+        "id": "拇指和食指捏合后内旋",
+        "name": "拇指和食指捏合后内旋",
+        "icon": "🔄🔄",
+        "gifFile": "内旋.gif",
+        "enabled": false,
+        "gestureType": "instant"
+      },
+      {
+        "id": "index_push",
+        "name": "index_push",
+        "icon": "✋",
+        "enabled": false
+      },
+      {
+        "id": "index_release",
+        "name": "index_release",
+        "icon": "✋",
+        "enabled": false
+      },
+      {
+        "id": "middle_push",
+        "name": "middle_push",
+        "icon": "✋",
+        "enabled": false
+      },
+      {
+        "id": "middle_release",
+        "name": "middle_release",
+        "icon": "✋",
+        "enabled": false
+      },
+      {
+        "id": "thumb_in",
+        "name": "thumb_in",
+        "icon": "✋",
+        "enabled": false
+      },
+      {
+        "id": "thumb_out",
+        "name": "thumb_out",
+        "icon": "✋",
+        "enabled": false
+      },
+      {
+        "id": "thumb_up",
+        "name": "thumb_up",
+        "icon": "✋",
+        "enabled": false
+      },
+      {
+        "id": "thumb_down",
+        "name": "thumb_down",
+        "icon": "✋",
+        "enabled": false
+      },
+      {
+        "id": "thumb_tap",
+        "name": "thumb_tap",
+        "icon": "✋",
+        "enabled": false
+      },
+      {
+        "id": "拇指敲1次",
+        "name": "拇指敲1次",
+        "icon": "👌",
+        "gifFile": "拇指敲1次.gif",
+        "enabled": true,
+        "gestureType": "instant"
+      },
+      {
+        "id": "食指捏内旋",
+        "name": "食指捏内旋",
+        "icon": "🔄",
+        "gifFile": "食指捏内旋.gif",
+        "enabled": true,
+        "gestureType": "instant"
+      }
+    ],
+    "continual_1": [
+      {
+        "id": "continual_1",
+        "name": "continual_1",
+        "gifFile": "连续手势1.gif",
+        "enabled": true
+      }
+    ],
+    "continual_2": [
+      {
+        "id": "continual_2",
+        "name": "continual_2",
+        "gifFile": "连续手势2.gif",
+        "enabled": true
+      }
+    ],
+    "continual_3": [
+      {
+        "id": "continual_3",
+        "name": "continual_3",
+        "gifFile": "continual_03.gif",
+        "enabled": true
+      }
+    ]
+  },
+  "execution": {
+    "discrete_gesture": {
+      "repeatPerGesture": 10,
+      "intervalBetweenRepeat": 1,
+      "restBetweenGestures": 5,
+      "preparationTime": 3,
+      "gestureDisplayTime": 2,
+      "sustainedDuration": 3,
+      "shuffleInterval": 4,
+      "orderedShuffleRatio": 0,
+      "shuffleIntervalMin": 1.5,
+      "shuffleIntervalMax": 4,
+      "gestureLabelFontSize": 30
+    },
+    "continual_gesture_1": {
+      "trialsPerStage": 20,
+      "stageTimeout": 600,
+      "preparationTime": 3,
+      "expandDuration": 4,
+      "holdDuration": 0.5,
+      "contractDuration": 4,
+      "guideBandWidth": 30,
+      "maxRadius": 250,
+      "restBetweenTrials": 3,
+      "trialSpeedSequence": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3
+      ],
+      "speedLevels": [
+        1,
+        1.5,
+        2
+      ]
+    },
+    "continual_gesture_2": {
+      "trialsPerStage": 20,
+      "stageTimeout": 600,
+      "preparationTime": 3,
+      "expandDuration": 4,
+      "holdDuration": 0.5,
+      "contractDuration": 4,
+      "guideBandWidth": 30,
+      "maxRadius": 250,
+      "restBetweenTrials": 3,
+      "trialSpeedSequence": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3
+      ],
+      "speedLevels": [
+        1,
+        1.5,
+        2
+      ]
+    },
+    "continual_gesture_3": {
+      "trialsPerStage": 1,
+      "stageTimeout": 120,
+      "dwellTime": 0.5,
+      "preparationTime": 3,
+      "targetSize": 0.12,
+      "guideSpeed": 0.5,
+      "restBetweenTrials": 4
+    }
+  },
+  "lastModified": "2026-07-07T07:22:03.492Z",
+  "subjectFields": [
+    {
+      "id": "name",
+      "label": "姓名",
+      "type": "text",
+      "required": true,
+      "placeholder": "请输入姓名"
+    },
+    {
+      "id": "id",
+      "label": "编号",
+      "type": "text",
+      "required": true,
+      "placeholder": "如 S001"
+    },
+    {
+      "id": "age",
+      "label": "年龄",
+      "type": "number",
+      "required": true,
+      "min": 1,
+      "max": 120
+    },
+    {
+      "id": "gender",
+      "label": "性别",
+      "type": "select",
+      "required": true,
+      "options": [
+        {
+          "value": "male",
+          "label": "男"
+        },
+        {
+          "value": "female",
+          "label": "女"
+        }
+      ]
+    },
+    {
+      "id": "hand",
+      "label": "惯用手",
+      "type": "select",
+      "required": true,
+      "options": [
+        {
+          "value": "right",
+          "label": "右手"
+        },
+        {
+          "value": "left",
+          "label": "左手"
+        },
+        {
+          "value": "both",
+          "label": "双手"
+        }
+      ]
+    },
+    {
+      "id": "height",
+      "label": "身高(cm)",
+      "type": "number",
+      "required": true,
+      "min": 50,
+      "max": 250
+    },
+    {
+      "id": "weight",
+      "label": "体重(kg)",
+      "type": "number",
+      "required": true,
+      "min": 20,
+      "max": 300
+    },
+    {
+      "id": "field_1768794599819",
+      "label": "右手食指长度",
+      "type": "number",
+      "required": true,
+      "placeholder": ""
+    },
+    {
+      "id": "field_1768794630817",
+      "label": "腕围",
+      "type": "number",
+      "required": true,
+      "placeholder": ""
+    },
+    {
+      "id": "field_1768796064235",
+      "label": "备注",
+      "type": "textarea",
+      "required": false,
+      "placeholder": ""
+    }
+  ],
+  "sessionConfig": {
+    "count": 6,
+    "description": "每个Session代表一次设备穿戴，受试者需要摘下重新穿戴采集设备",
+    "restBetweenSessions": 5
+  }
+}
