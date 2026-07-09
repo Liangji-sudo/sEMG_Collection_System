@@ -153,23 +153,44 @@ except ImportError:
     HAS_SYNC_TOOL = False
     print("[警告] 无法导入bin_sync_tool，同步功能不可用")
 
-# 导入 calibrate_tool 可视化控件
-try:
-    from calibrate_tool import CalibrateWidget
-    HAS_CALIBRATE_TOOL = True
-except ImportError:
-    HAS_CALIBRATE_TOOL = False
-    print("[警告] 无法导入calibrate_tool，数据可视化功能不可用")
+CalibrateWidget = None
+HAS_CALIBRATE_TOOL = None
+FigureCanvas = None
+Figure = None
+HAS_MATPLOTLIB = None
 
-# 尝试导入matplotlib
-try:
-    import matplotlib
-    matplotlib.use('Qt5Agg')
-    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-    from matplotlib.figure import Figure
-    HAS_MATPLOTLIB = True
-except ImportError:
-    HAS_MATPLOTLIB = False
+
+def ensure_calibrate_tool():
+    """Lazy-load calibrate_tool because it imports scipy/cv2/matplotlib."""
+    global CalibrateWidget, HAS_CALIBRATE_TOOL
+    if HAS_CALIBRATE_TOOL is not None:
+        return HAS_CALIBRATE_TOOL
+    try:
+        from calibrate_tool import CalibrateWidget as _CalibrateWidget
+        CalibrateWidget = _CalibrateWidget
+        HAS_CALIBRATE_TOOL = True
+    except ImportError:
+        HAS_CALIBRATE_TOOL = False
+        print("[警告] 无法导入calibrate_tool，数据可视化功能不可用")
+    return HAS_CALIBRATE_TOOL
+
+
+def ensure_matplotlib():
+    """Lazy-load matplotlib only when a waveform plot is actually requested."""
+    global FigureCanvas, Figure, HAS_MATPLOTLIB
+    if HAS_MATPLOTLIB is not None:
+        return HAS_MATPLOTLIB
+    try:
+        import matplotlib
+        matplotlib.use('Qt5Agg')
+        from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as _FigureCanvas
+        from matplotlib.figure import Figure as _Figure
+        FigureCanvas = _FigureCanvas
+        Figure = _Figure
+        HAS_MATPLOTLIB = True
+    except ImportError:
+        HAS_MATPLOTLIB = False
+    return HAS_MATPLOTLIB
 
 
 class SyncWorker(QThread):
@@ -468,20 +489,32 @@ class WaveformWidget(QWidget):
         self.init_ui()
 
     def init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        if HAS_MATPLOTLIB:
-            self.figure = Figure(figsize=(10, 4), dpi=100)
-            self.canvas = FigureCanvas(self.figure)
-            layout.addWidget(self.canvas)
-        else:
-            label = QLabel("需要安装matplotlib才能显示波形图\npip install matplotlib")
-            label.setAlignment(Qt.AlignCenter)
-            label.setStyleSheet("color: #888; padding: 50px;")
-            layout.addWidget(label)
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.figure = None
+        self.canvas = None
+        self.placeholder = QLabel("选择波形图时加载绘图库...")
+        self.placeholder.setAlignment(Qt.AlignCenter)
+        self.placeholder.setStyleSheet("color: #888; padding: 50px;")
+        self.layout.addWidget(self.placeholder)
+
+    def ensure_canvas(self):
+        if self.canvas is not None:
+            return True
+        if not ensure_matplotlib():
+            self.placeholder.setText("需要安装matplotlib才能显示波形图\npip install matplotlib")
+            return False
+        self.figure = Figure(figsize=(10, 4), dpi=100)
+        self.canvas = FigureCanvas(self.figure)
+        if self.placeholder:
+            self.layout.removeWidget(self.placeholder)
+            self.placeholder.deleteLater()
+            self.placeholder = None
+        self.layout.addWidget(self.canvas)
+        return True
 
     def plot_data(self, data, title="波形"):
-        if not HAS_MATPLOTLIB:
+        if not self.ensure_canvas():
             return
         self.figure.clear()
         ax = self.figure.add_subplot(111)
@@ -3367,32 +3400,46 @@ class CalibrateTab(QWidget):
     """数据可视化标签页 — H5 信号预览与滤波（嵌入 calibrate_tool）"""
     def __init__(self):
         super().__init__()
+        self.calibrate_widget = None
+        self.placeholder = None
         self.init_ui()
 
     def init_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        if HAS_CALIBRATE_TOOL:
-            self.calibrate_widget = CalibrateWidget()
-            layout.addWidget(self.calibrate_widget)
-        else:
-            label = QLabel(
-                "⚠️ 无法导入 calibrate_tool 模块\n\n"
-                "请确保 tools/calibrate_tool.py 存在，且已安装依赖：\n"
-                "  pip install matplotlib scipy h5py PyQt5"
-            )
-            label.setAlignment(Qt.AlignCenter)
-            label.setStyleSheet("color: #888; padding: 50px; font-size: 12pt;")
-            layout.addWidget(label)
+        self.layout = layout
+        self.placeholder = QLabel("切换到数据可视化时加载绘图与视频组件...")
+        self.placeholder.setAlignment(Qt.AlignCenter)
+        self.placeholder.setStyleSheet("color: #888; padding: 50px; font-size: 12pt;")
+        layout.addWidget(self.placeholder)
+
+    def ensure_widget(self):
+        if self.calibrate_widget is not None:
+            return True
+        if not ensure_calibrate_tool():
+            if self.placeholder:
+                self.placeholder.setText(
+                    "⚠️ 无法导入 calibrate_tool 模块\n\n"
+                    "请确保 tools/calibrate_tool.py 存在，且已安装依赖：\n"
+                    "  pip install matplotlib scipy h5py PyQt5"
+                )
+            return False
+        self.calibrate_widget = CalibrateWidget()
+        if self.placeholder:
+            self.layout.removeWidget(self.placeholder)
+            self.placeholder.deleteLater()
+            self.placeholder = None
+        self.layout.addWidget(self.calibrate_widget)
+        return True
 
     def load_file(self, file_path):
         """加载H5文件并可视化"""
-        if HAS_CALIBRATE_TOOL:
+        if self.ensure_widget():
             self.calibrate_widget.load_h5_file(file_path)
 
     def close_file(self):
         """关闭 H5 文件句柄（避免 Windows 文件锁冲突）"""
-        if HAS_CALIBRATE_TOOL and hasattr(self, 'calibrate_widget'):
+        if self.calibrate_widget is not None:
             cw = self.calibrate_widget
             if cw.h5_file:
                 try:
@@ -4730,7 +4777,7 @@ class HDF5Tool(QMainWindow):
             self.current_directory = last_dir
             self.dir_label.setText(last_dir)
             self.dir_label.setStyleSheet("color: #0066cc; font-size: 10px; padding: 5px; background: #e6f3ff;")
-            self.scan_h5_files()
+            QTimer.singleShot(100, self.scan_h5_files)
 
     def init_ui(self):
         self.setWindowTitle("HDF5整合工具 - 查看与同步")
@@ -5133,14 +5180,14 @@ class HDF5Tool(QMainWindow):
         if not file_path:
             return
 
-        if widget is calibrate_tab and HAS_CALIBRATE_TOOL:
+        if widget is calibrate_tab:
             # 关闭标定标签页的文件句柄（避免 Windows 锁冲突）
             if sync_calib_tab:
                 sync_calib_tab.close_file()
             calibrate_tab.load_file(file_path)
         elif widget is sync_calib_tab:
             # 关闭数据可视化标签页的文件句柄
-            if calibrate_tab and HAS_CALIBRATE_TOOL:
+            if calibrate_tab:
                 calibrate_tab.close_file()
             sync_calib_tab.load_file(file_path)
 

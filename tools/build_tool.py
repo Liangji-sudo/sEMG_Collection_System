@@ -2,11 +2,12 @@
 打包 hdf5_tool.py 为独立 exe
 
 使用方法:
-    python tools/build_tool.py              # 发布模式（无控制台窗口）
+    python tools/build_tool.py              # 发布模式（onedir，启动更快）
+    python tools/build_tool.py --onefile    # 单文件模式（部署简单，但启动较慢）
     python tools/build_tool.py --console    # 调试模式（保留控制台，查看错误）
 
 输出:
-    dist/hdf5_tool.exe
+    dist/hdf5_tool/hdf5_tool.exe
 """
 
 import subprocess
@@ -27,19 +28,22 @@ def main():
 
     # 支持 --console 调试模式，保留控制台窗口查看错误
     debug_mode = '--console' in sys.argv or '--debug' in sys.argv
+    onefile_mode = '--onefile' in sys.argv
     window_mode = '--console' if debug_mode else '--windowed'
 
     print("=" * 60)
     print(f"正在打包: {script}")
     if debug_mode:
         print("模式: 调试 (保留控制台窗口)")
+    print("打包形态:", "onefile 单文件（启动较慢）" if onefile_mode else "onedir 文件夹（推荐，启动更快）")
     print("=" * 60)
 
     cmd = [
         sys.executable, '-m', 'PyInstaller',
-        '--onefile',
+        '--onefile' if onefile_mode else '--onedir',
         window_mode,       # 发布模式隐藏控制台，调试模式保留
         '--clean',
+        '--noupx',
         f'--name={name}',
         # h5py 需要 --collect-all 才能把 hdf5.dll 等原生库一起打包
         '--collect-all', 'h5py',
@@ -74,7 +78,8 @@ def main():
         subprocess.run(cmd, check=True)
         print(f"\n{'=' * 60}")
         print(f"[OK] 打包成功!")
-        print(f"输出: {os.path.abspath(f'dist/{name}.exe')}")
+        output_path = f'dist/{name}.exe' if onefile_mode else f'dist/{name}/{name}.exe'
+        print(f"输出: {os.path.abspath(output_path)}")
         print('=' * 60)
     except subprocess.CalledProcessError as e:
         print(f"\n[ERROR] 打包失败: {e}")
