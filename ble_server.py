@@ -427,6 +427,7 @@ class DeviceState:
     
     def to_dict(self) -> dict:
         """转换为字典（用于状态响应）"""
+        emg_config = self.get_emg_config()
         return {
             'connected': self.is_connected(),
             'mac': self.mac,
@@ -441,6 +442,31 @@ class DeviceState:
             'hardware_version': self.hardware_version,
             'stream_mode': self.stream_mode,
             'battery_percent': self.battery_percent,  # 新增电池百分比
+            'gain': emg_config['gain'],
+            'gain_index': emg_config['gain_index'],
+            'emg_lsb_uv_24bit': emg_config['emg_lsb_uv_24bit'],
+        }
+
+    def get_emg_config(self) -> dict:
+        """Return the effective EMG gain metadata used for HDF5 attributes."""
+        gain = self.config.get('gain', DEFAULT_CONFIG['gain'])
+        try:
+            gain = float(gain)
+        except (TypeError, ValueError):
+            gain = float(DEFAULT_CONFIG['gain'])
+        if gain <= 0:
+            gain = float(DEFAULT_CONFIG['gain'])
+
+        gain_index = self.config.get('gain_index', DEFAULT_CONFIG['gain_index'])
+        try:
+            gain_index = int(gain_index)
+        except (TypeError, ValueError):
+            gain_index = int(DEFAULT_CONFIG['gain_index'])
+
+        return {
+            'gain': gain,
+            'gain_index': gain_index,
+            'emg_lsb_uv_24bit': BASE_LSB_24BIT / (gain * HARDWARE_FRONTEND_GAIN),
         }
 
 
@@ -1579,6 +1605,15 @@ async def stop_stream(ws, device_id: int, silent=False):
             })
 
 
+def collect_device_configs() -> dict:
+    """Collect per-device EMG metadata for HDF5 provenance."""
+    configs = {}
+    for dev_key, dev in (('dev1', state.dev1), ('dev2', state.dev2)):
+        if dev.is_connected() or dev.name or dev.sd_filename:
+            configs[dev_key] = dev.get_emg_config()
+    return configs
+
+
 async def start_all(ws):
     """同时开始"""
     started = []
@@ -1607,12 +1642,15 @@ async def start_all(ws):
     if state.dev2.name:
         device_names['dev2'] = state.dev2.name  # 例如 "WristBand_5B12"
 
+    device_configs = collect_device_configs()
+
     await send_to_control(ws, 'start_all', {
         'success': True,
         'started': started,
         'active': state.get_active_devices(),
         'sd_filenames': sd_filenames,  # 【新增】返回bin文件名
         'device_names': device_names,  # 【新增】返回BLE设备名称
+        'device_configs': device_configs,
     })
 
     # 【新增】广播bin文件名和设备名称事件给数据端（realtimeEngine）
@@ -1621,6 +1659,7 @@ async def start_all(ws):
         await broadcast_event('sd_filenames_updated', {
             'sd_filenames': sd_filenames,
             'device_names': device_names,  # 【新增】BLE设备名称
+            'device_configs': device_configs,
             'stream_mode': 'legacy',  # 旧 API 无法区分 preview/collection
         })
 
@@ -1981,6 +2020,7 @@ async def switch_preview_to_collection(ws):
         'started': started_ids,
         'collection_bins': collection_bins,
         'device_names': device_names,
+        'device_configs': collect_device_configs(),
         'stream_mode': 'collection',
         'collection_stream_id': collection_stream_id,
         'switch_delay_ms': STREAM_SWITCH_DELAY_MS,
@@ -1992,6 +2032,7 @@ async def switch_preview_to_collection(ws):
     await broadcast_event('sd_filenames_updated', {
         'sd_filenames': collection_bins,
         'device_names': device_names,
+        'device_configs': collect_device_configs(),
         'stream_mode': 'collection',
         'collection_stream_id': collection_stream_id,
         'switch_delay_ms': STREAM_SWITCH_DELAY_MS,
@@ -2253,11 +2294,13 @@ async def handle_control_client(websocket):
                             'success': len(started) > 0,
                             'started': started,
                             'collection_bins': collection_bins,
+                            'device_configs': collect_device_configs(),
                             'stream_mode': 'collection',
                         })
                         if collection_bins:
                             await broadcast_event('sd_filenames_updated', {
                                 'sd_filenames': collection_bins,
+                                'device_configs': collect_device_configs(),
                                 'stream_mode': 'collection',
                             })
 

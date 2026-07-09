@@ -203,7 +203,7 @@
 
             // 更新流模式
             this.updateStreamMode(prefix, status.stream_mode, status.connected);
-            this.updateImuCount(prefix, status.num_imus, status.connected);
+            this.updateImuCount(prefix, status.num_imus, status.connected, status.hw_version);
         }
 
         /**
@@ -223,7 +223,7 @@
             });
         }
 
-        updateImuCount(prefix, numImus, connected) {
+        updateImuCount(prefix, numImus, connected, hwVersion) {
             const imuEl = document.getElementById(`${prefix}ImuCount`);
             const rowEl = document.getElementById(`${prefix}RingRow`);
             if (!imuEl) return;
@@ -238,8 +238,15 @@
                 return;
             }
 
+            const isV2 = String(hwVersion || '').toUpperCase() === 'V2';
             if (value === null || value === 0) {
-                if (textEl) textEl.textContent = 'IMU ?/3';
+                if (textEl) textEl.textContent = isV2 ? 'IMU ?/3' : 'IMU --';
+                return;
+            }
+
+            if (!isV2) {
+                if (textEl) textEl.textContent = `IMU ${value}`;
+                imuEl.classList.add('ok');
                 return;
             }
 

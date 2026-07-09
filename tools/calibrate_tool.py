@@ -64,7 +64,7 @@ FILTER_NOTCH_Q_OFFLINE = 50         # 离线陷波 Q 值（供应商 q_offline=5
 FILTER_NOTCH_Q_ONLINE = 15          # 在线陷波 Q 值（供应商 q_online=15）
 
 # IMU 缩放系数
-SCALE_ACCEL = 16.0 / 32768.0       # 加速度 ±2g
+SCALE_ACCEL = 32.0 / 32768.0       # V2 LSM6DSV32X +/-32g, matches ble_server.py
 SCALE_GYRO = 70.0 / 1000.0         # Supplier update: 0.07 dps/LSB
 SCALE_MAG = 0.15                   # 磁力计 μT
 

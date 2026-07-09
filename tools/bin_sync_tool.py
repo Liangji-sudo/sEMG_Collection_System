@@ -146,7 +146,11 @@ BASE_LSB_24BIT = 0.476837
 HARDWARE_FRONTEND_GAIN = 10  # 供应商固件使用10
 
 # IMU转换系数
-SCALE_ACCEL = 16.0 / 32768.0
+# V2 wristbands use LSM6DSV32X at +/-32g. Keep V1 documented for legacy data,
+# but default the sync path to V2 so SD IMU units match realtime ble_server.py.
+SCALE_ACCEL_V2 = 32.0 / 32768.0
+SCALE_ACCEL_V1 = 16.0 / 32768.0
+SCALE_ACCEL = SCALE_ACCEL_V2
 SCALE_GYRO = 70.0 / 1000.0
 SCALE_MAG = 0.15
 

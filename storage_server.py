@@ -356,6 +356,12 @@ class HDF5StorageServer:
             emg_gain = params.get("emg_gain")
             emg_gain_index = params.get("emg_gain_index")
             emg_lsb_uv_24bit = params.get("emg_lsb_uv_24bit")
+            emg_gain_dev1 = params.get("emg_gain_dev1")
+            emg_gain_index_dev1 = params.get("emg_gain_index_dev1")
+            emg_lsb_uv_24bit_dev1 = params.get("emg_lsb_uv_24bit_dev1")
+            emg_gain_dev2 = params.get("emg_gain_dev2")
+            emg_gain_index_dev2 = params.get("emg_gain_index_dev2")
+            emg_lsb_uv_24bit_dev2 = params.get("emg_lsb_uv_24bit_dev2")
             
             # 【新增】提取Session参数
             session_index = params.get("session_index", 0)
@@ -424,6 +430,17 @@ class HDF5StorageServer:
                 self.f.attrs["emg_gain_index"] = int(emg_gain_index)
             if emg_lsb_uv_24bit is not None:
                 self.f.attrs["emg_lsb_uv_24bit"] = float(emg_lsb_uv_24bit)
+            per_device_emg_attrs = {
+                "emg_gain_dev1": (emg_gain_dev1, int),
+                "emg_gain_index_dev1": (emg_gain_index_dev1, int),
+                "emg_lsb_uv_24bit_dev1": (emg_lsb_uv_24bit_dev1, float),
+                "emg_gain_dev2": (emg_gain_dev2, int),
+                "emg_gain_index_dev2": (emg_gain_index_dev2, int),
+                "emg_lsb_uv_24bit_dev2": (emg_lsb_uv_24bit_dev2, float),
+            }
+            for attr_name, (attr_value, caster) in per_device_emg_attrs.items():
+                if attr_value is not None:
+                    self.f.attrs[attr_name] = caster(attr_value)
 
             # Phase 3: stage 开始时间（从 realtimeEngine 传入）
             start_time = params.get("start_time")

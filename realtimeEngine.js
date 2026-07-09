@@ -12,6 +12,10 @@ app.use(express.json());
 
 const { discrete_gesture_prompt_name, collection_task_name } = require('./constants.js');
 
+const DEFAULT_EMG_GAIN = 1;
+const DEFAULT_EMG_GAIN_INDEX = 0;
+const DEFAULT_EMG_LSB_UV_24BIT = 0.476837 / 10;
+
 function getSysTimeNode() {
     const nsTimestamp = process.hrtime.bigint();
     const sTimestamp = Number(nsTimestamp) / 1000000000.0;
@@ -108,6 +112,7 @@ class RealtimeEngine extends EventEmitter {
         this.sd_filenames = { dev1: null, dev2: null };
         // 【新增】BLE设备名称（用于HDF5追溯数据来源）
         this.device_names = { dev1: null, dev2: null };
+        this.device_configs = { dev1: null, dev2: null };
 
         // 【新增】Stream mode 状态（preview/collection 切流方案）
         this.streamMode = 'idle';  // 'idle' | 'preview' | 'collection'
@@ -638,7 +643,7 @@ class RealtimeEngine extends EventEmitter {
 
     // 【新增】处理SD卡文件名和设备名称更新事件
     // 此事件由ble_server.py在start_all成功后发送，包含当前实际连接设备的文件名和设备名称
-    onSdFilenamesUpdated(sd_filenames, device_names, stream_mode, collection_stream_id) {
+    onSdFilenamesUpdated(sd_filenames, device_names, stream_mode, collection_stream_id, device_configs = null) {
         // 完全替换，只保存当前实际连接设备的文件名
         this.sd_filenames = {
             dev1: sd_filenames?.dev1 || null,
@@ -648,6 +653,10 @@ class RealtimeEngine extends EventEmitter {
         this.device_names = {
             dev1: device_names?.dev1 || null,
             dev2: device_names?.dev2 || null
+        };
+        this.device_configs = {
+            dev1: device_configs?.dev1 || this.device_configs.dev1 || null,
+            dev2: device_configs?.dev2 || this.device_configs.dev2 || null
         };
 
         // 【新增】根据 stream_mode 更新 collection bin 记录
@@ -672,6 +681,19 @@ class RealtimeEngine extends EventEmitter {
 
         console.log(`[realtimeEngine] SD卡文件名已更新: dev1=${this.sd_filenames.dev1 || '无'}, dev2=${this.sd_filenames.dev2 || '无'}, stream_mode=${this.streamMode}`);
         console.log(`[realtimeEngine] BLE设备名称已更新: dev1=${this.device_names.dev1 || '无'}, dev2=${this.device_names.dev2 || '无'}`);
+    }
+
+    getActiveEmgConfig() {
+        const config = this.device_configs.dev1 || this.device_configs.dev2 || {};
+        const parsedGain = Number(config.gain);
+        const gain = Number.isFinite(parsedGain) && parsedGain > 0 ? parsedGain : DEFAULT_EMG_GAIN;
+        const gainIndex = Number.isInteger(Number(config.gain_index)) ? Number(config.gain_index) : DEFAULT_EMG_GAIN_INDEX;
+        const lsb = Number.isFinite(Number(config.emg_lsb_uv_24bit)) ? Number(config.emg_lsb_uv_24bit) : DEFAULT_EMG_LSB_UV_24BIT;
+        return {
+            gain,
+            gain_index: gainIndex,
+            emg_lsb_uv_24bit: lsb
+        };
     }
 
     onStageChange(stageIndex, stageName) { this.currentStageName = stageName; }
@@ -1037,6 +1059,7 @@ class RealtimeEngine extends EventEmitter {
             // 使用中文任务名称作为 task_id，这样文件夹名称就是中文的
             const taskIdForFolder = config.task || this.currentTaskId;
 
+            const emgConfig = this.getActiveEmgConfig();
             const response = await this.sendStorageCommand('create', {
                 filename,
                 subdirectory,
@@ -1053,9 +1076,15 @@ class RealtimeEngine extends EventEmitter {
                 template_name: config.templateName || 'default',
                 subject_info: this.currentUser,
                 start_time: this.stage_start_time,
-                emg_gain: 1,
-                emg_gain_index: 0,
-                emg_lsb_uv_24bit: 0.476837 / 10,
+                emg_gain: emgConfig.gain,
+                emg_gain_index: emgConfig.gain_index,
+                emg_lsb_uv_24bit: emgConfig.emg_lsb_uv_24bit,
+                emg_gain_dev1: this.device_configs.dev1?.gain ?? null,
+                emg_gain_index_dev1: this.device_configs.dev1?.gain_index ?? null,
+                emg_lsb_uv_24bit_dev1: this.device_configs.dev1?.emg_lsb_uv_24bit ?? null,
+                emg_gain_dev2: this.device_configs.dev2?.gain ?? null,
+                emg_gain_index_dev2: this.device_configs.dev2?.gain_index ?? null,
+                emg_lsb_uv_24bit_dev2: this.device_configs.dev2?.emg_lsb_uv_24bit ?? null,
                 // 【新增】传递 collection stream 的 SD 卡 bin 文件名（用于 HDF5 溯源）
                 // 使用 collectionBinFilenames（优先）或 sd_filenames
                 sd_bin_dev1: this.collectionBinFilenames.dev1 || this.sd_filenames.dev1,
@@ -1172,7 +1201,13 @@ class RealtimeEngine extends EventEmitter {
                     if (packet.type === 'emg_packet') { this.attributeEMGData(packet); return; }
                     // 【新增】监听sd_filenames_updated事件（包含设备名称、stream_mode、collection_stream_id）
                     if (packet.type === 'event' && packet.event === 'sd_filenames_updated') {
-                        this.onSdFilenamesUpdated(packet.sd_filenames, packet.device_names, packet.stream_mode, packet.collection_stream_id);
+                        this.onSdFilenamesUpdated(
+                            packet.sd_filenames,
+                            packet.device_names,
+                            packet.stream_mode,
+                            packet.collection_stream_id,
+                            packet.device_configs
+                        );
                         return;
                     }
                     // 【新增】监听collection_stopped事件

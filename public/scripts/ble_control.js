@@ -488,6 +488,12 @@ async function decodeData(buffer) {
         }
 
         const numImus = Number.isFinite(device.num_imus) ? device.num_imus : null;
+        const isV2 = String(device.hw_version || '').toUpperCase() === 'V2';
+        if (!isV2) {
+            BleState.imuWarningShown[deviceId] = false;
+            return;
+        }
+
         if (numImus === null || numImus === 0) {
             return;
         }

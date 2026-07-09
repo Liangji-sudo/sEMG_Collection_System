@@ -1530,8 +1530,24 @@
     function syncCameraAvailabilityStatus(status) {
         if (!status) return;
 
-        const recordingSides = Array.isArray(status.recording_sides) ? status.recording_sides : [];
-        const previewSides = Array.isArray(status.preview_available) ? status.preview_available : [];
+        const recordingSet = new Set(Array.isArray(status.recording_sides) ? status.recording_sides : []);
+        const previewSet = new Set(Array.isArray(status.preview_available) ? status.preview_available : []);
+
+        if (status.recording && typeof status.recording === 'object') {
+            ['left', 'right'].forEach(side => {
+                if (status.recording[side]) recordingSet.add(side);
+            });
+        }
+
+        if (status.captures && typeof status.captures === 'object') {
+            ['left', 'right'].forEach(side => {
+                const capture = status.captures[side];
+                if (capture && capture.running) previewSet.add(side);
+            });
+        }
+
+        const recordingSides = Array.from(recordingSet);
+        const previewSides = Array.from(previewSet);
 
         recordingSides.forEach(side => {
             markCameraFrame(side);

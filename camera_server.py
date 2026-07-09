@@ -885,8 +885,67 @@ class CameraServer:
         print(f'[CameraServer] 视频输出目录: {self.output_dir.absolute()}')
         print('[CameraServer] 模式: MJPEG实时预览 + 帧录制 (预览不中断)')
         print(f'[CameraServer] 视频压缩策略: idle_grace={ENCODING_IDLE_GRACE_SECONDS}s, workers={max(1, ENCODING_WORKERS)}')
+        self._queue_orphan_mjpeg_files()
 
     # ==================== 帧广播任务 ====================
+
+    def _infer_side_from_video_name(self, path):
+        name = path.name.lower()
+        if 'left' in name or '_l_' in name or '左' in path.name:
+            return 'left'
+        if 'right' in name or '_r_' in name or '右' in path.name:
+            return 'right'
+        return 'recovered'
+
+    def _queue_orphan_mjpeg_files(self):
+        """Queue closed MJPEG files left by an earlier app exit for background encoding."""
+        if not self.ffmpeg_path:
+            return
+
+        queued = 0
+        for raw_path in sorted(self.output_dir.glob('*.mjpeg'), key=lambda p: p.stat().st_mtime):
+            try:
+                output_path = raw_path.with_suffix('.mp4')
+                if output_path.exists() and output_path.stat().st_size > 0:
+                    continue
+
+                side = self._infer_side_from_video_name(raw_path)
+                recorder = FrameRecorder(side, self.ffmpeg_path, self.output_dir)
+                recorder.raw_path = raw_path
+                recorder.output_path = output_path
+                recorder.recording = False
+                recorder.recording_started_at = raw_path.stat().st_mtime
+                recorder.recording_stopped_at = raw_path.stat().st_mtime
+                recorder.frame_count = 0
+
+                job_key = str(output_path)
+                with self.encoding_lock:
+                    if job_key in self.encoding_jobs:
+                        continue
+                    self.encoding_jobs[job_key] = {
+                        'side': side,
+                        'output_path': str(output_path),
+                        'raw_path': str(raw_path),
+                        'frame_count': 0,
+                        'raw_size': raw_path.stat().st_size,
+                        'status': 'queued',
+                        'progress_percent': 0.0,
+                        'eta_seconds': None,
+                        'speed': '',
+                        'queued_at': time.time(),
+                        'started_at': None,
+                        'idle_grace_seconds': ENCODING_IDLE_GRACE_SECONDS,
+                        'recovered': True,
+                        'recorder': recorder,
+                        'updated_at': time.time()
+                    }
+                queued += 1
+            except Exception as e:
+                print(f'[CameraServer] 恢复遗留 MJPEG 入队失败: {raw_path} ({e})')
+
+        if queued:
+            print(f'[CameraServer] 已恢复 {queued} 个遗留 MJPEG 压缩任务')
+            self._schedule_encoding_dispatch()
 
     async def start_broadcast_task(self):
         """启动帧广播后台任务"""
