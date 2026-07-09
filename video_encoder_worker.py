@@ -396,6 +396,7 @@ class VideoEncoderWorker:
                 })
         self.last_work_at = time.time()
         self.write_status()
+        self.dispatch_jobs()
 
     def run(self):
         if not self.ffmpeg_path:
