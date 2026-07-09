@@ -457,6 +457,7 @@
         // 录制状态变化（camera_server主动推送）
         window.CameraControl.onRecordingStatus = function(status) {
             console.log('[CameraUI] 录制状态更新:', status);
+            syncCameraAvailabilityStatus(status);
             if (status.recording) {
                 // 正在录制中 → 显示"写盘中"，禁用预览
                 status.recording_sides.forEach(side => {
@@ -480,6 +481,7 @@
         };
 
         window.CameraControl.onCameraStateChange = function(status) {
+            syncCameraAvailabilityStatus(status);
             updateCameraEncodingStatus(status.encoding_details || [], status);
         };
     }
@@ -1505,6 +1507,7 @@
                     didCameraStatusPoll = true;
                     const cameraStatus = await window.CameraControl.getStatus();
                     if (cameraStatus && cameraStatus.success !== false) {
+                        syncCameraAvailabilityStatus(cameraStatus);
                         updateCameraEncodingStatus(cameraStatus.encoding_details || [], cameraStatus);
                     }
                 }
@@ -1521,6 +1524,29 @@
             window.collectionController.showToast(message, type);
         } else {
             console.log(`[Toast] ${message}`);
+        }
+    }
+
+    function syncCameraAvailabilityStatus(status) {
+        if (!status) return;
+
+        const recordingSides = Array.isArray(status.recording_sides) ? status.recording_sides : [];
+        const previewSides = Array.isArray(status.preview_available) ? status.preview_available : [];
+
+        recordingSides.forEach(side => {
+            markCameraFrame(side);
+            updateCameraStatus(side, '写盘中', false);
+        });
+
+        previewSides.forEach(side => {
+            markCameraFrame(side);
+            if (!recordingSides.includes(side)) {
+                updateCameraStatus(side, '预览中', true);
+            }
+        });
+
+        if (recordingSides.length > 0 || previewSides.length > 0) {
+            _cameraDisconnectAlerted = false;
         }
     }
 
