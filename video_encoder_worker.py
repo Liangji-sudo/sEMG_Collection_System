@@ -29,6 +29,7 @@ STATUS_FILE = 'video_encoder_status.json'
 LOCK_FILE = 'video_encoder_worker.lock'
 META_SUFFIX = '.encode.json'
 RECORDING_SUFFIX = '.recording'
+COLLECTION_ACTIVE_FILE = 'video_collection_active.json'
 IDLE_EXIT_SECONDS = 20
 
 
@@ -44,6 +45,7 @@ ACTIVE_RECORDING_THREADS = env_int('VIDEO_ENCODING_ACTIVE_THREADS', 1, 1)
 IDLE_RECORDING_THREADS = env_int('VIDEO_ENCODING_IDLE_THREADS', ENCODING_THREADS, 1)
 ACTIVE_RECORDING_WORKERS = env_int('VIDEO_ENCODING_ACTIVE_WORKERS', 1, 1)
 IDLE_RECORDING_WORKERS = env_int('VIDEO_ENCODING_IDLE_WORKERS', max(2, ENCODING_WORKERS), 1)
+COLLECTION_ACTIVE_STALE_SECONDS = env_int('VIDEO_ENCODING_COLLECTION_ACTIVE_STALE_SECONDS', 12 * 3600, 60)
 ACTIVE_RECORDING_PRESET = os.environ.get('VIDEO_ENCODING_ACTIVE_PRESET', ENCODING_X264_PRESET).strip() or ENCODING_X264_PRESET
 IDLE_RECORDING_PRESET = os.environ.get('VIDEO_ENCODING_IDLE_PRESET', ENCODING_X264_PRESET).strip() or ENCODING_X264_PRESET
 
@@ -167,9 +169,39 @@ class VideoEncoderWorker:
     def has_active_recording(self):
         return any(self.video_dir.glob(f'*.mjpeg{RECORDING_SUFFIX}'))
 
+    def collection_active_reason(self):
+        marker_path = self.video_dir / COLLECTION_ACTIVE_FILE
+        if not marker_path.exists():
+            return None
+
+        try:
+            marker = read_json(marker_path, {}) or {}
+            active = marker.get('active') is True
+            age = time.time() - marker_path.stat().st_mtime
+            if active and age <= COLLECTION_ACTIVE_STALE_SECONDS:
+                mode = marker.get('mode') or 'collection'
+                session = marker.get('recordingSessionId') or marker.get('sessionId') or ''
+                return f'{mode} marker present{f" ({session})" if session else ""}'
+            if age > COLLECTION_ACTIVE_STALE_SECONDS:
+                try:
+                    marker_path.unlink()
+                except Exception:
+                    pass
+        except Exception:
+            return None
+        return None
+
     def current_encoding_policy(self):
-        active = self.has_active_recording()
-        if active:
+        active_reason = self.collection_active_reason()
+        if active_reason:
+            return {
+                'mode': 'recording_friendly',
+                'threads': ACTIVE_RECORDING_THREADS,
+                'workers': ACTIVE_RECORDING_WORKERS,
+                'preset': ACTIVE_RECORDING_PRESET,
+                'reason': active_reason,
+            }
+        if self.has_active_recording():
             return {
                 'mode': 'recording_friendly',
                 'threads': ACTIVE_RECORDING_THREADS,
@@ -207,6 +239,9 @@ class VideoEncoderWorker:
             'encoding_workers': policy['workers'],
             'encoding_preset': policy['preset'],
             'encoding_crf': ENCODING_X264_CRF,
+            'encoding_idle_grace_seconds': 0,
+            'encoding_dispatch_due_at': None,
+            'encoding_countdown_seconds': None,
             'encoding_details': details,
         })
 

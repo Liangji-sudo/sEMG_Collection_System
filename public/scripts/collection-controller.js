@@ -1236,6 +1236,13 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             // 【新增】生成录像会话ID（全部轮次共用一个ID）
             this._recordingSessionId = this._generateRecordingSessionId(this.sessionCount);
             console.log('[Collection] 全部轮次采集，生成录像会话ID:', this._recordingSessionId);
+            if (window.CameraControl && window.CameraControl.setVideoCollectionActive) {
+                window.CameraControl.setVideoCollectionActive(true, {
+                    mode: 'all_sessions',
+                    recordingSessionId: this._recordingSessionId,
+                    sessionCount: this.sessionCount
+                });
+            }
 
             // 显示开始提示弹窗
             this.showSessionOverlay({
@@ -1346,6 +1353,13 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
          */
         cancelAllSessionsMode() {
             this._isAllSessionsMode = false;
+            if (window.CameraControl && window.CameraControl.setVideoCollectionActive) {
+                window.CameraControl.setVideoCollectionActive(false, {
+                    mode: 'all_sessions',
+                    recordingSessionId: this._recordingSessionId,
+                    sessionCount: this.sessionCount
+                });
+            }
             if (this._restCountdownTimer) {
                 clearInterval(this._restCountdownTimer);
                 this._restCountdownTimer = null;
@@ -2604,6 +2618,13 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 } else {
                     // 所有轮次完成 → 切回 preview
                     this._resumePreviewAfterCollection('stage_complete');
+                    if (window.CameraControl && window.CameraControl.setVideoCollectionActive) {
+                        window.CameraControl.setVideoCollectionActive(false, {
+                            mode: 'all_sessions',
+                            recordingSessionId: this._recordingSessionId,
+                            sessionCount: this.sessionCount
+                        });
+                    }
                     this._isAllSessionsMode = false;
 
                     // 【修改】使用全屏弹窗显示完成信息
@@ -2874,6 +2895,13 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 } else {
                     // 所有轮次完成 → 切回 preview
                     this._resumePreviewAfterCollection('stage_complete');
+                    if (window.CameraControl && window.CameraControl.setVideoCollectionActive) {
+                        window.CameraControl.setVideoCollectionActive(false, {
+                            mode: 'all_sessions',
+                            recordingSessionId: this._recordingSessionId,
+                            sessionCount: this.sessionCount
+                        });
+                    }
                     this._isAllSessionsMode = false;
 
                     // 使用全屏弹窗显示完成信息

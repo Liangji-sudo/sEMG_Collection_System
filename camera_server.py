@@ -53,6 +53,7 @@ RECORDING_STALE_SECONDS = _env_int('CAMERA_RECORDING_STALE_SECONDS', 5, 2)
 VIDEO_ENCODER_STATUS_FILE = 'video_encoder_status.json'
 VIDEO_ENCODER_META_SUFFIX = '.encode.json'
 VIDEO_ENCODER_RECORDING_SUFFIX = '.recording'
+VIDEO_ENCODER_COLLECTION_ACTIVE_FILE = 'video_collection_active.json'
 
 # ==================== ffmpeg 查找 ====================
 
@@ -914,6 +915,13 @@ class CameraServer:
 
         self.output_dir = Path('storage/video')
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            stale_collection_marker = self.output_dir / VIDEO_ENCODER_COLLECTION_ACTIVE_FILE
+            if stale_collection_marker.exists():
+                stale_collection_marker.unlink()
+                print('[CameraServer] 已清理上次残留的视频采集活跃标记')
+        except Exception as e:
+            print(f'[CameraServer] 清理视频采集活跃标记失败: {e}')
 
         self.temp_dir = Path('storage/video/temp')
         self.temp_dir.mkdir(parents=True, exist_ok=True)
@@ -980,6 +988,39 @@ class CameraServer:
 
     def _video_encoder_status_path(self):
         return self.output_dir / VIDEO_ENCODER_STATUS_FILE
+
+    def _video_collection_active_path(self):
+        return self.output_dir / VIDEO_ENCODER_COLLECTION_ACTIVE_FILE
+
+    def _set_video_collection_active(self, active, data=None):
+        marker_path = self._video_collection_active_path()
+        data = data or {}
+        if active:
+            payload = {
+                'active': True,
+                'mode': data.get('mode') or 'all_sessions',
+                'recordingSessionId': data.get('recordingSessionId') or data.get('sessionId'),
+                'sessionCount': data.get('sessionCount'),
+                'updated_at': time.time(),
+            }
+            try:
+                tmp_path = marker_path.with_suffix(marker_path.suffix + '.tmp')
+                with open(tmp_path, 'w', encoding='utf-8') as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
+                os.replace(tmp_path, marker_path)
+                print(f'[CameraServer] 视频转码策略: 全部轮次采集活跃，保持低占用 ({payload.get("recordingSessionId")})')
+                return {'success': True, 'active': True}
+            except Exception as e:
+                return {'success': False, 'error': str(e)}
+
+        try:
+            if marker_path.exists():
+                marker_path.unlink()
+            print('[CameraServer] 视频转码策略: 全部轮次采集结束，允许全速后台压缩')
+            self._launch_video_encoder_worker()
+            return {'success': True, 'active': False}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
 
     def _read_video_encoder_status(self):
         try:
@@ -1219,6 +1260,8 @@ class CameraServer:
             return self._cmd_get_server_time()
         elif command == 'get_status':
             return self._cmd_get_status()
+        elif command == 'set_video_collection_active':
+            return self._set_video_collection_active(bool(data.get('active')), data)
         elif command == 'start_recording':
             # 兼容旧接口
             return self._cmd_mark_recording_start(data)
@@ -2017,12 +2060,14 @@ class CameraServer:
             'encoding_active_jobs': encoding_active_jobs,
             'encoding_queued_jobs': encoding_queued_jobs,
             'encoding_raw_bytes': encoding_raw_bytes,
-            'encoding_idle_grace_seconds': ENCODING_IDLE_GRACE_SECONDS,
+            'encoding_idle_grace_seconds': worker_status.get('encoding_idle_grace_seconds', ENCODING_IDLE_GRACE_SECONDS),
             'encoding_dispatch_due_at': encoding_dispatch_due_at,
             'encoding_countdown_seconds': encoding_countdown_seconds,
-            'encoding_workers': max(1, ENCODING_WORKERS),
-            'encoding_threads': ENCODING_THREADS,
-            'encoding_preset': ENCODING_X264_PRESET,
+            'encoding_mode': worker_status.get('encoding_mode'),
+            'encoding_mode_reason': worker_status.get('encoding_mode_reason'),
+            'encoding_workers': worker_status.get('encoding_workers', max(1, ENCODING_WORKERS)),
+            'encoding_threads': worker_status.get('encoding_threads', ENCODING_THREADS),
+            'encoding_preset': worker_status.get('encoding_preset', ENCODING_X264_PRESET),
             'encoding_crf': ENCODING_X264_CRF,
             'encoding_worker_running': bool(worker_status.get('worker_running')),
             'encoding_worker_pid': worker_status.get('worker_pid'),

@@ -428,6 +428,18 @@
         }
     }
 
+    async function setVideoCollectionActive(active, data = {}) {
+        try {
+            return await sendCommand('set_video_collection_active', {
+                active: !!active,
+                ...data
+            }, 5000);
+        } catch (err) {
+            console.warn('[CameraControl] 设置视频采集活跃标记失败:', err);
+            return { success: false, error: err.message };
+        }
+    }
+
     /**
      * 检查是否已连接
      */
@@ -514,6 +526,7 @@
         openCamera,
         closeCamera,
         getStatus,
+        setVideoCollectionActive,
         subscribePreview,
         unsubscribePreview,
         captureSnapshot,
