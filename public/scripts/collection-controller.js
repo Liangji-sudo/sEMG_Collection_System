@@ -1268,10 +1268,12 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
                 if (remainingSeconds >= this.MIN_REST_FOR_PREVIEW_STREAM_SECONDS) {
                     // 长休息：collection → preview，保持波形预览
                     console.log(`[Collection] 长休息 (${remainingSeconds}s >= ${this.MIN_REST_FOR_PREVIEW_STREAM_SECONDS}s)：collection → preview`);
+                    this._showRingStreamTransition('preview');
                     window.BleControl.switchCollectionToPreview();
                 } else {
                     // 短休息：collection → idle，不产生中间 PREVIEW bin
                     console.log(`[Collection] 短休息 (${remainingSeconds}s < ${this.MIN_REST_FOR_PREVIEW_STREAM_SECONDS}s)：collection → idle, skip preview`);
+                    this._showRingStreamTransition('idle');
                     window.BleControl.stopCollectionStream();
                 }
             }
@@ -1425,6 +1427,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             // 【新增】禁用空格键监听
             this._disableSpaceKey();
+
+            this._showRingStreamTransition(restartPreview ? 'preview' : 'idle');
 
             // 【新增】停止摄像头录制
             await this._stopCameraRecording();
@@ -1589,6 +1593,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             // 禁用空格键
             this._disableSpaceKey();
+
+            this._showRingStreamTransition('idle');
 
             // 【新增】停止摄像头录制
             await this._stopCameraRecording();
@@ -3032,6 +3038,23 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
         }
 
         /**
+         * 采集停止/轮次结束后，设备实际还在 BLE 切流收尾。
+         * 先把状态栏从“采集中”切到“切换中”，避免工作人员误以为手环阻塞。
+         */
+        _showRingStreamTransition(targetMode = 'preview') {
+            if (!window.deviceStatusWidget || !window.BleControl || !window.BleControl.devices) {
+                return;
+            }
+            const text = targetMode === 'preview' ? '切回预览中' : '停止收尾中';
+            [1, 2].forEach((deviceId) => {
+                const dev = window.BleControl.devices[deviceId];
+                if (dev && dev.connected && dev.stream_mode === 'collection') {
+                    window.deviceStatusWidget.setStreamModeOverride(deviceId, 'transition', text);
+                }
+            });
+        }
+
+        /**
          * 【修复 Issue 4】正常完成 collection 后切回 preview stream。
          * 带防重入：同一 reason 在 5 秒内最多调用一次。
          */
@@ -3054,6 +3077,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             }
 
             console.log(`[Collection] 切回 preview stream (reason: ${reason})`);
+            this._showRingStreamTransition('preview');
             // 延迟给 close H5 和 stop collection 一些时间
             setTimeout(() => {
                 if (!this._switchInProgress && window.BleControl && window.BleControl.isConnected) {

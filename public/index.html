@@ -5270,6 +5270,10 @@
             background: rgba(245, 158, 11, 0.15);
             border: 1px solid rgba(245, 158, 11, 0.3);
         }
+        .device-status-row.ring-transition {
+            background: rgba(14, 165, 233, 0.12);
+            border: 1px solid rgba(14, 165, 233, 0.28);
+        }
         .device-status-row.imu-warning {
             background: rgba(239, 68, 68, 0.14);
             border: 1px solid rgba(239, 68, 68, 0.36);
@@ -5417,6 +5421,16 @@
         .stream-mode.collection i {
             color: #f59e0b;
             animation: blink 1s ease-in-out infinite;
+        }
+
+        .stream-mode.transition {
+            color: #0284c7;
+            font-weight: 600;
+        }
+
+        .stream-mode.transition i {
+            color: #0ea5e9;
+            animation: pulse 1s ease-in-out infinite;
         }
 
         /* 摄像头状态：预览中和写盘中的颜色 */

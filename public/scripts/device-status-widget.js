@@ -25,6 +25,7 @@
             this.dragStartY = 0;
             this.elementStartX = 0;
             this.elementStartY = 0;
+            this.streamModeOverrides = {};
 
             // 设备状态缓存
             this.device1Status = {
@@ -174,6 +175,7 @@
                     num_imus: Number.isFinite(status.num_imus) ? status.num_imus : null,
                     hw_version: status.hw_version || null
                 };
+                this.clearStreamModeOverrideIfSettled(1, this.device1Status.stream_mode, this.device1Status.connected);
                 this.renderDevice('left', this.device1Status);
             } else if (deviceId === 2) {
                 this.device2Status = {
@@ -183,7 +185,33 @@
                     num_imus: Number.isFinite(status.num_imus) ? status.num_imus : null,
                     hw_version: status.hw_version || null
                 };
+                this.clearStreamModeOverrideIfSettled(2, this.device2Status.stream_mode, this.device2Status.connected);
                 this.renderDevice('right', this.device2Status);
+            }
+        }
+
+        setStreamModeOverride(deviceId, mode, text) {
+            this.streamModeOverrides[deviceId] = {
+                mode,
+                text,
+                updatedAt: Date.now()
+            };
+            const status = deviceId === 1 ? this.device1Status : this.device2Status;
+            this.renderDevice(deviceId === 1 ? 'left' : 'right', status);
+        }
+
+        clearStreamModeOverride(deviceId) {
+            if (!this.streamModeOverrides[deviceId]) return;
+            delete this.streamModeOverrides[deviceId];
+            const status = deviceId === 1 ? this.device1Status : this.device2Status;
+            this.renderDevice(deviceId === 1 ? 'left' : 'right', status);
+        }
+
+        clearStreamModeOverrideIfSettled(deviceId, mode, connected = true) {
+            const override = this.streamModeOverrides[deviceId];
+            if (!override) return;
+            if (!connected || mode === 'preview' || mode === 'idle') {
+                delete this.streamModeOverrides[deviceId];
             }
         }
 
@@ -202,7 +230,14 @@
             this.updateConnection(prefix, status.connected);
 
             // 更新流模式
-            this.updateStreamMode(prefix, status.stream_mode, status.connected);
+            const deviceId = side === 'left' ? 1 : 2;
+            const override = this.streamModeOverrides[deviceId];
+            this.updateStreamMode(
+                prefix,
+                override ? override.mode : status.stream_mode,
+                status.connected,
+                override ? override.text : null
+            );
             this.updateImuCount(prefix, status.num_imus, status.connected, status.hw_version);
         }
 
@@ -320,7 +355,7 @@
         /**
          * 更新流模式
          */
-        updateStreamMode(prefix, mode, connected) {
+        updateStreamMode(prefix, mode, connected, overrideText = null) {
             const streamEl = document.getElementById(`${prefix}Stream`);
             const rowEl = document.getElementById(`${prefix}RingRow`);
             if (!streamEl) return;
@@ -328,7 +363,7 @@
             const textEl = streamEl.querySelector('span');
 
             // 清除行级状态类
-            if (rowEl) rowEl.classList.remove('ring-preview', 'ring-collection');
+            if (rowEl) rowEl.classList.remove('ring-preview', 'ring-collection', 'ring-transition');
 
             if (!connected) {
                 streamEl.className = 'stream-mode';
@@ -347,6 +382,10 @@
                 modeText = '采集中';
                 modeClass = 'stream-mode collection';
                 if (rowEl) rowEl.classList.add('ring-collection');
+            } else if (mode === 'transition') {
+                modeText = overrideText || '切换中';
+                modeClass = 'stream-mode transition';
+                if (rowEl) rowEl.classList.add('ring-transition');
             } else {
                 modeText = '空闲';
                 modeClass = 'stream-mode';
