@@ -48,7 +48,7 @@ from matplotlib.lines import Line2D
 BASE_LSB_24BIT_VENDOR = 0.476837    # 供应商固件: 4.0V ref / 2^23 * 1e6 (μV)
 BASE_LSB_24BIT_LEGACY = 0.2861      # 旧版 ble_server: 2.4V ref（仅 fallback）
 HARDWARE_FRONTEND_GAIN = 10         # 硬件前端增益（供应商固件固定）
-DEFAULT_GAIN = 12                   # 默认增益
+DEFAULT_GAIN = 1                    # 默认增益
 SAMPLE_RATE = 2000                  # EMG采样率 2kHz (同步后的SD卡数据)
 SAMPLE_RATE_BLE = 250               # BLE传输采样率 250Hz
 
@@ -65,7 +65,7 @@ FILTER_NOTCH_Q_ONLINE = 15          # 在线陷波 Q 值（供应商 q_online=15
 
 # IMU 缩放系数
 SCALE_ACCEL = 16.0 / 32768.0       # 加速度 ±2g
-SCALE_GYRO = 2000.0 / 32768.0      # 角速度 ±2000°/s
+SCALE_GYRO = 70.0 / 1000.0         # Supplier update: 0.07 dps/LSB
 SCALE_MAG = 0.15                   # 磁力计 μT
 
 

@@ -147,7 +147,7 @@ HARDWARE_FRONTEND_GAIN = 10  # 供应商固件使用10
 
 # IMU转换系数
 SCALE_ACCEL = 16.0 / 32768.0
-SCALE_GYRO = 2000.0 / 32768.0
+SCALE_GYRO = 70.0 / 1000.0
 SCALE_MAG = 0.15
 
 # ===================== 同步校验配置 =====================

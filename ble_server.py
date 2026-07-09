@@ -83,8 +83,8 @@ CMD_MAP = {
 # 【修改】默认使用2kHz采样率，与SD卡存储一致
 DEFAULT_CONFIG = {
     'sample_rate': 2000,      # 【修改】2kHz采样率（ADC采样率，用于SD卡存储）
-    'gain': 12,
-    'gain_index': 6,          # 增益索引：6 对应增益12
+    'gain': 1,
+    'gain_index': 0,          # 增益索引：0 对应增益1
     'is_16bit': False,        # 24-bit模式
     'shift': 4,
     'imu_enabled': True,
@@ -104,7 +104,7 @@ COLLECTION_FILENAME_PREFIX = "COLLECT"
 # ================= 转换系数 =================
 SCALE_ACCEL = 32.0 / 32768.0              # V2 默认: LSM6DSV32X ±32g
 SCALE_ACCEL_V1 = 16.0 / 32768.0           # V1: ICM-20948 ±16g
-SCALE_GYRO = 2000.0 / 32768.0             # V1/V2 相同
+SCALE_GYRO = 70.0 / 1000.0                # Supplier update: 0.07 dps/LSB
 SCALE_MAG = 0.15                           # 仅 V1 使用, V2 无磁力计
 # 【修正】与供应商代码/bin_sync_tool 保持一致
 BASE_LSB_24BIT = 0.476837     # 4.0V ref / 2^23 * 1e6 (μV) — 对齐供应商 V3
@@ -1329,6 +1329,12 @@ async def connect_device(ws, device_id: int, mac_or_name: str):
                         'mac': mac,
                         'name': device.name,
                         'rssi': rssi,
+                        'hw_version': dev.hw_version,
+                        'num_imus': dev.num_imus,
+                        'firmware_version': dev.firmware_version,
+                        'hardware_version': dev.hardware_version,
+                        'battery_percent': dev.battery_percent,
+                        'stream_mode': dev.stream_mode,
                         'connected': state.get_connected_devices(),
                     })
 
@@ -1337,6 +1343,8 @@ async def connect_device(ws, device_id: int, mac_or_name: str):
                         'device_id': device_id,
                         'mac': mac,
                         'name': device.name,
+                        'hw_version': dev.hw_version,
+                        'num_imus': dev.num_imus,
                     })
                     return
                 
@@ -1482,7 +1490,7 @@ async def start_stream(ws, device_id: int):
 
         # 【重要】不再发送额外的配置命令，使用ESP32的默认配置
         # 供应商代码也是这样做的：只在用户点击"应用配置"时才发送配置命令
-        # ESP32默认配置: 24-bit, 9帧/包, IMU启用, 增益12
+        # ESP32默认配置: 24-bit, 9帧/包, IMU启用; 上位机连接时会下发 gain=1
 
         dev.notification_epoch += 1
         handler = create_notification_handler(dev)

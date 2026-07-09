@@ -1053,6 +1053,9 @@ class RealtimeEngine extends EventEmitter {
                 template_name: config.templateName || 'default',
                 subject_info: this.currentUser,
                 start_time: this.stage_start_time,
+                emg_gain: 1,
+                emg_gain_index: 0,
+                emg_lsb_uv_24bit: 0.476837 / 10,
                 // 【新增】传递 collection stream 的 SD 卡 bin 文件名（用于 HDF5 溯源）
                 // 使用 collectionBinFilenames（优先）或 sd_filenames
                 sd_bin_dev1: this.collectionBinFilenames.dev1 || this.sd_filenames.dev1,

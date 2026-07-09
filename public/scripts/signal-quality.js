@@ -25,10 +25,10 @@
 
     // clipLimitUv 计算 (与 ble_server.py 一致)
     // BASE_LSB_24BIT = 0.476837 (对齐供应商 V3 / bin_sync_tool)
-    // lsb_uv = 0.476837 / (12 * 10) = 0.003974 uV/LSB (gain=12)
-    // clip_limit_uv = lsb_uv * 8388607 ≈ 33333 uV
+    // lsb_uv = 0.476837 / (1 * 10) = 0.047684 uV/LSB (gain=1)
+    // clip_limit_uv = lsb_uv * 8388607
     var BASE_LSB_24BIT = 0.476837;
-    var DEFAULT_GAIN = 12;
+    var DEFAULT_GAIN = 1;
     var HARDWARE_FRONTEND_GAIN = 10;
 
     function calcClipLimitUv(gain) {

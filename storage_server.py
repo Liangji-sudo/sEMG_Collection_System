@@ -353,6 +353,9 @@ class HDF5StorageServer:
             category4 = params.get("category4", "normal")
             subject_info = params.get("subject_info", {})
             template_name = params.get("template_name", "default")
+            emg_gain = params.get("emg_gain")
+            emg_gain_index = params.get("emg_gain_index")
+            emg_lsb_uv_24bit = params.get("emg_lsb_uv_24bit")
             
             # 【新增】提取Session参数
             session_index = params.get("session_index", 0)
@@ -415,6 +418,12 @@ class HDF5StorageServer:
             self.f.attrs["category4"] = category4
             self.f.attrs["template_name"] = template_name
             self.f.attrs["created_at"] = datetime.now().isoformat()
+            if emg_gain is not None:
+                self.f.attrs["emg_gain"] = int(emg_gain)
+            if emg_gain_index is not None:
+                self.f.attrs["emg_gain_index"] = int(emg_gain_index)
+            if emg_lsb_uv_24bit is not None:
+                self.f.attrs["emg_lsb_uv_24bit"] = float(emg_lsb_uv_24bit)
 
             # Phase 3: stage 开始时间（从 realtimeEngine 传入）
             start_time = params.get("start_time")

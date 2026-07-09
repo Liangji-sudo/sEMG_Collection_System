@@ -32,8 +32,12 @@
 
         // 设备状态
         devices: {
-            1: { connected: false, streaming: false, mac: null, name: null, rssi: null },
-            2: { connected: false, streaming: false, mac: null, name: null, rssi: null },
+            1: { connected: false, streaming: false, mac: null, name: null, rssi: null, num_imus: null, hw_version: null },
+            2: { connected: false, streaming: false, mac: null, name: null, rssi: null, num_imus: null, hw_version: null },
+        },
+        imuWarningShown: {
+            1: false,
+            2: false,
         },
         connectingDevices: {
             1: { active: false, startedAt: 0, timer: null, mac: null },
@@ -317,7 +321,13 @@ async function decodeData(buffer) {
                     mac: msg.mac,
                     name: msg.name,
                     rssi: msg.rssi,
+                    battery_percent: msg.battery_percent || 0,
+                    stream_mode: msg.stream_mode || 'idle',
+                    num_imus: Number.isFinite(msg.num_imus) ? msg.num_imus : null,
+                    hw_version: msg.hw_version || null,
                 };
+                updateDeviceStatusWidget(deviceId, BleState.devices[deviceId]);
+                checkImuCount(deviceId, BleState.devices[deviceId]);
                 if (BleState.onDeviceChange) {
                     BleState.onDeviceChange(deviceId, BleState.devices[deviceId]);
                 }
@@ -345,7 +355,13 @@ async function decodeData(buffer) {
                     mac: null,
                     name: null,
                     rssi: null,
+                    battery_percent: 0,
+                    stream_mode: 'idle',
+                    num_imus: null,
+                    hw_version: null,
                 };
+                BleState.imuWarningShown[deviceId] = false;
+                updateDeviceStatusWidget(deviceId, BleState.devices[deviceId]);
                 if (BleState.onDeviceChange) {
                     BleState.onDeviceChange(deviceId, BleState.devices[deviceId]);
                 }
@@ -435,16 +451,15 @@ async function decodeData(buffer) {
             rssi: data.rssi,
             battery_percent: data.battery_percent || 0,
             stream_mode: data.stream_mode || 'idle',
+            num_imus: Number.isFinite(data.num_imus) ? data.num_imus : null,
+            hw_version: data.hw_version || null,
+            firmware_version: data.firmware_version || null,
+            hardware_version: data.hardware_version || null,
         };
 
         // 更新设备状态悬浮窗口
-        if (window.deviceStatusWidget) {
-            window.deviceStatusWidget.updateDevice(deviceId, {
-                connected: data.connected,
-                battery_percent: data.battery_percent || 0,
-                stream_mode: data.stream_mode || 'idle',
-            });
-        }
+        updateDeviceStatusWidget(deviceId, BleState.devices[deviceId]);
+        checkImuCount(deviceId, BleState.devices[deviceId]);
 
         // 通知设备状态变化回调
         if (BleState.onDeviceChange) {
@@ -454,6 +469,40 @@ async function decodeData(buffer) {
 
     // ================= UI 更新 =================
     
+    function updateDeviceStatusWidget(deviceId, device) {
+        if (!window.deviceStatusWidget) return;
+
+        window.deviceStatusWidget.updateDevice(deviceId, {
+            connected: !!device.connected,
+            battery_percent: device.battery_percent || 0,
+            stream_mode: device.stream_mode || 'idle',
+            num_imus: Number.isFinite(device.num_imus) ? device.num_imus : null,
+            hw_version: device.hw_version || null,
+        });
+    }
+
+    function checkImuCount(deviceId, device) {
+        if (!device || !device.connected) {
+            BleState.imuWarningShown[deviceId] = false;
+            return;
+        }
+
+        const numImus = Number.isFinite(device.num_imus) ? device.num_imus : null;
+        if (numImus === null || numImus === 0) {
+            return;
+        }
+
+        if (numImus === 3) {
+            BleState.imuWarningShown[deviceId] = false;
+            return;
+        }
+
+        if (!BleState.imuWarningShown[deviceId]) {
+            BleState.imuWarningShown[deviceId] = true;
+            showToast(`设备 ${deviceId} IMU数量=${numImus}，期望3个；请重启手环后重新连接`, 'error');
+        }
+    }
+
     function updateServerStatus(status) {
         const el = document.getElementById('serverStatus');
         if (el) {

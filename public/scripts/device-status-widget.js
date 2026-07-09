@@ -30,12 +30,16 @@
             this.device1Status = {
                 connected: false,
                 battery: 0,
-                stream_mode: 'idle'
+                stream_mode: 'idle',
+                num_imus: null,
+                hw_version: null
             };
             this.device2Status = {
                 connected: false,
                 battery: 0,
-                stream_mode: 'idle'
+                stream_mode: 'idle',
+                num_imus: null,
+                hw_version: null
             };
 
             this.init();
@@ -71,6 +75,7 @@
 
             // 绑定拖拽事件
             this.setupDragging();
+            this.ensureImuElements();
 
             console.log('[DeviceStatusWidget] 初始化完成');
         }
@@ -165,14 +170,18 @@
                 this.device1Status = {
                     connected: status.connected || false,
                     battery: status.battery_percent || 0,
-                    stream_mode: status.stream_mode || 'idle'
+                    stream_mode: status.stream_mode || 'idle',
+                    num_imus: Number.isFinite(status.num_imus) ? status.num_imus : null,
+                    hw_version: status.hw_version || null
                 };
                 this.renderDevice('left', this.device1Status);
             } else if (deviceId === 2) {
                 this.device2Status = {
                     connected: status.connected || false,
                     battery: status.battery_percent || 0,
-                    stream_mode: status.stream_mode || 'idle'
+                    stream_mode: status.stream_mode || 'idle',
+                    num_imus: Number.isFinite(status.num_imus) ? status.num_imus : null,
+                    hw_version: status.hw_version || null
                 };
                 this.renderDevice('right', this.device2Status);
             }
@@ -194,11 +203,55 @@
 
             // 更新流模式
             this.updateStreamMode(prefix, status.stream_mode, status.connected);
+            this.updateImuCount(prefix, status.num_imus, status.connected);
         }
 
         /**
          * 更新电池显示
          */
+        ensureImuElements() {
+            ['left', 'right'].forEach((prefix) => {
+                const rowEl = document.getElementById(`${prefix}RingRow`);
+                if (!rowEl || document.getElementById(`${prefix}ImuCount`)) return;
+
+                const imuEl = document.createElement('span');
+                imuEl.className = 'imu-status';
+                imuEl.id = `${prefix}ImuCount`;
+                imuEl.title = 'Detected IMU count';
+                imuEl.innerHTML = '<i class="fas fa-microchip" style="font-size: 6px;"></i><span>IMU --</span>';
+                rowEl.appendChild(imuEl);
+            });
+        }
+
+        updateImuCount(prefix, numImus, connected) {
+            const imuEl = document.getElementById(`${prefix}ImuCount`);
+            const rowEl = document.getElementById(`${prefix}RingRow`);
+            if (!imuEl) return;
+
+            const textEl = imuEl.querySelector('span');
+            const value = Number.isFinite(numImus) ? numImus : null;
+            imuEl.classList.remove('ok', 'warning');
+            if (rowEl) rowEl.classList.remove('imu-warning');
+
+            if (!connected) {
+                if (textEl) textEl.textContent = 'IMU --';
+                return;
+            }
+
+            if (value === null || value === 0) {
+                if (textEl) textEl.textContent = 'IMU ?/3';
+                return;
+            }
+
+            if (textEl) textEl.textContent = `IMU ${value}/3`;
+            if (value === 3) {
+                imuEl.classList.add('ok');
+            } else {
+                imuEl.classList.add('warning');
+                if (rowEl) rowEl.classList.add('imu-warning');
+            }
+        }
+
         updateBattery(prefix, percent, connected) {
             const batteryEl = document.getElementById(`${prefix}Battery`);
             const iconEl = document.getElementById(`${prefix}BatteryIcon`);
