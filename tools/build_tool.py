@@ -13,6 +13,49 @@
 import subprocess
 import sys
 import os
+import glob
+import shutil
+from pathlib import Path
+
+
+def find_ffmpeg_binaries():
+    """Return ffmpeg/ffprobe paths that should be bundled with hdf5_tool."""
+    ffmpeg_path = shutil.which('ffmpeg')
+    candidates = []
+
+    if ffmpeg_path:
+        candidates.append(Path(ffmpeg_path).resolve().parent)
+
+    if sys.platform == 'win32':
+        local_appdata = os.environ.get('LOCALAPPDATA', '')
+        search_roots = []
+        if local_appdata:
+            search_roots.append(Path(local_appdata) / 'Microsoft/WinGet/Packages')
+        search_roots.extend([
+            Path('C:/ffmpeg/bin'),
+            Path('C:/Program Files/ffmpeg/bin'),
+            Path('C:/tools/ffmpeg/bin'),
+            Path.home() / 'AppData/Local/Microsoft/WinGet/Packages',
+        ])
+        for root in search_roots:
+            root_str = str(root)
+            if 'WinGet' in root_str and 'Packages' in root_str:
+                for pkg in ('Gyan.FFmpeg', 'Gyan.FFmpeg.Essentials', 'Gyan.FFmpeg.Shared'):
+                    for match in glob.glob(str(root / f'{pkg}*' / 'ffmpeg-*' / 'bin' / 'ffmpeg.exe')):
+                        candidates.append(Path(match).resolve().parent)
+            else:
+                candidates.append(root)
+
+    binaries = []
+    seen = set()
+    exe_names = ['ffmpeg.exe', 'ffprobe.exe'] if sys.platform == 'win32' else ['ffmpeg', 'ffprobe']
+    for folder in candidates:
+        for exe_name in exe_names:
+            exe_path = folder / exe_name
+            if exe_path.exists() and str(exe_path).lower() not in seen:
+                seen.add(str(exe_path).lower())
+                binaries.append(str(exe_path))
+    return binaries
 
 
 def main():
@@ -37,6 +80,15 @@ def main():
         print("模式: 调试 (保留控制台窗口)")
     print("打包形态:", "onefile 单文件（启动较慢）" if onefile_mode else "onedir 文件夹（推荐，启动更快）")
     print("=" * 60)
+
+    binary_sep = ';' if sys.platform == 'win32' else ':'
+    ffmpeg_binaries = find_ffmpeg_binaries()
+    if ffmpeg_binaries:
+        print("[INFO] 将打包视频压缩依赖:")
+        for p in ffmpeg_binaries:
+            print(f"  - {p}")
+    else:
+        print("[WARN] 未找到 ffmpeg/ffprobe，打包后的压缩视频功能需要现场机器自行安装 ffmpeg")
 
     cmd = [
         sys.executable, '-m', 'PyInstaller',
@@ -71,6 +123,10 @@ def main():
         '--hidden-import=lz4.frame',
         script_path
     ]
+
+    for binary_path in ffmpeg_binaries:
+        cmd.insert(-1, '--add-binary')
+        cmd.insert(-1, f'{binary_path}{binary_sep}.')
 
     print(f"执行: {' '.join(cmd)}\n")
 

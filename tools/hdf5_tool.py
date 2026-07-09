@@ -9,6 +9,11 @@ HDF5整合工具 - 结合查看和同步功能
 import sys
 import os
 import json
+import glob
+import shutil
+import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import h5py
 import numpy as np
 from datetime import datetime
@@ -3455,6 +3460,8 @@ class SyncTab(QWidget):
         super().__init__()
         self.h5_files = []
         self.worker = None
+        self.video_worker = None
+        self._compressing = False
         # 恢复上次使用的 bin 目录
         saved_bin_dir = QSettings("sEMG", "HDF5Tool").value("sync_bin_dir", None)
         self.bin_dir = saved_bin_dir if saved_bin_dir and os.path.isdir(saved_bin_dir) else None
@@ -3685,6 +3692,27 @@ class SyncTab(QWidget):
         self.sync_btn.clicked.connect(self.start_sync)
         left_layout.addWidget(self.sync_btn)
 
+        video_row = QHBoxLayout()
+        self.compress_btn = QPushButton("压缩视频")
+        self.compress_btn.clicked.connect(self.run_video_compress)
+        self.compress_btn.setEnabled(False)
+        self.compress_btn.setStyleSheet("font-weight: bold; background: #2563eb; color: white; padding: 8px 18px; font-size: 13px;")
+        video_row.addWidget(self.compress_btn)
+        video_row.addWidget(QLabel("并行"))
+        self.video_workers_spin = QSpinBox()
+        self.video_workers_spin.setRange(1, 8)
+        self.video_workers_spin.setValue(max(1, min(4, (os.cpu_count() or 4) // 2)))
+        self.video_workers_spin.setToolTip("同时启动的 ffmpeg 进程数。低配现场机建议 1-2，高配机器可调到 4。")
+        video_row.addWidget(self.video_workers_spin)
+        video_row.addWidget(QLabel("线程/进程"))
+        self.video_threads_spin = QSpinBox()
+        self.video_threads_spin.setRange(1, 16)
+        default_workers = self.video_workers_spin.value()
+        self.video_threads_spin.setValue(max(1, min(4, (os.cpu_count() or 4) // max(1, default_workers))))
+        self.video_threads_spin.setToolTip("每个 ffmpeg 进程使用的编码线程数。总占用约为 并行数 x 线程数。")
+        video_row.addWidget(self.video_threads_spin)
+        left_layout.addLayout(video_row)
+
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         self.progress_bar.setStyleSheet("""
@@ -3753,6 +3781,12 @@ class SyncTab(QWidget):
 
         layout.addWidget(splitter)
 
+    def _update_video_compress_controls(self):
+        enabled = bool(self.h5_files) and not self._compressing and self.worker is None
+        self.compress_btn.setEnabled(enabled)
+        self.video_workers_spin.setEnabled(not self._compressing and self.worker is None)
+        self.video_threads_spin.setEnabled(not self._compressing and self.worker is None)
+
     def add_h5_files(self):
         files, _ = QFileDialog.getOpenFileNames(
             self, "选择H5文件", "", "HDF5文件 (*.h5 *.hdf5);;所有文件 (*)"
@@ -3766,6 +3800,7 @@ class SyncTab(QWidget):
         self.h5_count_label.setText(f"共 {len(self.h5_files)} 个文件")
         if self.bin_dir:
             self._refresh_pairing_status()
+        self._update_video_compress_controls()
 
     def add_files_from_list(self, files):
         for f in files:
@@ -3777,12 +3812,14 @@ class SyncTab(QWidget):
         self.h5_count_label.setText(f"共 {len(self.h5_files)} 个文件")
         if self.bin_dir:
             self._refresh_pairing_status()
+        self._update_video_compress_controls()
 
     def clear_h5_files(self):
         self.h5_files.clear()
         self.h5_list.clear()
         self.h5_count_label.setText("共 0 个文件")
         self.h5_count_label.setStyleSheet("color: #666;")
+        self._update_video_compress_controls()
 
     def _check_bin_pairing(self, file_path, bin_dir, device_id=1):
         """检查单个 H5 文件与 bin 目录的配对状态
@@ -3964,6 +4001,9 @@ class SyncTab(QWidget):
                 self.log_text.append(f"  配对预检完成，见H5列表颜色标记")
 
     def start_sync(self):
+        if self._compressing:
+            QMessageBox.warning(self, "提示", "视频压缩正在运行，请等待完成后再同步")
+            return
         if not self.h5_files:
             QMessageBox.warning(self, "警告", "请先添加H5文件")
             return
@@ -3982,6 +4022,7 @@ class SyncTab(QWidget):
             return
 
         self.sync_btn.setEnabled(False)
+        self._update_video_compress_controls()
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self.log_text.append("=" * 50)
@@ -3991,10 +4032,76 @@ class SyncTab(QWidget):
             self.h5_files, self.bin_dir,
             devices, self.validate_check.isChecked()
         )
+        self._update_video_compress_controls()
         self.worker.progress.connect(self.on_progress)
         self.worker.log.connect(self.on_log)
         self.worker.finished_signal.connect(self.on_finished)
         self.worker.start()
+
+    def run_video_compress(self):
+        if not self.h5_files or self._compressing or self.worker is not None:
+            return
+        workers = self.video_workers_spin.value()
+        threads = self.video_threads_spin.value()
+        reply = QMessageBox.question(
+            self,
+            "压缩视频",
+            f"将针对当前同步列表中的 {len(self.h5_files)} 个 H5 查找左右手视频并压缩为 MP4。\n\n"
+            f"并行 ffmpeg 进程: {workers}\n"
+            f"每进程线程: {threads}\n"
+            f"理论编码线程占用: {workers * threads}\n\n"
+            "压缩成功后会更新 H5 的 video_left/video_right 指向 MP4，原 AVI 文件会保留。\n"
+            "是否开始？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        self._compressing = True
+        self._update_video_compress_controls()
+        self.sync_btn.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setFormat("正在扫描视频...")
+        self.progress_label.setText("正在准备视频压缩任务")
+        self.log_text.clear()
+        self.log_text.append("=== 开始压缩视频 ===")
+
+        self.video_worker = VideoCompressWorker(
+            self.h5_files,
+            max_workers=workers,
+            ffmpeg_threads=threads,
+            preset='superfast',
+            crf=23,
+        )
+        self.video_worker.log.connect(self.on_log)
+        self.video_worker.progress.connect(self.on_video_compress_progress)
+        self.video_worker.finished_signal.connect(self.on_video_compress_finished)
+        self.video_worker.start()
+
+    def on_video_compress_progress(self, done, total, fname):
+        self.progress_bar.setRange(0, total)
+        self.progress_bar.setValue(done)
+        self.progress_bar.setFormat(f"视频压缩 {done}/{total}")
+        self.progress_label.setText(f"完成: {fname}")
+
+    def on_video_compress_finished(self, success_count, total, results):
+        self.progress_bar.setRange(0, max(1, total))
+        self.progress_bar.setValue(total)
+        self.progress_bar.setVisible(False)
+        self.progress_label.setText(f"视频压缩完成: {success_count}/{total} 成功")
+        self._compressing = False
+        self.video_worker = None
+        self._update_video_compress_controls()
+        self.log_text.append("")
+        self.log_text.append(f"=== 视频压缩结束: {success_count}/{total} 成功 ===")
+        for r in results:
+            if not r.get('success'):
+                self.log_text.append(f"  FAIL {os.path.basename(r.get('input', '?'))}: {r.get('error', '?')}")
+        main_win = self.window()
+        if hasattr(main_win, 'refresh_file_list_colors'):
+            main_win.refresh_file_list_colors()
 
     def on_progress(self, current, total, message):
         self.progress_bar.setMaximum(total)
@@ -4005,7 +4112,9 @@ class SyncTab(QWidget):
         self.log_text.append(message)
 
     def on_finished(self, success, message):
+        self.worker = None
         self.sync_btn.setEnabled(True)
+        self._update_video_compress_controls()
         self.progress_bar.setVisible(False)
         self.progress_label.setText("")
         self.log_text.append("")
@@ -4166,6 +4275,330 @@ class BreakpointTab(QWidget):
         QMessageBox.information(self, "已复制", "JSON 已复制到剪贴板")
 
 
+def find_ffmpeg_for_hdf5_tool():
+    """Find ffmpeg for post-collection video compression."""
+    bundled_dirs = []
+    if getattr(sys, 'frozen', False):
+        bundled_dirs.extend([
+            Path(getattr(sys, '_MEIPASS', Path(sys.executable).parent)),
+            Path(sys.executable).resolve().parent,
+            Path(sys.executable).resolve().parent / 'bin',
+            Path(sys.executable).resolve().parent / '_internal',
+            Path(sys.executable).resolve().parent / '_internal' / 'bin',
+        ])
+        for d in bundled_dirs:
+            exe_path = d / ('ffmpeg.exe' if sys.platform == 'win32' else 'ffmpeg')
+            if exe_path.exists():
+                return str(exe_path)
+
+    ffmpeg_path = shutil.which('ffmpeg')
+    if ffmpeg_path:
+        return ffmpeg_path
+
+    if sys.platform == 'win32':
+        local_appdata = os.environ.get('LOCALAPPDATA', '')
+        search_roots = []
+        if local_appdata:
+            search_roots.append(Path(local_appdata) / 'Microsoft/WinGet/Packages')
+        search_roots.extend([
+            Path('C:/ffmpeg/bin'),
+            Path('C:/Program Files/ffmpeg/bin'),
+            Path('C:/tools/ffmpeg/bin'),
+            Path.home() / 'AppData/Local/Microsoft/WinGet/Packages',
+        ])
+        for root in search_roots:
+            root_str = str(root)
+            if 'WinGet' in root_str and 'Packages' in root_str:
+                for pkg in ('Gyan.FFmpeg', 'Gyan.FFmpeg.Essentials', 'Gyan.FFmpeg.Shared'):
+                    matches = glob.glob(str(root / f'{pkg}*' / 'ffmpeg-*' / 'bin' / 'ffmpeg.exe'))
+                    if matches:
+                        return matches[0]
+            else:
+                exe_path = root / 'ffmpeg.exe'
+                if exe_path.exists():
+                    return str(exe_path)
+    return None
+
+
+def _h5_attr_to_str(value):
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value.decode('utf-8', errors='ignore')
+    return str(value)
+
+
+def find_h5_video_files(h5_path):
+    """Return {'left': path, 'right': path} using the preview lookup convention."""
+    h5_dir = os.path.dirname(os.path.abspath(h5_path))
+    search_dirs = []
+    cur = os.path.abspath(h5_dir)
+    for _ in range(6):
+        video_sub = os.path.join(cur, 'video')
+        if os.path.isdir(video_sub) and video_sub not in search_dirs:
+            search_dirs.append(video_sub)
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    if h5_dir not in search_dirs:
+        search_dirs.append(h5_dir)
+
+    alt_exts = ['.avi', '.mp4', '.mkv', '.mov', '.AVI', '.MP4', '.MKV', '.MOV']
+
+    def try_find(video_name):
+        if not video_name:
+            return None
+        candidates = []
+        if os.path.isabs(video_name):
+            candidates.append(video_name)
+        base_filename = os.path.basename(video_name)
+        base_name, _ = os.path.splitext(base_filename)
+        for sd in search_dirs:
+            candidates.append(os.path.join(sd, base_filename))
+            candidates.extend(os.path.join(sd, f'{base_name}{ext}') for ext in alt_exts)
+        seen = set()
+        for c in candidates:
+            if c in seen:
+                continue
+            seen.add(c)
+            if os.path.isfile(c):
+                return c
+        return None
+
+    result = {}
+    try:
+        with h5py.File(h5_path, 'r') as f:
+            for side, key in [('left', 'video_left'), ('right', 'video_right')]:
+                found = try_find(_h5_attr_to_str(f.attrs.get(key)))
+                if found:
+                    result[side] = found
+    except Exception:
+        return result
+    return result
+
+
+def probe_video_duration(ffmpeg_path, video_path):
+    ffprobe = ffmpeg_path
+    if ffmpeg_path.lower().endswith('ffmpeg.exe'):
+        ffprobe = ffmpeg_path[:-10] + 'ffprobe.exe'
+    elif ffmpeg_path.lower().endswith('ffmpeg'):
+        ffprobe = ffmpeg_path[:-6] + 'ffprobe'
+    if not os.path.exists(ffprobe):
+        ffprobe = shutil.which('ffprobe') or ffprobe
+    try:
+        result = subprocess.run([
+            ffprobe, '-v', 'error', '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1', video_path
+        ], capture_output=True, text=True, timeout=15,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
+        if result.returncode == 0:
+            return max(0.001, float(result.stdout.strip()))
+    except Exception:
+        pass
+    return None
+
+
+def compress_video_to_mp4(ffmpeg_path, input_path, output_path, ffmpeg_threads, preset, crf, progress_cb=None):
+    """Compress one video to H.264 MP4. Temp file is replaced only on success."""
+    tmp_path = output_path + '.tmp.mp4'
+    if os.path.exists(tmp_path):
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
+
+    duration = probe_video_duration(ffmpeg_path, input_path)
+    cmd = [
+        ffmpeg_path, '-y',
+        '-v', 'error',
+        '-i', input_path,
+        '-an',
+        '-c:v', 'libx264',
+        '-preset', preset,
+        '-crf', str(crf),
+        '-threads', str(max(1, int(ffmpeg_threads))),
+        '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart',
+        '-progress', 'pipe:1',
+        '-nostats',
+        tmp_path
+    ]
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+    )
+    last_emit = 0
+    stderr_tail = ''
+    try:
+        while True:
+            line = proc.stdout.readline() if proc.stdout else ''
+            if line:
+                now = _time_module.time()
+                if line.startswith('out_time_ms=') and duration and progress_cb and now - last_emit > 1.5:
+                    try:
+                        out_seconds = max(0.0, float(line.split('=', 1)[1].strip()) / 1000000.0)
+                        progress_cb(min(99.0, out_seconds / duration * 100.0))
+                        last_emit = now
+                    except Exception:
+                        pass
+            elif proc.poll() is not None:
+                break
+
+        if proc.stderr:
+            stderr_tail = proc.stderr.read()[-2000:]
+        rc = proc.wait(timeout=5)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        raise
+
+    if rc != 0 or not os.path.exists(tmp_path) or os.path.getsize(tmp_path) <= 0:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+        raise RuntimeError((stderr_tail or 'ffmpeg failed')[-500:])
+
+    os.replace(tmp_path, output_path)
+    if progress_cb:
+        progress_cb(100.0)
+    return os.path.getsize(output_path)
+
+
+_VIDEO_COMPRESS_H5_LOCK = threading.Lock()
+
+
+class VideoCompressWorker(QThread):
+    log = pyqtSignal(str)
+    progress = pyqtSignal(int, int, str)
+    finished_signal = pyqtSignal(int, int, object)
+
+    def __init__(self, h5_paths, max_workers=2, ffmpeg_threads=2, preset='superfast', crf=23):
+        super().__init__()
+        self.h5_paths = list(h5_paths)
+        self.max_workers = max(1, int(max_workers))
+        self.ffmpeg_threads = max(1, int(ffmpeg_threads))
+        self.preset = preset
+        self.crf = int(crf)
+
+    def _collect_jobs(self):
+        jobs = []
+        seen = set()
+        for h5_path in self.h5_paths:
+            videos = find_h5_video_files(h5_path)
+            if not videos:
+                self.log.emit(f"  未找到视频: {os.path.basename(h5_path)}")
+                continue
+            for side, video_path in videos.items():
+                if os.path.splitext(video_path)[1].lower() == '.mp4':
+                    self.log.emit(f"  跳过已是MP4: {os.path.basename(video_path)}")
+                    continue
+                key = os.path.abspath(video_path)
+                if key in seen:
+                    continue
+                seen.add(key)
+                jobs.append({
+                    'h5_path': h5_path,
+                    'side': side,
+                    'input': video_path,
+                    'output': os.path.splitext(video_path)[0] + '.mp4',
+                })
+        return jobs
+
+    def _update_h5_video_attr(self, h5_path, side, output_path):
+        attr_key = 'video_left' if side == 'left' else 'video_right'
+        source_attr = f'{attr_key}_source_avi'
+        with _VIDEO_COMPRESS_H5_LOCK:
+            with h5py.File(h5_path, 'r+') as f:
+                old_value = _h5_attr_to_str(f.attrs.get(attr_key)) or ''
+                f.attrs[source_attr] = os.path.basename(old_value) if old_value else ''
+                f.attrs[attr_key] = os.path.basename(output_path)
+                f.attrs['video_compressed_at'] = datetime.now().isoformat(timespec='seconds')
+                f.attrs['video_compression'] = 'h264_mp4'
+
+    def _run_one(self, ffmpeg_path, job):
+        input_path = job['input']
+        output_path = job['output']
+        self.log.emit(f"  开始压缩: {os.path.basename(input_path)} -> {os.path.basename(output_path)}")
+
+        def on_progress(percent):
+            self.log.emit(f"    {os.path.basename(input_path)} {percent:.1f}%")
+
+        size_before = os.path.getsize(input_path)
+        size_after = compress_video_to_mp4(
+            ffmpeg_path, input_path, output_path,
+            self.ffmpeg_threads, self.preset, self.crf, on_progress
+        )
+        self._update_h5_video_attr(job['h5_path'], job['side'], output_path)
+        ratio = size_before / size_after if size_after > 0 else 0
+        return {
+            'success': True,
+            'input': input_path,
+            'output': output_path,
+            'side': job['side'],
+            'h5_path': job['h5_path'],
+            'size_before': size_before,
+            'size_after': size_after,
+            'ratio': ratio,
+        }
+
+    def run(self):
+        ffmpeg_path = find_ffmpeg_for_hdf5_tool()
+        if not ffmpeg_path:
+            self.log.emit("错误: 未找到 ffmpeg，无法压缩视频")
+            self.finished_signal.emit(0, 0, [])
+            return
+
+        jobs = self._collect_jobs()
+        total = len(jobs)
+        if total == 0:
+            self.log.emit("没有需要压缩的视频")
+            self.finished_signal.emit(0, 0, [])
+            return
+
+        self.log.emit(f"ffmpeg: {ffmpeg_path}")
+        self.log.emit(
+            f"任务数: {total} | 并行进程: {self.max_workers} | "
+            f"每进程线程: {self.ffmpeg_threads} | preset={self.preset} | crf={self.crf}"
+        )
+        done = 0
+        success = 0
+        results = []
+        with ThreadPoolExecutor(max_workers=min(self.max_workers, total)) as executor:
+            futures = {executor.submit(self._run_one, ffmpeg_path, job): job for job in jobs}
+            for fut in as_completed(futures):
+                job = futures[fut]
+                done += 1
+                try:
+                    res = fut.result()
+                    success += 1
+                    results.append(res)
+                    self.log.emit(
+                        f"  完成: {os.path.basename(res['output'])} "
+                        f"{res['size_before']/(1024*1024):.1f}MB -> {res['size_after']/(1024*1024):.1f}MB "
+                        f"({res['ratio']:.1f}x)"
+                    )
+                except Exception as e:
+                    results.append({
+                        'success': False,
+                        'input': job['input'],
+                        'h5_path': job['h5_path'],
+                        'side': job['side'],
+                        'error': str(e)
+                    })
+                    self.log.emit(f"  失败: {os.path.basename(job['input'])}: {e}")
+                self.progress.emit(done, total, os.path.basename(job['input']))
+
+        self.finished_signal.emit(success, total, results)
+
+
 class OneToManySyncTab(QWidget):
     """一对多同步标签页 - 旧格式 H5 批量 ADC 搜索同步"""
 
@@ -4179,7 +4612,9 @@ class OneToManySyncTab(QWidget):
         saved_bin_dir = QSettings("sEMG", "HDF5Tool").value("sync_bin_dir", None)
         self.bin_dir = saved_bin_dir if saved_bin_dir and os.path.isdir(saved_bin_dir) else None
         self.worker = None
+        self.video_worker = None
         self._syncing = False
+        self._compressing = False
         self.init_ui()
         # 初始化后更新 bin 目录标签
         if self.bin_dir:
@@ -4261,6 +4696,24 @@ class OneToManySyncTab(QWidget):
         self.sync_btn.setEnabled(False)
         self.sync_btn.setStyleSheet("font-weight: bold; background: #f97316; color: white; padding: 8px 24px; font-size: 13px;")
         btn_row.addWidget(self.sync_btn)
+        self.compress_btn = QPushButton("压缩视频")
+        self.compress_btn.clicked.connect(self.run_video_compress)
+        self.compress_btn.setEnabled(False)
+        self.compress_btn.setStyleSheet("font-weight: bold; background: #2563eb; color: white; padding: 8px 24px; font-size: 13px;")
+        btn_row.addWidget(self.compress_btn)
+        btn_row.addWidget(QLabel("并行"))
+        self.video_workers_spin = QSpinBox()
+        self.video_workers_spin.setRange(1, 8)
+        self.video_workers_spin.setValue(max(1, min(4, (os.cpu_count() or 4) // 2)))
+        self.video_workers_spin.setToolTip("同时启动的 ffmpeg 进程数。低配现场机建议 1-2，高配机器可调到 4。")
+        btn_row.addWidget(self.video_workers_spin)
+        btn_row.addWidget(QLabel("线程/进程"))
+        self.video_threads_spin = QSpinBox()
+        self.video_threads_spin.setRange(1, 16)
+        default_workers = self.video_workers_spin.value()
+        self.video_threads_spin.setValue(max(1, min(4, (os.cpu_count() or 4) // max(1, default_workers))))
+        self.video_threads_spin.setToolTip("每个 ffmpeg 进程使用的编码线程数。总占用约为 并行数 x 线程数。")
+        btn_row.addWidget(self.video_threads_spin)
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
@@ -4358,8 +4811,11 @@ class OneToManySyncTab(QWidget):
     def _update_ui(self):
         n = len(self.h5_paths)
         self.count_label.setText(f"共 {n} 个文件")
-        has_files = n > 0 and self.bin_dir is not None and not self._syncing
+        has_files = n > 0 and self.bin_dir is not None and not self._syncing and not self._compressing
         self.sync_btn.setEnabled(has_files)
+        self.compress_btn.setEnabled(n > 0 and not self._syncing and not self._compressing)
+        self.video_workers_spin.setEnabled(not self._syncing and not self._compressing)
+        self.video_threads_spin.setEnabled(not self._syncing and not self._compressing)
 
     def select_bin_dir(self):
         d = QFileDialog.getExistingDirectory(self, "选择长 Bin 文件所在目录")
@@ -4399,8 +4855,71 @@ class OneToManySyncTab(QWidget):
 
     # ---- sync flow ----
 
+    def run_video_compress(self):
+        if not self.h5_paths or self._syncing or self._compressing:
+            return
+        workers = self.video_workers_spin.value()
+        threads = self.video_threads_spin.value()
+        total_threads = workers * threads
+        reply = QMessageBox.question(
+            self,
+            "压缩视频",
+            f"将针对同步列表中的 {len(self.h5_paths)} 个 H5 查找左右手视频并压缩为 MP4。\n\n"
+            f"并行 ffmpeg 进程: {workers}\n"
+            f"每进程线程: {threads}\n"
+            f"理论编码线程占用: {total_threads}\n\n"
+            "压缩成功后会更新 H5 的 video_left/video_right 指向 MP4，原 AVI 文件会保留。\n"
+            "是否开始？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        self._compressing = True
+        self._update_ui()
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setFormat("正在扫描视频...")
+        self.status_label.setText("正在准备视频压缩任务")
+        self.log_text.clear()
+        self.log("=== 开始压缩视频 ===")
+
+        self.video_worker = VideoCompressWorker(
+            self.h5_paths,
+            max_workers=workers,
+            ffmpeg_threads=threads,
+            preset='superfast',
+            crf=23,
+        )
+        self.video_worker.log.connect(self.log)
+        self.video_worker.progress.connect(self._on_video_compress_progress)
+        self.video_worker.finished_signal.connect(self._on_video_compress_finished)
+        self.video_worker.start()
+
+    def _on_video_compress_progress(self, done, total, fname):
+        self.progress_bar.setRange(0, total)
+        self.progress_bar.setValue(done)
+        self.progress_bar.setFormat(f"视频压缩 {done}/{total}")
+        self.status_label.setText(f"完成: {fname}")
+
+    def _on_video_compress_finished(self, success_count, total, results):
+        self.progress_bar.setRange(0, max(1, total))
+        self.progress_bar.setValue(total)
+        self.progress_bar.setVisible(False)
+        self._compressing = False
+        self._update_ui()
+        self.status_label.setText(f"视频压缩完成: {success_count}/{total} 成功")
+        self.log(f"\n=== 视频压缩结束: {success_count}/{total} 成功 ===")
+        for r in results:
+            if not r.get('success'):
+                self.log(f"  FAIL {os.path.basename(r.get('input', '?'))}: {r.get('error', '?')}")
+        main_win = self.window()
+        if hasattr(main_win, 'refresh_file_list_colors'):
+            main_win.refresh_file_list_colors()
+
     def run_sync(self):
-        if not self.h5_paths or not self.bin_dir or self._syncing:
+        if not self.h5_paths or not self.bin_dir or self._syncing or self._compressing:
             return
         synced = self._get_synced_files()
         files_to_sync = list(self.h5_paths)
