@@ -505,7 +505,9 @@ async function decodeData(buffer) {
 
         if (!BleState.imuWarningShown[deviceId]) {
             BleState.imuWarningShown[deviceId] = true;
-            showToast(`设备 ${deviceId} IMU数量=${numImus}，期望3个；请重启手环后重新连接`, 'error');
+            const warning = `设备 ${deviceId} 检测到 V2 IMU数量=${numImus}，期望3个；请立即暂停采集，重启手环后重连，仍为${numImus}则替换手环/联系供应商`;
+            showToast(warning, 'error');
+            setTimeout(() => alert(warning), 50);
         }
     }
 

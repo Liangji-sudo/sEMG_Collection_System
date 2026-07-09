@@ -33,8 +33,22 @@ import re
 import base64
 from concurrent.futures import ThreadPoolExecutor
 
-ENCODING_IDLE_GRACE_SECONDS = int(os.environ.get('VIDEO_ENCODING_IDLE_GRACE_SECONDS', '90'))
-ENCODING_WORKERS = int(os.environ.get('VIDEO_ENCODING_WORKERS', '1'))
+def _env_int(name, default, minimum=None):
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except Exception:
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+
+ENCODING_IDLE_GRACE_SECONDS = _env_int('VIDEO_ENCODING_IDLE_GRACE_SECONDS', 30, 0)
+ENCODING_WORKERS = _env_int('VIDEO_ENCODING_WORKERS', 1, 1)
+ENCODING_THREADS = _env_int('VIDEO_ENCODING_THREADS', 2, 1)
+ENCODING_X264_PRESET = os.environ.get('VIDEO_ENCODING_PRESET', 'superfast').strip() or 'superfast'
+ENCODING_X264_CRF = os.environ.get('VIDEO_ENCODING_CRF', '24').strip() or '24'
+ENCODING_MPEG4_QV = os.environ.get('VIDEO_ENCODING_MPEG4_QV', '5').strip() or '5'
 
 # ==================== ffmpeg 查找 ====================
 
@@ -608,9 +622,9 @@ class FrameRecorder:
                 '-i', str(self.raw_path),
                 '-an',
                 '-c:v', 'libx264',
-                '-preset', 'veryfast',
-                '-crf', '23',
-                '-threads', '1',
+                '-preset', ENCODING_X264_PRESET,
+                '-crf', ENCODING_X264_CRF,
+                '-threads', str(ENCODING_THREADS),
                 '-g', '30',
                 '-bf', '0',
                 '-pix_fmt', 'yuv420p',
@@ -630,8 +644,8 @@ class FrameRecorder:
                         '-i', str(self.raw_path),
                         '-an',
                         '-c:v', 'mpeg4',
-                        '-q:v', '5',
-                        '-threads', '1',
+                        '-q:v', ENCODING_MPEG4_QV,
+                        '-threads', str(ENCODING_THREADS),
                         '-g', '30',
                         '-bf', '0',
                         '-pix_fmt', 'yuv420p',
@@ -865,6 +879,7 @@ class CameraServer:
         self.encoding_jobs = {}
         self.encoding_lock = threading.Lock()
         self.encoding_dispatch_timer = None
+        self.encoding_dispatch_due_at = None
 
         # 预览订阅者: {side: set(websocket)}
         self.preview_subscribers = {'left': set(), 'right': set()}
@@ -884,7 +899,11 @@ class CameraServer:
         print('[CameraServer] 摄像头服务器初始化完成')
         print(f'[CameraServer] 视频输出目录: {self.output_dir.absolute()}')
         print('[CameraServer] 模式: MJPEG实时预览 + 帧录制 (预览不中断)')
-        print(f'[CameraServer] 视频压缩策略: idle_grace={ENCODING_IDLE_GRACE_SECONDS}s, workers={max(1, ENCODING_WORKERS)}')
+        print(
+            f'[CameraServer] 视频压缩策略: idle_grace={ENCODING_IDLE_GRACE_SECONDS}s, '
+            f'workers={max(1, ENCODING_WORKERS)}, threads={ENCODING_THREADS}, '
+            f'preset={ENCODING_X264_PRESET}, crf={ENCODING_X264_CRF}'
+        )
         self._queue_orphan_mjpeg_files()
 
     # ==================== 帧广播任务 ====================
@@ -1534,6 +1553,7 @@ class CameraServer:
 
     def _schedule_encoding_dispatch(self, delay=None):
         delay = ENCODING_IDLE_GRACE_SECONDS if delay is None else max(0, float(delay))
+        now = time.time()
         with self.encoding_lock:
             if self.encoding_dispatch_timer:
                 try:
@@ -1542,6 +1562,7 @@ class CameraServer:
                     pass
                 self.encoding_dispatch_timer = None
 
+            self.encoding_dispatch_due_at = now + delay
             timer = threading.Timer(delay, self._dispatch_encoding_if_idle)
             timer.daemon = True
             self.encoding_dispatch_timer = timer
@@ -1558,6 +1579,7 @@ class CameraServer:
                 if job.get('status') == 'encoding' and job.get('future') and not job['future'].done()
             ]
             if active:
+                self.encoding_dispatch_due_at = None
                 return
 
             queued_items = [
@@ -1565,6 +1587,7 @@ class CameraServer:
                 if job.get('status') == 'queued'
             ]
             if not queued_items:
+                self.encoding_dispatch_due_at = None
                 return
 
             job_key, job_meta = sorted(queued_items, key=lambda item: item[1].get('queued_at', 0))[0]
@@ -1575,6 +1598,7 @@ class CameraServer:
                     'error': 'missing recorder for queued encoding job',
                     'updated_at': time.time()
                 })
+                self.encoding_dispatch_due_at = None
                 return
 
             job_meta.update({
@@ -1585,6 +1609,7 @@ class CameraServer:
                 'started_at': time.time(),
                 'updated_at': time.time()
             })
+            self.encoding_dispatch_due_at = None
             side = job_meta.get('side', '')
             output_path = job_meta.get('output_path', '')
 
@@ -1847,16 +1872,27 @@ class CameraServer:
 
     def _cmd_get_status(self):
         """获取服务器状态"""
+        now = time.time()
         with self.encoding_lock:
             encoding_details = []
             for job in self.encoding_jobs.values():
-                encoding_details.append({
+                detail = {
                     key: value for key, value in job.items()
                     if key not in ('future', 'recorder')
-                })
+                }
+                if job.get('status') == 'queued' and self.encoding_dispatch_due_at:
+                    detail['starts_in_seconds'] = max(0.0, self.encoding_dispatch_due_at - now)
+                    detail['dispatch_due_at'] = self.encoding_dispatch_due_at
+                encoding_details.append(detail)
             encoding_active_jobs = sum(1 for job in encoding_details if job.get('status') == 'encoding')
             encoding_queued_jobs = sum(1 for job in encoding_details if job.get('status') == 'queued')
             encoding_raw_bytes = sum(int(job.get('raw_size') or 0) for job in encoding_details if job.get('status') in ('queued', 'encoding'))
+            encoding_dispatch_due_at = self.encoding_dispatch_due_at
+            encoding_countdown_seconds = (
+                max(0.0, encoding_dispatch_due_at - now)
+                if encoding_queued_jobs and not encoding_active_jobs and encoding_dispatch_due_at
+                else None
+            )
 
         try:
             disk_usage = shutil.disk_usage(str(self.output_dir))
@@ -1880,6 +1916,12 @@ class CameraServer:
             'encoding_queued_jobs': encoding_queued_jobs,
             'encoding_raw_bytes': encoding_raw_bytes,
             'encoding_idle_grace_seconds': ENCODING_IDLE_GRACE_SECONDS,
+            'encoding_dispatch_due_at': encoding_dispatch_due_at,
+            'encoding_countdown_seconds': encoding_countdown_seconds,
+            'encoding_workers': max(1, ENCODING_WORKERS),
+            'encoding_threads': ENCODING_THREADS,
+            'encoding_preset': ENCODING_X264_PRESET,
+            'encoding_crf': ENCODING_X264_CRF,
             'disk_free_bytes': disk_free_bytes,
             'encoding_details': encoding_details,
             'preview_subscribers': {
@@ -1922,6 +1964,7 @@ class CameraServer:
             except Exception:
                 pass
             self.encoding_dispatch_timer = None
+            self.encoding_dispatch_due_at = None
 
         loop = asyncio.get_running_loop()
         while True:
@@ -1954,6 +1997,7 @@ class CameraServer:
             except Exception:
                 pass
             self.encoding_dispatch_timer = None
+            self.encoding_dispatch_due_at = None
 
         self.encode_executor.shutdown(wait=False, cancel_futures=False)
 

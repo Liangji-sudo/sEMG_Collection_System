@@ -149,6 +149,17 @@
                     return;
                 }
 
+                if (packet.type === 'h5_storage_warning') {
+                    const message = packet.message || 'H5写入异常，请中断并重采本轮';
+                    console.error('[Waveform] H5存储告警:', packet);
+                    if (window.collectionController && typeof window.collectionController.showToast === 'function') {
+                        window.collectionController.showToast(message, 'error');
+                    } else {
+                        alert(message);
+                    }
+                    return;
+                }
+
             } catch (error) {
                 console.error('[Waveform] 消息解析失败:', error);
             }

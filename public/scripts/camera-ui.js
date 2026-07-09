@@ -26,6 +26,7 @@
     const _announcedEncodingDone = new Set();
     const _lastPreviewFrameAt = { left: 0, right: 0 };
     const _thumbFailureCount = { left: 0, right: 0 };
+    const _cameraBackendAlive = { left: false, right: false };
     const CAMERA_FRAME_STALE_MS = 7000;
 
     // 等待DOM加载完成
@@ -165,49 +166,56 @@
                     bottom: 24px;
                     z-index: 10000;
                     display: none;
-                    width: min(520px, calc(100vw - 48px));
-                    min-height: 128px;
-                    padding: 18px 20px;
+                    width: min(430px, calc(100vw - 48px));
+                    min-width: 280px;
+                    min-height: 104px;
+                    max-width: calc(100vw - 32px);
+                    max-height: calc(100vh - 32px);
+                    overflow: auto;
+                    resize: both;
+                    padding: 14px 16px;
                     border: 2px solid #f59e0b;
                     border-radius: 8px;
                     background: #fffbeb;
                     box-shadow: 0 16px 42px rgba(15, 23, 42, 0.24);
                     color: #78350f;
-                    font-size: 16px;
+                    font-size: 14px;
                     line-height: 1.45;
                 }
                 .camera-encoding-panel.active { display: block; }
                 .camera-encoding-panel.working { animation: camera-panel-pulse 1.8s ease-in-out infinite; }
+                .camera-encoding-panel.waiting { animation: camera-panel-pulse 2.4s ease-in-out infinite; }
                 .camera-encoding-head {
                     display: flex;
                     align-items: center;
                     justify-content: space-between;
                     gap: 16px;
-                    margin-bottom: 12px;
+                    margin-bottom: 8px;
                     cursor: move;
                     user-select: none;
                 }
-                .camera-encoding-title { font-weight: 900; font-size: 20px; color: #78350f; }
+                .camera-encoding-title { font-weight: 900; font-size: 17px; color: #78350f; }
                 .camera-encoding-dot {
                     width: 14px;
                     height: 14px;
                     border-radius: 999px;
                     background: #f59e0b;
                 }
-                .camera-encoding-panel.working .camera-encoding-dot {
+                .camera-encoding-panel.working .camera-encoding-dot,
+                .camera-encoding-panel.waiting .camera-encoding-dot {
                     animation: camera-dot-pulse 0.9s ease-in-out infinite;
                 }
                 .camera-encoding-percent {
-                    font-size: 32px;
+                    font-size: 26px;
                     font-weight: 900;
                     color: #92400e;
-                    margin-bottom: 8px;
+                    margin-bottom: 6px;
                 }
                 .camera-encoding-detail { color: #92400e; font-weight: 700; }
                 .camera-encoding-bar {
                     position: relative;
                     height: 14px;
-                    margin: 12px 0 10px;
+                    margin: 10px 0 8px;
                     overflow: hidden;
                     border-radius: 999px;
                     background: #fde68a;
@@ -441,6 +449,8 @@
                 _cameraDisconnectAlerted = false;
             } else {
                 console.log('[CameraUI] Camera Server 断开');
+                _cameraBackendAlive.left = false;
+                _cameraBackendAlive.right = false;
                 updateCameraStatus('left', '未连接', false);
                 updateCameraStatus('right', '未连接', false);
                 handleCameraDisconnect(status.code ? `Camera Server 连接已断开（code ${status.code}）` : 'Camera Server 连接已断开');
@@ -1347,6 +1357,7 @@
         if (jobs.length === 0) {
             _cameraEncodingActive = false;
             panel.classList.remove('working');
+            panel.classList.remove('waiting');
             panel.classList.remove('active');
             return;
         }
@@ -1367,6 +1378,7 @@
             const percent = Number(first.progress_percent || 0).toFixed(1);
             const eta = formatDuration(first.eta_seconds);
             const extra = active.length > 1 ? `，另有 ${active.length - 1} 个任务排队/压缩中` : '';
+            panel.classList.remove('waiting');
             panel.classList.add('working');
             if (percentEl) percentEl.textContent = `${percent}%`;
             if (fillEl) fillEl.style.width = `${Math.max(1, Math.min(100, Number(percent)))}%`;
@@ -1379,13 +1391,29 @@
             const grace = status && status.encoding_idle_grace_seconds !== undefined
                 ? status.encoding_idle_grace_seconds
                 : (queued[0].idle_grace_seconds || 0);
+            const countdownRaw = status && status.encoding_countdown_seconds !== undefined && status.encoding_countdown_seconds !== null
+                ? Number(status.encoding_countdown_seconds)
+                : Number(queued[0].starts_in_seconds);
+            const countdown = Number.isFinite(countdownRaw) ? Math.max(0, countdownRaw) : null;
+            const countdownText = countdown === null ? '等待空闲' : `等待 ${formatDuration(countdown)}`;
+            const waitProgress = countdown === null || !grace
+                ? 2
+                : Math.max(2, Math.min(98, ((grace - countdown) / Math.max(grace, 1)) * 100));
             panel.classList.remove('working');
-            if (percentEl) percentEl.textContent = `${queued.length} 个排队`;
-            if (fillEl) fillEl.style.width = '1%';
+            panel.classList.add('waiting');
+            if (percentEl) percentEl.textContent = countdownText;
+            if (fillEl) fillEl.style.width = `${waitProgress}%`;
             const freeText = freeBytes === null || freeBytes === undefined ? '' : `，磁盘剩余 ${formatBytes(freeBytes)}`;
-            detailEl.textContent = `采集优先：${queued.length} 个视频等待空闲 ${grace}s 后单线程压缩，原始占用 ${formatBytes(queuedRawBytes)}${freeText}`;
+            const policyText = status && status.encoding_threads
+                ? `单任务 ${status.encoding_threads} 线程`
+                : '单任务后台';
+            const startText = countdown === null
+                ? `等待采集空闲 ${grace}s 后开始`
+                : `${formatDuration(countdown)} 后开始`;
+            detailEl.textContent = `采集优先：${queued.length} 个视频排队，${startText}，${policyText}压缩，原始占用 ${formatBytes(queuedRawBytes)}${freeText}`;
         } else if (failed.length > 0) {
             panel.classList.remove('working');
+            panel.classList.remove('waiting');
             if (percentEl) percentEl.textContent = '失败';
             if (fillEl) fillEl.style.width = '100%';
             detailEl.textContent = `视频压缩失败：${failed[0].error || '请查看 camera_server 日志'}`;
@@ -1398,6 +1426,7 @@
             });
             if (newlyDone.length > 0) {
                 panel.classList.remove('working');
+                panel.classList.remove('waiting');
                 if (percentEl) percentEl.textContent = '100%';
                 if (fillEl) fillEl.style.width = '100%';
                 detailEl.textContent = '视频压缩已完成，临时 MJPEG 已清理';
@@ -1548,6 +1577,9 @@
 
         const recordingSides = Array.from(recordingSet);
         const previewSides = Array.from(previewSet);
+        ['left', 'right'].forEach(side => {
+            _cameraBackendAlive[side] = recordingSet.has(side) || previewSet.has(side);
+        });
 
         recordingSides.forEach(side => {
             markCameraFrame(side);
@@ -1729,6 +1761,7 @@
 
         // 重置缩略图状态
         ['left', 'right'].forEach(side => {
+            _cameraBackendAlive[side] = false;
             const cell = document.getElementById(`thumb${capitalize(side)}Cell`);
             const img = document.getElementById(`thumb${capitalize(side)}Img`);
             const statusEl = document.getElementById(`thumb${capitalize(side)}Status`);
@@ -1752,12 +1785,21 @@
 
         // 检查哪些摄像头已打开
         const camState = window.CameraControl.getCameraState();
-        const openedSides = ['left', 'right'].filter(s => camState[s] && camState[s].opened);
+        let openedSides = ['left', 'right'].filter(s => camState[s] && camState[s].opened);
 
         if (openedSides.length === 0) {
-            // 没有摄像头打开，停止定时器
-            stopCameraThumbTimer();
-            return;
+            try {
+                const status = await window.CameraControl.getStatus?.();
+                if (status && status.success !== false) {
+                    syncCameraAvailabilityStatus(status);
+                    openedSides = ['left', 'right'].filter(s => _cameraBackendAlive[s]);
+                }
+            } catch (err) {}
+            if (openedSides.length === 0) {
+                // 没有摄像头打开，停止定时器
+                stopCameraThumbTimer();
+                return;
+            }
         }
 
         if (_cameraEncodingActive && !isCollectionRunning()) {
@@ -1814,6 +1856,15 @@
         } else {
             if (_thumbFailureCount[side] !== undefined) {
                 _thumbFailureCount[side]++;
+                const backendAlive = _cameraBackendAlive[side];
+                if (backendAlive) {
+                    if (status) {
+                        status.textContent = '后端采集中，等待画面刷新...';
+                        status.style.color = '#f59e0b';
+                    }
+                    if (cell) cell.classList.remove('no-signal');
+                    return;
+                }
                 if (_thumbFailureCount[side] >= 3) {
                     handleCameraDisconnect(`${side === 'left' ? '左手' : '右手'}摄像头连续抓帧失败`);
                 }

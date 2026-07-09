@@ -83,6 +83,7 @@ class RealtimeEngine extends EventEmitter {
         this.storage_push_connected = false;             // 【新增】PUSH连接状态
         this.storageRequestQueue = [];
         this.isStorageRequestPending = false;
+        this.h5StorageWarningShown = false;
 
         // 采集状态
         this.currentTaskId = null;
@@ -95,6 +96,7 @@ class RealtimeEngine extends EventEmitter {
         // Stage状态
         this.currentStageName = null;
         this.stageFileOpen = false;
+        this.stageFileCreateFailed = false;
         this.stage_start_time = 0;
         this.currentStageNeedMocap = false;  // 【新增】当前stage是否需要动捕数据
         
@@ -327,6 +329,8 @@ class RealtimeEngine extends EventEmitter {
         this.collectionConfig = config;
         this.isCollecting = true;
         this.collectionPaused = false;
+        this.h5StorageWarningShown = false;
+        this.stageFileCreateFailed = false;
         this.currentStageName = stageName;
         this.currentSessionIndex = sessionIndex ?? 0;
         this.currentSessionNumber = sessionNumber ?? 1;
@@ -1014,6 +1018,7 @@ class RealtimeEngine extends EventEmitter {
     async openStageFile(stageName, stageIndex) {
         console.log(`[realtimeEngine] 尝试打开Stage文件: ${stageName}`);
         console.log(`[realtimeEngine] storage_connected = ${this.storage_connected}`);
+        this.stageFileCreateFailed = false;
 
         // 【新增】测试模式下跳过创建H5文件
         if (this.isTestMode) {
@@ -1023,8 +1028,18 @@ class RealtimeEngine extends EventEmitter {
         }
 
         if (!this.storage_connected) {
-            console.warn('[realtimeEngine] ⚠️ Storage未连接，无法打开文件');
-            return;
+            console.warn('[realtimeEngine] ⚠️ Storage未连接，尝试立即重连...');
+            try {
+                await this.storage_server_connect();
+            } catch (err) {
+                console.error('[realtimeEngine] Storage重连异常:', err);
+            }
+            if (!this.storage_connected) {
+                console.warn('[realtimeEngine] ⚠️ Storage重连失败，无法打开文件');
+                this.stageFileCreateFailed = true;
+                this.notifyH5StorageWarning('Storage Server未连接，当前采集不会写入H5；请紧急中断并重启后端');
+                return;
+            }
         }
 
         // 【修复】等待sd_filenames_updated事件到达（最多等待500ms）
@@ -1060,7 +1075,7 @@ class RealtimeEngine extends EventEmitter {
             const taskIdForFolder = config.task || this.currentTaskId;
 
             const emgConfig = this.getActiveEmgConfig();
-            const response = await this.sendStorageCommand('create', {
+            const createParams = {
                 filename,
                 subdirectory,
                 task_id: taskIdForFolder,  // 使用中文任务名称
@@ -1112,17 +1127,45 @@ class RealtimeEngine extends EventEmitter {
                 resume_parent_recording_session_id: this.resumeParentRecordingSessionId || null,
                 // Phase 3: 父 segment 序号
                 parent_segment_index: this.resumeParentSegmentIndex || null
-            });
+            };
+
+            let response = await this.sendStorageCommand('create', createParams);
+            if (response.status !== 'success') {
+                console.warn('[realtimeEngine] H5创建失败，300ms后重试一次:', response);
+                await new Promise(resolve => setTimeout(resolve, 300));
+                response = await this.sendStorageCommand('create', createParams);
+            }
 
             if (response.status === 'success') {
                 this.stageFileOpen = true;
+                this.stageFileCreateFailed = false;
+                this.h5StorageWarningShown = false;
                 console.log(`[realtimeEngine] ✅ 文件已打开: ${filename}`);
             } else {
                 console.error(`[realtimeEngine] ❌ 打开文件失败:`, response);
+                this.stageFileOpen = false;
+                this.stageFileCreateFailed = true;
+                this.notifyH5StorageWarning(`H5创建失败：${response.msg || response.error || response.status || '未知错误'}；请紧急中断并重采本轮`);
             }
         } catch (error) {
             console.error('[realtimeEngine] 打开Stage文件失败:', error);
+            this.stageFileOpen = false;
+            this.stageFileCreateFailed = true;
+            this.notifyH5StorageWarning(`H5创建异常：${error.message || error}；请紧急中断并重采本轮`);
         }
+    }
+
+    notifyH5StorageWarning(message, force = false) {
+        if (this.h5StorageWarningShown && !force) return;
+        this.h5StorageWarningShown = true;
+        this.broadcastToClients({
+            type: 'h5_storage_warning',
+            level: 'error',
+            message,
+            stageName: this.currentStageName,
+            sessionNumber: this.currentSessionNumber,
+            timestamp: Date.now()
+        });
     }
 
     async closeStageFile(extraParams = {}) {
@@ -1605,6 +1648,8 @@ class RealtimeEngine extends EventEmitter {
                         imu1_hw_version: imu1HwVersion, imu2_hw_version: imu2HwVersion,
                         imu1_num_imus: imu1NumImus, imu2_num_imus: imu2NumImus,
                     });
+                } else if (this.isCollecting && !this.collectionPaused && !this.isTestMode && !this.stageFileOpen) {
+                    this.notifyH5StorageWarning('已收到手环数据，但H5文件未打开，当前轮次数据不会落盘；请紧急中断并重采本轮');
                 } else if (this.isCollecting && this.stageFileOpen && !isFreshCollectionPacket) {
                     this.collectionDroppedStaleBlePackets++;
                     if (this.collectionDroppedStaleBlePackets <= 3) {
