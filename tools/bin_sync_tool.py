@@ -145,6 +145,35 @@ GAIN_MAP = [1, 2, 3, 4, 6, 8, 12]
 BASE_LSB_24BIT = 0.476837
 HARDWARE_FRONTEND_GAIN = 10  # 供应商固件使用10
 
+
+def _safe_float(value):
+    try:
+        if value is None:
+            return None
+        value = float(value)
+        return value if np.isfinite(value) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_emg_parser_kwargs(h5_file, device_id):
+    """Resolve EMG gain/LSB from H5 attrs so synced datasets match capture metadata."""
+    lsb = _safe_float(h5_file.attrs.get(f'emg_lsb_uv_24bit_dev{device_id}'))
+    if lsb is None:
+        lsb = _safe_float(h5_file.attrs.get('emg_lsb_uv_24bit'))
+
+    gain = _safe_float(h5_file.attrs.get(f'emg_gain_dev{device_id}'))
+    if gain is None:
+        gain = _safe_float(h5_file.attrs.get('emg_gain'))
+
+    kwargs = {}
+    if gain is not None and gain > 0:
+        kwargs['gain_override'] = gain
+    if lsb is not None and lsb > 0:
+        kwargs['lsb_uv_override'] = lsb
+    return kwargs
+
+
 # IMU转换系数
 # V2 wristbands use LSM6DSV32X at +/-32g. Keep V1 documented for legacy data,
 # but default the sync path to V2 so SD IMU units match realtime ble_server.py.
@@ -469,10 +498,12 @@ class EMGBinParser:
     如需转换为μV，请使用: uv_value = raw_value * lsb_uv
     """
 
-    def __init__(self, bin_path):
+    def __init__(self, bin_path, gain_override=None, lsb_uv_override=None):
         self.bin_path = bin_path
         self.sample_rate = 0
         self.gain = 12
+        self.gain_override = gain_override
+        self.lsb_uv_override = lsb_uv_override
         self.bit_depth = 24
         self.lsb_uv = 0  # LSB系数，用于转换为μV
         self.timestamp_str = ""
@@ -497,11 +528,16 @@ class EMGBinParser:
 
             self.sample_rate = sample_rate
             self.gain = GAIN_MAP[gain_idx] if gain_idx < len(GAIN_MAP) else 12
+            if self.gain_override is not None:
+                self.gain = float(self.gain_override)
             self.bit_depth = bit_depth
             self.timestamp_str = ts_bytes.decode('utf-8').strip('\x00')
 
             # 计算LSB（保存供后续转换使用，但解析时不应用）
-            self.lsb_uv = BASE_LSB_24BIT / (self.gain * HARDWARE_FRONTEND_GAIN)
+            if self.lsb_uv_override is not None:
+                self.lsb_uv = float(self.lsb_uv_override)
+            else:
+                self.lsb_uv = BASE_LSB_24BIT / (self.gain * HARDWARE_FRONTEND_GAIN)
             if bit_depth == 16:
                 self.lsb_uv *= (2 ** 4)
 
@@ -728,14 +764,16 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
     if imu_bin_path:
         log(f"IMU bin: {os.path.basename(imu_bin_path)}")
 
-    # 解析bin文件
-    emg_parser = EMGBinParser(emg_bin_path).parse()
     _num_imus = 2
+    emg_kwargs = {}
     try:
         with h5py.File(h5_path, 'r') as _f:
             _num_imus = _resolve_num_imus(_f, device_id, imu_bin_path, manual_num_imus=manual_num_imus)
+            emg_kwargs = _resolve_emg_parser_kwargs(_f, device_id)
     except Exception:
         pass
+    # 解析bin文件
+    emg_parser = EMGBinParser(emg_bin_path, **emg_kwargs).parse()
     imu_parser = IMUBinParser(imu_bin_path, num_imus=_num_imus).parse() if imu_bin_path else None
 
     # 打开h5文件
@@ -1189,7 +1227,13 @@ def find_bin_offset_by_adc(h5_path, emg_bin_path, device_id=1, channel_map_name=
     channels_250hz = data_250hz['channels']
 
     # 2. 解析 bin
-    parser = EMGBinParser(emg_bin_path).parse()
+    emg_kwargs = {}
+    try:
+        with h5py.File(h5_path, 'r') as _f:
+            emg_kwargs = _resolve_emg_parser_kwargs(_f, device_id)
+    except Exception:
+        pass
+    parser = EMGBinParser(emg_bin_path, **emg_kwargs).parse()
     bin_total = len(parser.frames)
     if bin_total == 0:
         return {'found': False, 'offset': None, 'error': 'bin 文件为空'}
@@ -1937,8 +1981,9 @@ def sync_h5_one_to_one_multibin_rescue(h5_path, emg_bin_paths, imu_bin_paths=Non
         data_250hz = ds_250hz[:]
         channels_250hz = data_250hz['channels']
         channel_map, resolved_name = _resolve_channel_map(f, ds_250hz_name, channel_map_name)
+        emg_kwargs = _resolve_emg_parser_kwargs(f, device_id)
 
-    emg_parsers = [EMGBinParser(p).parse() for p in emg_bin_paths]
+    emg_parsers = [EMGBinParser(p, **emg_kwargs).parse() for p in emg_bin_paths]
     segments = []
     used_row_ranges = []
     for parser in emg_parsers:
@@ -2078,11 +2123,12 @@ def sync_h5_one_to_one(h5_path, emg_bin_path, imu_bin_path=None, device_id=1,
         data_250hz = ds_250hz[:]
         channels_250hz = data_250hz['channels']
         timestamps_250hz = data_250hz['time']
+        emg_kwargs = _resolve_emg_parser_kwargs(f, device_id)
 
         channel_map, resolved_name = _resolve_channel_map(f, ds_250hz_name, channel_map_name)
         log(f"通道映射: {resolved_name}")
 
-    parser = EMGBinParser(emg_bin_path).parse()
+    parser = EMGBinParser(emg_bin_path, **emg_kwargs).parse()
     _ni = 2
     try:
         with h5py.File(h5_path, 'r') as _f:
@@ -2481,14 +2527,16 @@ def sync_h5_one_to_many_adc_search(h5_path, emg_bin_path, imu_bin_path=None, dev
     bin_offset = search_result['offset']
     log(f"[FOUND] bin_offset={bin_offset}, match_rate={search_result['match_rate']:.3f}")
 
-    # Step 2: Build 2kHz with offset (use channel_map from search result)
-    parser = EMGBinParser(emg_bin_path).parse()
     _ni = 2
+    emg_kwargs = {}
     try:
         with h5py.File(h5_path, 'r') as _f:
             _ni = _resolve_num_imus(_f, device_id, imu_bin_path, manual_num_imus=manual_num_imus)
+            emg_kwargs = _resolve_emg_parser_kwargs(_f, device_id)
     except Exception:
         pass
+    # Step 2: Build 2kHz with offset (use channel_map from search result)
+    parser = EMGBinParser(emg_bin_path, **emg_kwargs).parse()
     imu_parser = IMUBinParser(imu_bin_path, num_imus=_ni).parse() if imu_bin_path else None
 
     # 使用搜索命中的 channel_map（如 L015 physical），而非 H5 attr 默认 V2

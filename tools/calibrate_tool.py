@@ -781,13 +781,55 @@ class CalibrateWidget(QWidget):
 
     def _get_lsb_uv_for_dataset(self, ds_name):
         """从 H5 dataset attrs 读取 lsb_uv，无则 fallback 供应商值"""
+        file_lsb = None
+        if self.h5_file:
+            dev_id = 1 if 'emg1' in str(ds_name) else 2 if 'emg2' in str(ds_name) else None
+            lsb_keys = []
+            if dev_id:
+                lsb_keys.append(f'emg_lsb_uv_24bit_dev{dev_id}')
+            lsb_keys.append('emg_lsb_uv_24bit')
+            for key in lsb_keys:
+                try:
+                    value = self.h5_file.attrs.get(key)
+                    if value is not None:
+                        file_lsb = float(value)
+                        break
+                except (ValueError, TypeError):
+                    pass
+            if file_lsb is None:
+                gain_keys = []
+                if dev_id:
+                    gain_keys.append(f'emg_gain_dev{dev_id}')
+                gain_keys.append('emg_gain')
+                for key in gain_keys:
+                    try:
+                        gain = self.h5_file.attrs.get(key)
+                        if gain is not None:
+                            gain = float(gain)
+                            if gain > 0:
+                                file_lsb = calculate_lsb_uv(gain=gain)
+                                break
+                    except (ValueError, TypeError):
+                        pass
+
         if self.h5_file and ds_name and ds_name in self.h5_file:
             ds_lsb = self.h5_file[ds_name].attrs.get('lsb_uv')
             if ds_lsb is not None:
                 try:
-                    return float(ds_lsb)
+                    ds_lsb = float(ds_lsb)
+                    if file_lsb and file_lsb > 0 and ds_lsb > 0:
+                        ratio = max(file_lsb, ds_lsb) / min(file_lsb, ds_lsb)
+                        if ratio > 1.5:
+                            print(
+                                f'[CalibrateTool] LSB冲突: {ds_name} dataset={ds_lsb:.6f}, '
+                                f'file={file_lsb:.6f}; 使用文件级采集配置'
+                            )
+                            return file_lsb
+                    return ds_lsb
                 except (ValueError, TypeError):
                     pass
+        if file_lsb:
+            return file_lsb
         # fallback: 供应商基准值
         return calculate_lsb_uv()
 
