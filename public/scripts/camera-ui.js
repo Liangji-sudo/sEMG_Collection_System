@@ -22,6 +22,7 @@
     let _cameraStatusPollInFlight = false;
     let _encodingHideTimer = null;
     let _cameraEncodingActive = false;
+    let _cameraEncodingDrag = null;
     const _announcedEncodingDone = new Set();
     const _lastPreviewFrameAt = { left: 0, right: 0 };
     const _thumbFailureCount = { left: 0, right: 0 };
@@ -183,6 +184,8 @@
                     justify-content: space-between;
                     gap: 16px;
                     margin-bottom: 12px;
+                    cursor: move;
+                    user-select: none;
                 }
                 .camera-encoding-title { font-weight: 900; font-size: 20px; color: #78350f; }
                 .camera-encoding-dot {
@@ -292,7 +295,89 @@
                 <div id="cameraEncodingDetail" class="camera-encoding-detail">正在计算剩余时间...</div>
             `;
             document.body.appendChild(panel);
+            setupCameraEncodingPanelDrag(panel);
+        } else {
+            setupCameraEncodingPanelDrag(document.getElementById('cameraEncodingPanel'));
         }
+    }
+
+    function setupCameraEncodingPanelDrag(panel) {
+        if (!panel || panel.dataset.dragReady === '1') return;
+        panel.dataset.dragReady = '1';
+
+        const saved = loadCameraEncodingPanelPosition();
+        if (saved) {
+            applyCameraEncodingPanelPosition(panel, saved.left, saved.top);
+        }
+
+        const handle = panel.querySelector('.camera-encoding-head') || panel;
+        handle.title = '拖动移动视频压缩面板';
+
+        handle.addEventListener('mousedown', (event) => {
+            if (event.button !== 0) return;
+            const rect = panel.getBoundingClientRect();
+            _cameraEncodingDrag = {
+                startX: event.clientX,
+                startY: event.clientY,
+                left: rect.left,
+                top: rect.top
+            };
+            panel.style.transition = 'none';
+            event.preventDefault();
+        });
+
+        document.addEventListener('mousemove', (event) => {
+            if (!_cameraEncodingDrag) return;
+            const nextLeft = _cameraEncodingDrag.left + (event.clientX - _cameraEncodingDrag.startX);
+            const nextTop = _cameraEncodingDrag.top + (event.clientY - _cameraEncodingDrag.startY);
+            applyCameraEncodingPanelPosition(panel, nextLeft, nextTop);
+            event.preventDefault();
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (!_cameraEncodingDrag) return;
+            _cameraEncodingDrag = null;
+            const rect = panel.getBoundingClientRect();
+            saveCameraEncodingPanelPosition(rect.left, rect.top);
+            panel.style.transition = '';
+        });
+
+        window.addEventListener('resize', () => {
+            const rect = panel.getBoundingClientRect();
+            applyCameraEncodingPanelPosition(panel, rect.left, rect.top);
+        });
+    }
+
+    function applyCameraEncodingPanelPosition(panel, left, top) {
+        if (!panel) return;
+        const rect = panel.getBoundingClientRect();
+        const margin = 8;
+        const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+        const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
+        const safeLeft = Math.max(margin, Math.min(Number(left) || margin, maxLeft));
+        const safeTop = Math.max(margin, Math.min(Number(top) || margin, maxTop));
+        panel.style.left = `${safeLeft}px`;
+        panel.style.top = `${safeTop}px`;
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+    }
+
+    function loadCameraEncodingPanelPosition() {
+        try {
+            const raw = localStorage.getItem('cameraEncodingPanelPosition');
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            if (!Number.isFinite(parsed.left) || !Number.isFinite(parsed.top)) return null;
+            return parsed;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function saveCameraEncodingPanelPosition(left, top) {
+        try {
+            localStorage.setItem('cameraEncodingPanelPosition', JSON.stringify({ left, top }));
+        } catch (_) {}
     }
 
     function setCameraConfigBusy(isBusy, message = '正在处理摄像头...', detail = '请稍候，正在等待后端返回。') {
