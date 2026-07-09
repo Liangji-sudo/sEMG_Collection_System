@@ -11,7 +11,9 @@ import json
 import os
 import sys
 import time
+import threading
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 from camera_server import (
     ENCODING_THREADS,
@@ -40,6 +42,8 @@ def env_int(name, default, minimum=1):
 
 ACTIVE_RECORDING_THREADS = env_int('VIDEO_ENCODING_ACTIVE_THREADS', 1, 1)
 IDLE_RECORDING_THREADS = env_int('VIDEO_ENCODING_IDLE_THREADS', ENCODING_THREADS, 1)
+ACTIVE_RECORDING_WORKERS = env_int('VIDEO_ENCODING_ACTIVE_WORKERS', 1, 1)
+IDLE_RECORDING_WORKERS = env_int('VIDEO_ENCODING_IDLE_WORKERS', max(2, ENCODING_WORKERS), 1)
 ACTIVE_RECORDING_PRESET = os.environ.get('VIDEO_ENCODING_ACTIVE_PRESET', ENCODING_X264_PRESET).strip() or ENCODING_X264_PRESET
 IDLE_RECORDING_PRESET = os.environ.get('VIDEO_ENCODING_IDLE_PRESET', ENCODING_X264_PRESET).strip() or ENCODING_X264_PRESET
 
@@ -152,6 +156,12 @@ class VideoEncoderWorker:
         self.lock = WorkerLock(self.video_dir / LOCK_FILE)
         self.ffmpeg_path = find_ffmpeg()
         self.jobs = {}
+        self.futures = {}
+        self.jobs_lock = threading.RLock()
+        self.executor = ThreadPoolExecutor(
+            max_workers=max(ACTIVE_RECORDING_WORKERS, IDLE_RECORDING_WORKERS),
+            thread_name_prefix='video-encoder-worker'
+        )
         self.last_work_at = time.time()
 
     def has_active_recording(self):
@@ -163,18 +173,21 @@ class VideoEncoderWorker:
             return {
                 'mode': 'recording_friendly',
                 'threads': ACTIVE_RECORDING_THREADS,
+                'workers': ACTIVE_RECORDING_WORKERS,
                 'preset': ACTIVE_RECORDING_PRESET,
                 'reason': 'camera recording marker present',
             }
         return {
             'mode': 'full_speed',
             'threads': IDLE_RECORDING_THREADS,
+            'workers': IDLE_RECORDING_WORKERS,
             'preset': IDLE_RECORDING_PRESET,
             'reason': 'no active camera recording marker',
         }
 
     def write_status(self):
-        details = list(self.jobs.values())
+        with self.jobs_lock:
+            details = [dict(j) for j in self.jobs.values()]
         policy = self.current_encoding_policy()
         active = sum(1 for j in details if j.get('status') == 'encoding')
         queued = sum(1 for j in details if j.get('status') == 'queued')
@@ -191,7 +204,7 @@ class VideoEncoderWorker:
             'encoding_mode': policy['mode'],
             'encoding_mode_reason': policy['reason'],
             'encoding_threads': policy['threads'],
-            'encoding_workers': max(1, ENCODING_WORKERS),
+            'encoding_workers': policy['workers'],
             'encoding_preset': policy['preset'],
             'encoding_crf': ENCODING_X264_CRF,
             'encoding_details': details,
@@ -206,31 +219,85 @@ class VideoEncoderWorker:
             key = str(output_path)
             meta = load_meta(raw_path)
             raw_size = raw_path.stat().st_size
-            if key not in self.jobs or self.jobs[key].get('status') in ('done', 'failed'):
-                self.jobs[key] = {
-                    'side': meta['side'],
-                    'output_path': str(output_path),
-                    'raw_path': str(raw_path),
-                    'frame_count': meta['frame_count'],
-                    'raw_size': raw_size,
-                    'status': 'queued',
-                    'progress_percent': 0.0,
-                    'eta_seconds': None,
-                    'speed': '',
-                    'queued_at': meta['queued_at'],
-                    'started_at': None,
-                    'updated_at': time.time(),
-                }
+            with self.jobs_lock:
+                if key not in self.jobs or self.jobs[key].get('status') in ('done', 'failed'):
+                    self.jobs[key] = {
+                        'side': meta['side'],
+                        'output_path': str(output_path),
+                        'raw_path': str(raw_path),
+                        'frame_count': meta['frame_count'],
+                        'raw_size': raw_size,
+                        'status': 'queued',
+                        'progress_percent': 0.0,
+                        'eta_seconds': None,
+                        'speed': '',
+                        'queued_at': meta['queued_at'],
+                        'started_at': None,
+                        'updated_at': time.time(),
+                    }
             found.append((raw_path, output_path, meta))
         return found
 
+    def cleanup_futures(self):
+        with self.jobs_lock:
+            done_keys = [key for key, fut in self.futures.items() if fut.done()]
+            for key in done_keys:
+                fut = self.futures.pop(key, None)
+                if fut is None:
+                    continue
+                exc = fut.exception()
+                if exc is not None and key in self.jobs:
+                    self.jobs[key].update({
+                        'status': 'failed',
+                        'error': str(exc),
+                        'updated_at': time.time(),
+                    })
+                    self.last_work_at = time.time()
+
+    def active_count(self):
+        with self.jobs_lock:
+            return sum(1 for job in self.jobs.values() if job.get('status') == 'encoding')
+
+    def queued_items(self):
+        with self.jobs_lock:
+            items = []
+            for key, job in self.jobs.items():
+                if job.get('status') != 'queued' or key in self.futures:
+                    continue
+                raw_path = Path(job['raw_path'])
+                if not raw_path.exists():
+                    continue
+                output_path = Path(job['output_path'])
+                meta = load_meta(raw_path)
+                items.append((key, raw_path, output_path, meta))
+            return items
+
+    def dispatch_jobs(self):
+        policy = self.current_encoding_policy()
+        available_slots = max(0, int(policy['workers']) - self.active_count())
+        if available_slots <= 0:
+            return 0
+        launched = 0
+        for key, raw_path, output_path, meta in self.queued_items():
+            if launched >= available_slots:
+                break
+            with self.jobs_lock:
+                if key in self.futures or self.jobs.get(key, {}).get('status') != 'queued':
+                    continue
+                future = self.executor.submit(self.encode_one, raw_path, output_path, meta)
+                self.futures[key] = future
+                launched += 1
+        return launched
+
     def encode_one(self, raw_path, output_path, meta):
         key = str(output_path)
-        job = self.jobs[key]
+        with self.jobs_lock:
+            job = self.jobs[key]
         frame_count = meta.get('frame_count') or 0
         if frame_count <= 0:
             frame_count = count_jpeg_frames(raw_path)
-            job['frame_count'] = frame_count
+            with self.jobs_lock:
+                job['frame_count'] = frame_count
 
         recorder = FrameRecorder(meta['side'], self.ffmpeg_path, self.video_dir)
         policy = self.current_encoding_policy()
@@ -245,47 +312,53 @@ class VideoEncoderWorker:
         recorder.encoding_threads = policy['threads']
         recorder.encoding_preset = policy['preset']
 
-        job.update({
-            'status': 'encoding',
-            'progress_percent': 0.0,
-            'eta_seconds': None,
-            'speed': '',
-            'encoding_mode': policy['mode'],
-            'encoding_threads': policy['threads'],
-            'encoding_preset': policy['preset'],
-            'started_at': time.time(),
-            'updated_at': time.time(),
-        })
+        with self.jobs_lock:
+            job.update({
+                'status': 'encoding',
+                'progress_percent': 0.0,
+                'eta_seconds': None,
+                'speed': '',
+                'encoding_mode': policy['mode'],
+                'encoding_threads': policy['threads'],
+                'encoding_preset': policy['preset'],
+                'encoding_workers': policy['workers'],
+                'started_at': time.time(),
+                'updated_at': time.time(),
+            })
         self.write_status()
 
         def on_progress(percent, eta_seconds, speed):
-            job.update({
-                'progress_percent': round(float(percent), 1),
-                'eta_seconds': round(float(eta_seconds), 1) if eta_seconds is not None else None,
-                'speed': speed or job.get('speed', ''),
-                'updated_at': time.time(),
-            })
+            with self.jobs_lock:
+                job.update({
+                    'progress_percent': round(float(percent), 1),
+                    'eta_seconds': round(float(eta_seconds), 1) if eta_seconds is not None else None,
+                    'speed': speed or job.get('speed', ''),
+                    'updated_at': time.time(),
+                })
             self.write_status()
+            return True
 
         result = recorder.encode_stopped_recording(on_progress)
         if result and result.get('success'):
-            job.update({
-                'status': 'done',
-                'progress_percent': 100.0,
-                'eta_seconds': 0.0,
-                'file_size': result.get('size', 0),
-                'updated_at': time.time(),
-            })
+            with self.jobs_lock:
+                job.update({
+                    'status': 'done',
+                    'progress_percent': 100.0,
+                    'eta_seconds': 0.0,
+                    'file_size': result.get('size', 0),
+                    'updated_at': time.time(),
+                })
             try:
                 raw_path.with_suffix(raw_path.suffix + META_SUFFIX).unlink()
             except Exception:
                 pass
         else:
-            job.update({
-                'status': 'failed',
-                'error': (result or {}).get('error', 'unknown encode error'),
-                'updated_at': time.time(),
-            })
+            with self.jobs_lock:
+                job.update({
+                    'status': 'failed',
+                    'error': (result or {}).get('error', 'unknown encode error'),
+                    'updated_at': time.time(),
+                })
         self.last_work_at = time.time()
         self.write_status()
 
@@ -305,22 +378,23 @@ class VideoEncoderWorker:
             print(f'[VideoEncoderWorker] watching {self.video_dir}')
             self.write_status()
             while True:
-                discovered = self.discover_jobs()
+                self.cleanup_futures()
+                self.discover_jobs()
+                launched = self.dispatch_jobs()
                 self.write_status()
-                if discovered:
-                    for raw_path, output_path, meta in discovered:
-                        key = str(output_path)
-                        if self.jobs.get(key, {}).get('status') != 'queued':
-                            continue
-                        self.encode_one(raw_path, output_path, meta)
-                    continue
-
-                if time.time() - self.last_work_at > IDLE_EXIT_SECONDS:
+                has_work = self.active_count() > 0 or bool(self.queued_items())
+                if launched:
+                    self.last_work_at = time.time()
+                if not has_work and time.time() - self.last_work_at > IDLE_EXIT_SECONDS:
                     break
                 time.sleep(2)
             self.write_status()
             return 0
         finally:
+            try:
+                self.executor.shutdown(wait=False, cancel_futures=False)
+            except Exception:
+                pass
             self.lock.release()
             status = read_json(self.status_path, {}) or {}
             status['worker_running'] = False

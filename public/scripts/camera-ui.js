@@ -1381,6 +1381,13 @@
             const percent = Number(first.progress_percent || 0).toFixed(1);
             const eta = formatDuration(first.eta_seconds);
             const extra = active.length > 1 ? `，另有 ${active.length - 1} 个任务排队/压缩中` : '';
+            const totalJobs = status && Number.isFinite(Number(status.encoding_jobs))
+                ? Number(status.encoding_jobs)
+                : jobs.length;
+            const queuedJobs = status && Number.isFinite(Number(status.encoding_queued_jobs))
+                ? Number(status.encoding_queued_jobs)
+                : queued.length;
+            const queueText = `任务 ${totalJobs} 个，排队 ${queuedJobs} 个`;
             const mode = first.encoding_mode === 'recording_friendly'
                 ? `采集中低占用（${first.encoding_threads || status.encoding_threads || '?'}线程）`
                 : `全速后台（${first.encoding_threads || status.encoding_threads || '?'}线程）`;
@@ -1388,7 +1395,7 @@
             panel.classList.add('working');
             if (percentEl) percentEl.textContent = `${percent}%`;
             if (fillEl) fillEl.style.width = `${Math.max(1, Math.min(100, Number(percent)))}%`;
-            detailEl.textContent = `独立转码进程：${mode}，${first.side || ''} ${percent}% · 预计剩余 ${eta}${extra}`;
+            detailEl.textContent = `独立转码进程：${mode}，${queueText}，${first.side || ''} ${percent}% · 预计剩余 ${eta}${extra}`;
         } else if (queued.length > 0) {
             const queuedRawBytes = status && status.encoding_raw_bytes !== undefined
                 ? status.encoding_raw_bytes

@@ -1789,7 +1789,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
         // 【已移除】togglePause 方法已被测试模式替代
 
         isRunning() {
-            return this._isRunning;
+            return !!(this._isRunning || this._isAllSessionsMode || this._switchInProgress || this._restCountdownTimer);
         }
 
         // ==================== 标定流程（单阶段） ====================
