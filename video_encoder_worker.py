@@ -31,6 +31,7 @@ META_SUFFIX = '.encode.json'
 RECORDING_SUFFIX = '.recording'
 COLLECTION_ACTIVE_FILE = 'video_collection_active.json'
 IDLE_EXIT_SECONDS = 20
+LOCK_STALE_SECONDS = 120
 
 
 def env_int(name, default, minimum=1):
@@ -127,7 +128,7 @@ class WorkerLock:
             stale = False
             try:
                 age = time.time() - self.path.stat().st_mtime
-                stale = age > 24 * 3600
+                stale = age > LOCK_STALE_SECONDS
             except Exception:
                 pass
             if stale:
@@ -409,6 +410,15 @@ class VideoEncoderWorker:
             return 1
         if not self.lock.acquire():
             print('[VideoEncoderWorker] another worker is already running')
+            status = read_json(self.status_path, {}) or {}
+            status.update({
+                'success': True,
+                'worker_running': True,
+                'worker_start_skipped': True,
+                'worker_skip_reason': 'another worker lock is active',
+                'updated_at': time.time(),
+            })
+            atomic_write_json(self.status_path, status)
             return 0
         try:
             print(f'[VideoEncoderWorker] watching {self.video_dir}')

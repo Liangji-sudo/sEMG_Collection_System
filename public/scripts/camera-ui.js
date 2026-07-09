@@ -1380,22 +1380,25 @@
             const first = active[0];
             const percent = Number(first.progress_percent || 0).toFixed(1);
             const eta = formatDuration(first.eta_seconds);
-            const extra = active.length > 1 ? `，另有 ${active.length - 1} 个任务排队/压缩中` : '';
             const totalJobs = status && Number.isFinite(Number(status.encoding_jobs))
                 ? Number(status.encoding_jobs)
                 : jobs.length;
             const queuedJobs = status && Number.isFinite(Number(status.encoding_queued_jobs))
                 ? Number(status.encoding_queued_jobs)
                 : queued.length;
-            const queueText = `任务 ${totalJobs} 个，排队 ${queuedJobs} 个`;
+            const activeJobs = status && Number.isFinite(Number(status.encoding_active_jobs))
+                ? Number(status.encoding_active_jobs)
+                : active.length;
+            const queueText = `总 ${totalJobs} 个，正在压缩 ${activeJobs} 个，排队 ${queuedJobs} 个`;
             const mode = first.encoding_mode === 'recording_friendly'
                 ? `采集中低占用（${first.encoding_threads || status.encoding_threads || '?'}线程）`
                 : `全速后台（${first.encoding_threads || status.encoding_threads || '?'}线程）`;
+            const speedText = first.speed ? ` · 速度 ${first.speed}` : '';
             panel.classList.remove('waiting');
             panel.classList.add('working');
             if (percentEl) percentEl.textContent = `${percent}%`;
             if (fillEl) fillEl.style.width = `${Math.max(1, Math.min(100, Number(percent)))}%`;
-            detailEl.textContent = `独立转码进程：${mode}，${queueText}，${first.side || ''} ${percent}% · 预计剩余 ${eta}${extra}`;
+            detailEl.textContent = `独立转码进程正在运行：${mode}，${queueText}，当前 ${first.side || ''} ${percent}% · 预计剩余 ${eta}${speedText}`;
         } else if (queued.length > 0) {
             const queuedRawBytes = status && status.encoding_raw_bytes !== undefined
                 ? status.encoding_raw_bytes
@@ -1410,7 +1413,7 @@
             const countdown = Number.isFinite(countdownRaw) ? Math.max(0, countdownRaw) : null;
             const independentWorker = !!(status && status.encoding_worker_running);
             const countdownText = independentWorker
-                ? `${queued.length} 个排队`
+                ? `0 个运行 / ${queued.length} 个排队`
                 : (countdown === null ? '等待空闲' : `等待 ${formatDuration(countdown)}`);
             const waitProgress = countdown === null || !grace
                 ? 2
@@ -1423,10 +1426,13 @@
             const policyText = status && status.encoding_threads
                 ? `单任务 ${status.encoding_threads} 线程${status.encoding_mode === 'recording_friendly' ? '低占用' : '全速'}`
                 : '单任务后台';
+            const workerSkipText = status && status.worker_skip_reason
+                ? `，worker状态：${status.worker_skip_reason}`
+                : '';
             const startText = independentWorker
-                ? '独立转码进程正在处理队列'
+                ? '独立转码进程在线，正在等待可用转码槽'
                 : (countdown === null ? `等待采集空闲 ${grace}s 后开始` : `${formatDuration(countdown)} 后开始`);
-            detailEl.textContent = `${queued.length} 个视频排队，${startText}，${policyText}压缩，原始占用 ${formatBytes(queuedRawBytes)}${freeText}`;
+            detailEl.textContent = `${queued.length} 个视频排队，${startText}，${policyText}压缩，原始占用 ${formatBytes(queuedRawBytes)}${freeText}${workerSkipText}`;
         } else if (failed.length > 0) {
             panel.classList.remove('working');
             panel.classList.remove('waiting');

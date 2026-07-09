@@ -2071,6 +2071,8 @@ class CameraServer:
             'encoding_crf': ENCODING_X264_CRF,
             'encoding_worker_running': bool(worker_status.get('worker_running')),
             'encoding_worker_pid': worker_status.get('worker_pid'),
+            'worker_start_skipped': worker_status.get('worker_start_skipped'),
+            'worker_skip_reason': worker_status.get('worker_skip_reason'),
             'disk_free_bytes': disk_free_bytes,
             'encoding_details': encoding_details,
             'preview_subscribers': {
