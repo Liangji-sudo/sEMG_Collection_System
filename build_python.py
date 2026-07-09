@@ -47,6 +47,16 @@ SCRIPTS = [
         'script': 'mocap_server.py',
         'hidden_imports': ['websockets', 'asyncio', 'json'],
     },
+    {
+        'name': 'camera_server',
+        'script': 'camera_server.py',
+        'hidden_imports': ['websockets', 'asyncio', 'json'],
+    },
+    {
+        'name': 'video_encoder_worker',
+        'script': 'video_encoder_worker.py',
+        'hidden_imports': ['websockets', 'asyncio', 'json'],
+    },
 ]
 
 # 输出目录

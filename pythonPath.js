@@ -25,6 +25,7 @@ const PYTHON_DIST_DIR = path.join(__dirname, 'python_dist');
 function getPythonCommand(scriptName, extraArgs = []) {
     const pyPath = path.join(__dirname, `${scriptName}.py`);
     const exePath = path.join(PYTHON_DIST_DIR, `${scriptName}.exe`);
+    const onedirExePath = path.join(PYTHON_DIST_DIR, scriptName, `${scriptName}.exe`);
 
     // 优先使用 Python 脚本
     if (fs.existsSync(pyPath)) {
@@ -40,6 +41,14 @@ function getPythonCommand(scriptName, extraArgs = []) {
         console.log(`[pythonPath] 使用 exe: ${exePath}`);
         return {
             command: exePath,
+            args: [...extraArgs]
+        };
+    }
+
+    if (fs.existsSync(onedirExePath)) {
+        console.log(`[pythonPath] 使用 onedir exe: ${onedirExePath}`);
+        return {
+            command: onedirExePath,
             args: [...extraArgs]
         };
     }
