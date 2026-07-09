@@ -32,6 +32,7 @@ bin文件格式（来自ESP32固件）：
 import os
 import sys
 import json
+import math
 import shutil
 import struct
 import argparse
@@ -1886,6 +1887,10 @@ def _round_to_imu_boundary(value):
     return int(round(float(value) / EMG_IMU_RATIO) * EMG_IMU_RATIO)
 
 
+def _ceil_to_imu_boundary(value):
+    return int(math.ceil(float(value) / EMG_IMU_RATIO) * EMG_IMU_RATIO)
+
+
 def _build_multibin_rescue_anchors(segments, total_rows):
     anchors = np.full(total_rows, -1, dtype=np.int64)
     segment_bases = []
@@ -1903,7 +1908,12 @@ def _build_multibin_rescue_anchors(segments, total_rows):
         first_row, first_sd = ordered[0]
         last_row, last_sd = ordered[-1]
         if seg_idx == 0 or prev_last_row is None:
-            base = 0
+            # The matched ADC anchor can be at any 2 kHz phase, not necessarily
+            # at the legacy 250 Hz anchor position. If the first reliable match
+            # starts after H5 row 0, reserve enough synthetic frame-id space so
+            # back-filled rows never become negative.
+            min_base = max(0, first_row * DOWNSAMPLE_RATIO - first_sd)
+            base = _ceil_to_imu_boundary(min_base)
         else:
             expected_first_anchor = prev_last_anchor + (first_row - prev_last_row) * DOWNSAMPLE_RATIO
             base = _round_to_imu_boundary(expected_first_anchor - first_sd)
@@ -2018,6 +2028,12 @@ def sync_h5_one_to_one_multibin_rescue(h5_path, emg_bin_paths, imu_bin_paths=Non
     anchored_rows = int(np.count_nonzero(anchor_sd_frame_ids >= 0))
     coverage = anchored_rows / max(1, num_frames_250hz)
     direct_match_rate = matched_total / max(1, num_frames_250hz)
+    valid_anchor_values = anchor_sd_frame_ids[anchor_sd_frame_ids >= 0]
+    rescue_anchor_position = (
+        int(valid_anchor_values[0] % DOWNSAMPLE_RATIO)
+        if len(valid_anchor_values)
+        else DOWNSAMPLE_RATIO - 1
+    )
 
     _ni = 2
     try:
@@ -2053,7 +2069,7 @@ def sync_h5_one_to_one_multibin_rescue(h5_path, emg_bin_paths, imu_bin_paths=Non
         verify_passed=verify,
         anchor_sd_frame_ids=anchor_sd_frame_ids,
         sync_frame_id_mode='multibin_rescue_adc_rows',
-        anchor_position=DOWNSAMPLE_RATIO - 1,
+        anchor_position=rescue_anchor_position,
     )
 
     with h5py.File(h5_path, 'r+') as f:
@@ -2249,6 +2265,7 @@ def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
     data_2khz = np.empty(num_frames_2khz, dtype=emg_2khz_dtype)
     filled_frames = 0
     missing_frames = 0
+    invalid_negative_sd_frames = 0
 
     for i in range(num_frames_250hz):
         if anchor_sd_frame_ids is not None:
@@ -2258,11 +2275,17 @@ def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
         for j in range(DOWNSAMPLE_RATIO):
             sd_frame_id = sd_base + j
             idx_2khz = i * DOWNSAMPLE_RATIO + j
-            bin_data = emg_parser.get_frame(sd_frame_id)
+            if sd_frame_id < 0:
+                bin_data = None
+                stored_sd_frame_id = 0
+                invalid_negative_sd_frames += 1
+            else:
+                bin_data = emg_parser.get_frame(sd_frame_id)
+                stored_sd_frame_id = sd_frame_id
             if bin_data is not None:
                 bin_mapped = map_physical_to_h5_order(bin_data, channel_map)
                 data_2khz[idx_2khz]['channels'] = np.array(bin_mapped, dtype=np.int32)
-                data_2khz[idx_2khz]['sd_frame_id'] = sd_frame_id
+                data_2khz[idx_2khz]['sd_frame_id'] = stored_sd_frame_id
                 filled_frames += 1
             else:
                 if j == int(anchor_position):
@@ -2271,13 +2294,15 @@ def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
                     data_2khz[idx_2khz]['channels'] = data_2khz[idx_2khz - 1]['channels']
                 else:
                     data_2khz[idx_2khz]['channels'] = np.zeros(16, dtype=np.int32)
-                data_2khz[idx_2khz]['sd_frame_id'] = sd_frame_id
+                data_2khz[idx_2khz]['sd_frame_id'] = stored_sd_frame_id
                 missing_frames += 1
 
             anchor_time = timestamps_250hz[i]
             data_2khz[idx_2khz]['time'] = anchor_time + (j - int(anchor_position)) / 2000.0
 
     log(f"2kHz: {filled_frames} from bin, {missing_frames} interpolated")
+    if invalid_negative_sd_frames:
+        log(f"  WARN: {invalid_negative_sd_frames} negative synthetic SD frame ids were clamped to 0")
 
     with h5py.File(h5_path, 'r+') as f:
         ds_2khz_name = f"emg{device_id}_2khz_adc"
@@ -2292,6 +2317,7 @@ def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
         ds_2khz.attrs["sync_time"] = datetime.now().isoformat()
         ds_2khz.attrs["filled_frames"] = filled_frames
         ds_2khz.attrs["missing_frames"] = missing_frames
+        ds_2khz.attrs["invalid_negative_sd_frames"] = invalid_negative_sd_frames
         ds_2khz.attrs["sample_rate"] = 2000
 
         # IMU 同步（复用原逻辑）
