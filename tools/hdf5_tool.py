@@ -4328,6 +4328,27 @@ def _h5_attr_to_str(value):
     return str(value)
 
 
+def h5_has_compressed_video(h5_path):
+    """True when an H5 has video attrs and those videos have been converted to MP4."""
+    try:
+        with h5py.File(h5_path, 'r') as f:
+            video_values = [
+                _h5_attr_to_str(f.attrs.get('video_left')),
+                _h5_attr_to_str(f.attrs.get('video_right')),
+            ]
+            video_values = [v for v in video_values if v and v.strip() and v.strip() != '-']
+            if not video_values:
+                return False
+
+            compression = (_h5_attr_to_str(f.attrs.get('video_compression')) or '').lower()
+            if compression in {'h264_mp4', 'mp4', 'h.264_mp4'}:
+                return True
+
+            return any(os.path.splitext(v)[1].lower() == '.mp4' for v in video_values)
+    except Exception:
+        return False
+
+
 def find_h5_video_files(h5_path):
     """Return {'left': path, 'right': path} using the preview lookup convention."""
     h5_dir = os.path.dirname(os.path.abspath(h5_path))
@@ -4797,7 +4818,7 @@ class OneToManySyncTab(QWidget):
 
     def _read_file_attrs(self, h5_path):
         """Read sync-relevant attrs from H5. Returns dict with keys for table columns."""
-        info = {'status': 'unknown', 'mode': '-', 'cmap': '-', 'range_mode': '-'}
+        info = {'status': 'unknown', 'mode': '-', 'cmap': '-', 'range_mode': '-', 'video_compressed': False}
         try:
             with h5py.File(h5_path, 'r') as f:
                 st = f.attrs.get('sync_status')
@@ -4812,6 +4833,16 @@ class OneToManySyncTab(QWidget):
                 rm = f.attrs.get('sync_range_mode') or f.attrs.get('sync_bin_offset_mode')
                 if isinstance(rm, bytes): rm = rm.decode('utf-8')
                 info['range_mode'] = rm or '-'
+                video_values = [
+                    _h5_attr_to_str(f.attrs.get('video_left')),
+                    _h5_attr_to_str(f.attrs.get('video_right')),
+                ]
+                video_values = [v for v in video_values if v and v.strip() and v.strip() != '-']
+                compression = (_h5_attr_to_str(f.attrs.get('video_compression')) or '').lower()
+                info['video_compressed'] = bool(video_values) and (
+                    compression in {'h264_mp4', 'mp4', 'h.264_mp4'} or
+                    any(os.path.splitext(v)[1].lower() == '.mp4' for v in video_values)
+                )
         except Exception:
             pass
         return info
@@ -4837,8 +4868,11 @@ class OneToManySyncTab(QWidget):
         for c, it in enumerate(items):
             it.setFlags(it.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(row, c, it)
-        # colour synced rows green
-        if info['status'] == 'synced':
+        # colour synced rows green; synced rows with compressed video are blue.
+        if info['status'] == 'synced' and info.get('video_compressed'):
+            for c in range(self.COLUMNS):
+                self.table.item(row, c).setBackground(QColor('#dbeafe'))
+        elif info['status'] == 'synced':
             for c in range(self.COLUMNS):
                 self.table.item(row, c).setBackground(QColor(200, 255, 200))
         elif info['status'] == 'sync_failed':
@@ -5614,6 +5648,7 @@ class HDF5Tool(QMainWindow):
         """轻量刷新文件列表颜色 — 不重新扫描目录，仅更新已有条目的 sync_status 颜色"""
         STATUS_COLORS = {
             'synced':      QColor('#d4edda'),
+            'video_compressed': QColor('#dbeafe'),
             'sync_failed': QColor('#f8d7da'),
             'pending':     QColor('#fff3cd'),
             'syncing':     QColor('#fff3cd'),
@@ -5625,8 +5660,10 @@ class HDF5Tool(QMainWindow):
             h5_path = item.data(Qt.UserRole)
             if h5_path and os.path.exists(h5_path):
                 status = self._get_sync_status(h5_path)
-                item.setToolTip(f"{h5_path}\n同步状态: {status}")
-                bg_color = STATUS_COLORS.get(status, STATUS_COLORS['unknown'])
+                display_status = 'video_compressed' if status == 'synced' and h5_has_compressed_video(h5_path) else status
+                tip_status = f"{status} | 视频已压缩为 MP4" if display_status == 'video_compressed' else status
+                item.setToolTip(f"{h5_path}\n同步状态: {tip_status}")
+                bg_color = STATUS_COLORS.get(display_status, STATUS_COLORS['unknown'])
                 item.setBackground(bg_color)
 
     @staticmethod
@@ -5648,6 +5685,7 @@ class HDF5Tool(QMainWindow):
         # 同步状态对应的背景色
         STATUS_COLORS = {
             'synced':      QColor('#d4edda'),  # 绿色 - 已完成
+            'video_compressed': QColor('#dbeafe'),  # 蓝色 - 已同步且视频已压缩
             'sync_failed': QColor('#f8d7da'),  # 红色 - 同步失败
             'pending':     QColor('#fff3cd'),  # 黄色 - 未同步
             'syncing':     QColor('#fff3cd'),  # 黄色 - 同步中
@@ -5675,8 +5713,10 @@ class HDF5Tool(QMainWindow):
 
                     item = QListWidgetItem(file)
                     item.setData(Qt.UserRole, full_path)
-                    item.setToolTip(f"{full_path}\n同步状态: {status}")
-                    bg_color = STATUS_COLORS.get(status, STATUS_COLORS['unknown'])
+                    display_status = 'video_compressed' if status == 'synced' and h5_has_compressed_video(full_path) else status
+                    tip_status = f"{status} | 视频已压缩为 MP4" if display_status == 'video_compressed' else status
+                    item.setToolTip(f"{full_path}\n同步状态: {tip_status}")
+                    bg_color = STATUS_COLORS.get(display_status, STATUS_COLORS['unknown'])
                     item.setBackground(bg_color)
                     self.file_list.addItem(item)
 
