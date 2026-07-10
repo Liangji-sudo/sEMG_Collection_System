@@ -3701,14 +3701,14 @@ class SyncTab(QWidget):
         video_row.addWidget(QLabel("并行"))
         self.video_workers_spin = QSpinBox()
         self.video_workers_spin.setRange(1, 8)
-        self.video_workers_spin.setValue(max(1, min(4, (os.cpu_count() or 4) // 2)))
+        self.video_workers_spin.setValue(2)
         self.video_workers_spin.setToolTip("同时启动的 ffmpeg 进程数。低配现场机建议 1-2，高配机器可调到 4。")
         video_row.addWidget(self.video_workers_spin)
         video_row.addWidget(QLabel("线程/进程"))
         self.video_threads_spin = QSpinBox()
         self.video_threads_spin.setRange(1, 16)
         default_workers = self.video_workers_spin.value()
-        self.video_threads_spin.setValue(max(1, min(4, (os.cpu_count() or 4) // max(1, default_workers))))
+        self.video_threads_spin.setValue(2)
         self.video_threads_spin.setToolTip("每个 ffmpeg 进程使用的编码线程数。总占用约为 并行数 x 线程数。")
         video_row.addWidget(self.video_threads_spin)
         left_layout.addLayout(video_row)
@@ -4072,7 +4072,7 @@ class SyncTab(QWidget):
             self.h5_files,
             max_workers=workers,
             ffmpeg_threads=threads,
-            preset='superfast',
+            preset='ultrafast',
             crf=23,
         )
         self.video_worker.log.connect(self.on_log)
@@ -4520,10 +4520,11 @@ class VideoCompressWorker(QThread):
                 old_value = _h5_attr_to_str(f.attrs.get(attr_key)) or ''
                 f.attrs[source_attr] = os.path.basename(old_value) if old_value else ''
                 f.attrs[attr_key] = os.path.basename(output_path)
+                f.attrs[f'{source_attr}_deleted'] = True
                 f.attrs['video_compressed_at'] = datetime.now().isoformat(timespec='seconds')
                 f.attrs['video_compression'] = 'h264_mp4'
 
-    def _run_one(self, ffmpeg_path, job):
+    def _run_one(self, ffmpeg_path, job, job_no, total):
         input_path = job['input']
         output_path = job['output']
         self.log.emit(f"  开始压缩: {os.path.basename(input_path)} -> {os.path.basename(output_path)}")
@@ -4549,6 +4550,39 @@ class VideoCompressWorker(QThread):
             'ratio': ratio,
         }
 
+    def _run_one(self, ffmpeg_path, job, job_no, total):
+        input_path = job['input']
+        output_path = job['output']
+        self.log.emit("-" * 72)
+        self.log.emit(f"[{job_no:02d}/{total:02d}] START {os.path.basename(input_path)}")
+        self.log.emit(f"          -> {os.path.basename(output_path)}")
+
+        def on_progress(percent):
+            self.log.emit(f"[{job_no:02d}/{total:02d}] RUN   {percent:5.1f}% | {os.path.basename(input_path)}")
+
+        size_before = os.path.getsize(input_path)
+        size_after = compress_video_to_mp4(
+            ffmpeg_path, input_path, output_path,
+            self.ffmpeg_threads, self.preset, self.crf, on_progress
+        )
+        self._update_h5_video_attr(job['h5_path'], job['side'], output_path)
+        deleted_source = False
+        if os.path.splitext(input_path)[1].lower() == '.avi' and os.path.abspath(input_path) != os.path.abspath(output_path):
+            os.remove(input_path)
+            deleted_source = True
+        ratio = size_before / size_after if size_after > 0 else 0
+        return {
+            'success': True,
+            'input': input_path,
+            'output': output_path,
+            'side': job['side'],
+            'h5_path': job['h5_path'],
+            'size_before': size_before,
+            'size_after': size_after,
+            'ratio': ratio,
+            'deleted_source': deleted_source,
+        }
+
     def run(self):
         ffmpeg_path = find_ffmpeg_for_hdf5_tool()
         if not ffmpeg_path:
@@ -4563,6 +4597,16 @@ class VideoCompressWorker(QThread):
             self.finished_signal.emit(0, 0, [])
             return
 
+        self.log.emit("=" * 72)
+        self.log.emit("                 VIDEO COMPRESSION QUEUE")
+        self.log.emit("=" * 72)
+        self.log.emit(f"ffmpeg: {ffmpeg_path}")
+        self.log.emit(f"jobs={total} | parallel_ffmpeg={self.max_workers} | threads_per_ffmpeg={self.ffmpeg_threads} | preset={self.preset} | crf={self.crf}")
+        self.log.emit("成功后删除源 AVI，仅保留 MP4。")
+        self.log.emit("-" * 72)
+        for idx, job in enumerate(jobs, 1):
+            self.log.emit(f"[{idx:02d}/{total:02d}] QUEUE {job['side']:<5s} {os.path.basename(job['input'])}")
+        self.log.emit("-" * 72)
         self.log.emit(f"ffmpeg: {ffmpeg_path}")
         self.log.emit(
             f"任务数: {total} | 并行进程: {self.max_workers} | "
@@ -4572,10 +4616,14 @@ class VideoCompressWorker(QThread):
         success = 0
         results = []
         with ThreadPoolExecutor(max_workers=min(self.max_workers, total)) as executor:
-            futures = {executor.submit(self._run_one, ffmpeg_path, job): job for job in jobs}
+            futures = {
+                executor.submit(self._run_one, ffmpeg_path, job, idx, total): (idx, job)
+                for idx, job in enumerate(jobs, 1)
+            }
             for fut in as_completed(futures):
-                job = futures[fut]
+                job_no, job = futures[fut]
                 done += 1
+                remaining = total - done
                 try:
                     res = fut.result()
                     success += 1
@@ -4585,6 +4633,10 @@ class VideoCompressWorker(QThread):
                         f"{res['size_before']/(1024*1024):.1f}MB -> {res['size_after']/(1024*1024):.1f}MB "
                         f"({res['ratio']:.1f}x)"
                     )
+                    deleted_text = " | deleted AVI" if res.get('deleted_source') else ""
+                    self.log.emit(f"[{job_no:02d}/{total:02d}] DONE  {os.path.basename(res['output'])} "
+                                  f"{res['size_before']/(1024*1024):.1f}MB -> {res['size_after']/(1024*1024):.1f}MB "
+                                  f"({res['ratio']:.1f}x){deleted_text}")
                 except Exception as e:
                     results.append({
                         'success': False,
@@ -4594,8 +4646,10 @@ class VideoCompressWorker(QThread):
                         'error': str(e)
                     })
                     self.log.emit(f"  失败: {os.path.basename(job['input'])}: {e}")
+                self.log.emit(f"[QUEUE] done={done}/{total} | remaining={remaining} | active_limit={min(self.max_workers, total)}")
                 self.progress.emit(done, total, os.path.basename(job['input']))
 
+        self.log.emit("=" * 72)
         self.finished_signal.emit(success, total, results)
 
 
@@ -4704,14 +4758,14 @@ class OneToManySyncTab(QWidget):
         btn_row.addWidget(QLabel("并行"))
         self.video_workers_spin = QSpinBox()
         self.video_workers_spin.setRange(1, 8)
-        self.video_workers_spin.setValue(max(1, min(4, (os.cpu_count() or 4) // 2)))
+        self.video_workers_spin.setValue(2)
         self.video_workers_spin.setToolTip("同时启动的 ffmpeg 进程数。低配现场机建议 1-2，高配机器可调到 4。")
         btn_row.addWidget(self.video_workers_spin)
         btn_row.addWidget(QLabel("线程/进程"))
         self.video_threads_spin = QSpinBox()
         self.video_threads_spin.setRange(1, 16)
         default_workers = self.video_workers_spin.value()
-        self.video_threads_spin.setValue(max(1, min(4, (os.cpu_count() or 4) // max(1, default_workers))))
+        self.video_threads_spin.setValue(2)
         self.video_threads_spin.setToolTip("每个 ffmpeg 进程使用的编码线程数。总占用约为 并行数 x 线程数。")
         btn_row.addWidget(self.video_threads_spin)
         btn_row.addStretch()
@@ -4889,7 +4943,7 @@ class OneToManySyncTab(QWidget):
             self.h5_paths,
             max_workers=workers,
             ffmpeg_threads=threads,
-            preset='superfast',
+            preset='ultrafast',
             crf=23,
         )
         self.video_worker.log.connect(self.log)
