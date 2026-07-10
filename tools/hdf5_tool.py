@@ -4050,7 +4050,7 @@ class SyncTab(QWidget):
             f"并行 ffmpeg 进程: {workers}\n"
             f"每进程线程: {threads}\n"
             f"理论编码线程占用: {workers * threads}\n\n"
-            "压缩成功后会更新 H5 的 video_left/video_right 指向 MP4，原 AVI 文件会保留。\n"
+            "压缩成功后会更新 H5 的 video_left/video_right 指向 MP4，并删除原 AVI 文件，仅保留 MP4。\n"
             "是否开始？",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
@@ -4512,7 +4512,7 @@ class VideoCompressWorker(QThread):
                 })
         return jobs
 
-    def _update_h5_video_attr(self, h5_path, side, output_path):
+    def _update_h5_video_attr(self, h5_path, side, output_path, deleted_source=False):
         attr_key = 'video_left' if side == 'left' else 'video_right'
         source_attr = f'{attr_key}_source_avi'
         with _VIDEO_COMPRESS_H5_LOCK:
@@ -4520,7 +4520,7 @@ class VideoCompressWorker(QThread):
                 old_value = _h5_attr_to_str(f.attrs.get(attr_key)) or ''
                 f.attrs[source_attr] = os.path.basename(old_value) if old_value else ''
                 f.attrs[attr_key] = os.path.basename(output_path)
-                f.attrs[f'{source_attr}_deleted'] = True
+                f.attrs[f'{source_attr}_deleted'] = bool(deleted_source)
                 f.attrs['video_compressed_at'] = datetime.now().isoformat(timespec='seconds')
                 f.attrs['video_compression'] = 'h264_mp4'
 
@@ -4565,11 +4565,14 @@ class VideoCompressWorker(QThread):
             ffmpeg_path, input_path, output_path,
             self.ffmpeg_threads, self.preset, self.crf, on_progress
         )
-        self._update_h5_video_attr(job['h5_path'], job['side'], output_path)
         deleted_source = False
         if os.path.splitext(input_path)[1].lower() == '.avi' and os.path.abspath(input_path) != os.path.abspath(output_path):
-            os.remove(input_path)
-            deleted_source = True
+            try:
+                os.remove(input_path)
+                deleted_source = True
+            except Exception as delete_error:
+                self.log.emit(f"[{job_no:02d}/{total:02d}] WARN  AVI删除失败: {delete_error}")
+        self._update_h5_video_attr(job['h5_path'], job['side'], output_path, deleted_source=deleted_source)
         ratio = size_before / size_after if size_after > 0 else 0
         return {
             'success': True,
@@ -4922,7 +4925,7 @@ class OneToManySyncTab(QWidget):
             f"并行 ffmpeg 进程: {workers}\n"
             f"每进程线程: {threads}\n"
             f"理论编码线程占用: {total_threads}\n\n"
-            "压缩成功后会更新 H5 的 video_left/video_right 指向 MP4，原 AVI 文件会保留。\n"
+            "压缩成功后会更新 H5 的 video_left/video_right 指向 MP4，并删除原 AVI 文件，仅保留 MP4。\n"
             "是否开始？",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
