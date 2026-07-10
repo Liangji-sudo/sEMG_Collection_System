@@ -96,6 +96,7 @@ class RealtimeEngine extends EventEmitter {
         // Stage状态
         this.currentStageName = null;
         this.stageFileOpen = false;
+        this.stageFileOpening = false;
         this.stageFileCreateFailed = false;
         this.stage_start_time = 0;
         this.currentStageNeedMocap = false;  // 【新增】当前stage是否需要动捕数据
@@ -331,6 +332,7 @@ class RealtimeEngine extends EventEmitter {
         this.isCollecting = true;
         this.collectionPaused = false;
         this.h5StorageWarningShown = false;
+        this.stageFileOpening = false;
         this.stageFileCreateFailed = false;
         this.currentStageName = stageName;
         this.currentSessionIndex = sessionIndex ?? 0;
@@ -1027,9 +1029,11 @@ class RealtimeEngine extends EventEmitter {
         if (this.isTestMode) {
             console.log(`[realtimeEngine] ★ 测试模式：跳过创建H5文件 ★`);
             this.stageFileOpen = false;  // 确保不会尝试写入
+            this.stageFileOpening = false;
             return;
         }
 
+        this.stageFileOpening = true;
         if (!this.storage_connected) {
             console.warn('[realtimeEngine] ⚠️ Storage未连接，尝试立即重连...');
             try {
@@ -1040,6 +1044,7 @@ class RealtimeEngine extends EventEmitter {
             if (!this.storage_connected) {
                 console.warn('[realtimeEngine] ⚠️ Storage重连失败，无法打开文件');
                 this.stageFileCreateFailed = true;
+                this.stageFileOpening = false;
                 this.notifyH5StorageWarning('Storage Server未连接，当前采集不会写入H5；请紧急中断并重启后端');
                 return;
             }
@@ -1142,18 +1147,21 @@ class RealtimeEngine extends EventEmitter {
 
             if (response.status === 'success') {
                 this.stageFileOpen = true;
+                this.stageFileOpening = false;
                 this.stageFileCreateFailed = false;
                 this.h5StorageWarningShown = false;
                 console.log(`[realtimeEngine] ✅ 文件已打开: ${filename}`);
             } else {
                 console.error(`[realtimeEngine] ❌ 打开文件失败:`, response);
                 this.stageFileOpen = false;
+                this.stageFileOpening = false;
                 this.stageFileCreateFailed = true;
                 this.notifyH5StorageWarning(`H5创建失败：${response.msg || response.error || response.status || '未知错误'}；请紧急中断并重采本轮`);
             }
         } catch (error) {
             console.error('[realtimeEngine] 打开Stage文件失败:', error);
             this.stageFileOpen = false;
+            this.stageFileOpening = false;
             this.stageFileCreateFailed = true;
             this.notifyH5StorageWarning(`H5创建异常：${error.message || error}；请紧急中断并重采本轮`);
         }
@@ -1640,6 +1648,9 @@ class RealtimeEngine extends EventEmitter {
                     !this.collectionDataStartTs ||
                     !storagePacketTs ||
                     storagePacketTs >= (this.collectionDataStartTs - 0.05);
+                const h5OpenGraceExpired =
+                    !this.collectionDataStartTs ||
+                    ((Date.now() / 1000) - this.collectionDataStartTs) > 2.0;
 
                 // Send raw data to storage_server for this sub-packet pair
                 if (this.isCollecting && !this.collectionPaused && this.stageFileOpen && !this.isClosingStageFile && isFreshCollectionPacket) {
@@ -1652,7 +1663,7 @@ class RealtimeEngine extends EventEmitter {
                         imu1_hw_version: imu1HwVersion, imu2_hw_version: imu2HwVersion,
                         imu1_num_imus: imu1NumImus, imu2_num_imus: imu2NumImus,
                     });
-                } else if (this.isCollecting && !this.collectionPaused && !this.isTestMode && !this.stageFileOpen) {
+                } else if (this.isCollecting && !this.collectionPaused && !this.isTestMode && !this.stageFileOpen && !this.stageFileOpening && !this.isClosingStageFile && h5OpenGraceExpired) {
                     this.notifyH5StorageWarning('已收到手环数据，但H5文件未打开，当前轮次数据不会落盘；请紧急中断并重采本轮');
                 } else if (this.isCollecting && this.stageFileOpen && !isFreshCollectionPacket) {
                     this.collectionDroppedStaleBlePackets++;

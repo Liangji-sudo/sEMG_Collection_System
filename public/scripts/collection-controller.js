@@ -275,6 +275,39 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             return normalizedTaskId;
         }
 
+        _getDefaultStageMarkerForTask(taskId) {
+            const markerMap = {
+                'continual_gesture_1': '连续手势1',
+                'continual_gesture_2': '连续手势2',
+                'continual_gesture_3': '连续手势3'
+            };
+            return markerMap[this._normalizeTaskId(taskId)] || null;
+        }
+
+        _applyTaskDefaultStage() {
+            const marker = this._getDefaultStageMarkerForTask(this.currentTaskId);
+            if (!marker || !Array.isArray(this.stages) || this.stages.length === 0) return false;
+
+            const matchedIndex = this.stages.findIndex(stage => {
+                const stageText = `${stage?.id || ''} ${stage?.name || ''}`;
+                return stageText.includes(marker);
+            });
+
+            if (matchedIndex < 0 || matchedIndex === this.currentStageIndex) return false;
+
+            console.log('[Collection] 连续手势任务自动选择Stage:', {
+                taskId: this.currentTaskId,
+                marker,
+                stageIndex: matchedIndex,
+                stageName: this.stages[matchedIndex]?.name || this.stages[matchedIndex]?.id
+            });
+            this.currentStageIndex = matchedIndex;
+            this.currentGestureIndex = 0;
+            this.gestureRepeatCount = 0;
+            this.continualTrialCount = 0;
+            return true;
+        }
+
         loadCollectionConfig(options = {}) {
             console.log('[Collection] ========== loadCollectionConfig 开始 ==========');
 
@@ -306,6 +339,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
                 console.log('[Collection] 最终stages:', this.stages);
                 console.log('[Collection] stages详情:', JSON.stringify(this.stages, null, 2));
+                this._applyTaskDefaultStage();
 
                 // 加载Session数量（优先从collectionConfig，其次从template）
                 if (this.collectionConfig.sessionConfig?.count) {
@@ -517,6 +551,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             // 【修复】重新进入采集页时清空采集进度，避免残留旧进度
             this.currentSessionIndex = 0;
             this.currentStageIndex = 0;
+            this._applyTaskDefaultStage();
             this.currentGestureIndex = 0;
             this.gestureRepeatCount = 0;
             this.continualTrialCount = 0;
@@ -843,6 +878,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this.currentSessionIndex = sessionIndex;
             // 切换轮次时重置Stage为第一个 + 重置同步标记
             this.currentStageIndex = 0;
+            this._applyTaskDefaultStage();
             this.currentGestureIndex = 0;
             this.gestureRepeatCount = 0;
             this.continualTrialCount = 0;
@@ -1272,6 +1308,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             // 【修复】始终从 Session 1 开始
             this.currentSessionIndex = 0;
+            this.currentStageIndex = 0;
+            this._applyTaskDefaultStage();
             this.currentGestureIndex = 0;
             this.gestureRepeatCount = 0;
             this.continualTrialCount = 0;
@@ -1282,6 +1320,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             // 更新UI显示
             this.updateSessionSelect();
+            this.updateStageSelect();
             this.updateGestureList();
 
             console.log('[Collection] 重置到 Session 1 开始采集');
@@ -3710,6 +3749,7 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             // 重新加载配置
             this.loadCollectionConfig({ preferredTaskId: selectedTaskId });
             this._syncCollectionConfigTask(selectedTaskId);
+            this._applyTaskDefaultStage();
             this.sendToRealtimeEngine('task_change', { taskId: this.currentTaskId });
 
             if (window.animationController) {
