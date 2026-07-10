@@ -323,10 +323,11 @@ class RealtimeEngine extends EventEmitter {
     async onCollectionStart(data) {
         console.log(`[realtimeEngine] ========== 开始采集会话 ==========`);
         const { taskId, stageName, userId, config, sessionIndex, sessionNumber, sessionCount, isTestMode, recordingSessionId, isMultiSession } = data;
+        const effectiveTaskId = taskId || config?.task_id || this.currentTaskId || 'discrete_gesture';
 
-        this.currentTaskId = taskId;
+        this.currentTaskId = effectiveTaskId;
         this.currentUser = { id: userId, ...config?.subject };
-        this.collectionConfig = config;
+        this.collectionConfig = config ? { ...config, task_id: effectiveTaskId } : { task_id: effectiveTaskId };
         this.isCollecting = true;
         this.collectionPaused = false;
         this.h5StorageWarningShown = false;
@@ -1053,7 +1054,8 @@ class RealtimeEngine extends EventEmitter {
 
         try {
             const config = this.collectionConfig || {};
-            const taskName = collection_task_name[this.currentTaskId] || this.currentTaskId;
+            const effectiveTaskId = config.task_id || this.currentTaskId || 'discrete_gesture';
+            const taskName = collection_task_name[effectiveTaskId] || config.task || effectiveTaskId;
             const userId = this.currentUser?.id || 'unknown';
             const sessionNum = this.currentSessionNumber || 1;
 
@@ -1072,7 +1074,7 @@ class RealtimeEngine extends EventEmitter {
             console.log(`[realtimeEngine] 子目录: ${subdirectory}`);
 
             // 使用中文任务名称作为 task_id，这样文件夹名称就是中文的
-            const taskIdForFolder = config.task || this.currentTaskId;
+            const taskIdForFolder = config.task || taskName || effectiveTaskId;
 
             const emgConfig = this.getActiveEmgConfig();
             const createParams = {

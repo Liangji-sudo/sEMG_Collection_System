@@ -225,7 +225,57 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
         // ==================== 配置加载 ====================
 
-        loadCollectionConfig() {
+        _normalizeTaskId(taskId) {
+            const taskIdMap = {
+                'discrete': 'discrete_gesture',
+                'continuous1': 'continual_gesture_1',
+                'continuous2': 'continual_gesture_2',
+                'continuous3': 'continual_gesture_3',
+                '离散手势采集': 'discrete_gesture',
+                '离散手势': 'discrete_gesture',
+                '连续手势采集1': 'continual_gesture_1',
+                '连续手势1': 'continual_gesture_1',
+                '连续手势采集2': 'continual_gesture_2',
+                '连续手势2': 'continual_gesture_2',
+                '连续手势采集3': 'continual_gesture_3',
+                '连续手势3': 'continual_gesture_3'
+            };
+            return taskIdMap[taskId] || taskId || 'discrete_gesture';
+        }
+
+        _getTaskDisplayName(taskId) {
+            const normalizedTaskId = this._normalizeTaskId(taskId);
+            const taskNames = {
+                'discrete_gesture': '离散手势采集',
+                'continual_gesture_1': '连续手势采集1',
+                'continual_gesture_2': '连续手势采集2',
+                'continual_gesture_3': '连续手势采集3'
+            };
+            return taskNames[normalizedTaskId] || normalizedTaskId;
+        }
+
+        _syncCollectionConfigTask(taskId) {
+            const normalizedTaskId = this._normalizeTaskId(taskId);
+            this.currentTaskId = normalizedTaskId;
+
+            if (this.collectionConfig) {
+                this.collectionConfig.task_id = normalizedTaskId;
+                this.collectionConfig.task = this._getTaskDisplayName(normalizedTaskId);
+                if (window.currentCollectionConfig === this.collectionConfig) {
+                    window.currentCollectionConfig.task_id = normalizedTaskId;
+                    window.currentCollectionConfig.task = this.collectionConfig.task;
+                }
+                try {
+                    localStorage.setItem('emg_current_collection_config', JSON.stringify(this.collectionConfig));
+                } catch (error) {
+                    console.warn('[Collection] 同步任务ID到localStorage失败:', error);
+                }
+            }
+
+            return normalizedTaskId;
+        }
+
+        loadCollectionConfig(options = {}) {
             console.log('[Collection] ========== loadCollectionConfig 开始 ==========');
 
             this.collectionConfig = window.currentCollectionConfig ||
@@ -236,7 +286,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             if (this.collectionConfig) {
                 console.log('[Collection] 加载采集配置:', this.collectionConfig);
 
-                this.currentTaskId = this.collectionConfig.task_id || this.collectionConfig.task || 'discrete_gesture';
+                const configTaskId = this.collectionConfig.task_id || this.collectionConfig.task || 'discrete_gesture';
+                const effectiveTaskId = options.preferredTaskId || configTaskId;
+                this._syncCollectionConfigTask(effectiveTaskId);
                 console.log('[Collection] currentTaskId:', this.currentTaskId);
 
                 // 【关键】强制从localStorage读取最新模板
@@ -1029,7 +1081,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
 
             // 【Phase 2 - Bug 1 fix】续采模式仅重载执行参数，不覆盖断点恢复的 gestures/进度
             if (!this._isResumeMode) {
-                this.loadCollectionConfig();
+                const selectedTaskId = this.currentTaskId;
+                this.loadCollectionConfig({ preferredTaskId: selectedTaskId });
+                this._syncCollectionConfigTask(selectedTaskId);
             } else {
                 this._reloadExecutionParams();
                 if (!this._hasValidExecutionParamsForTask(this.currentTaskId)) {
@@ -1040,6 +1094,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             console.log('[Collection] ★★★ 配置加载后 ★★★');
             console.log('[Collection] currentExecutionParams:', this.currentExecutionParams);
             console.log('[Collection] gestures 数量:', this.gestures.length);
+            this.updateTaskHeader();
+            this.sendToRealtimeEngine('task_change', { taskId: this.currentTaskId });
 
             // 【关键修复】重置动画模块状态
             this.resetAnimationModules();
@@ -3640,14 +3696,8 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
         // ==================== 外部接口 ====================
 
         selectTask(htmlTaskId) {
-            const taskIdMap = {
-                'discrete': 'discrete_gesture',
-                'continuous1': 'continual_gesture_1',
-                'continuous2': 'continual_gesture_2',
-                'continuous3': 'continual_gesture_3'
-            };
-
-            this.currentTaskId = taskIdMap[htmlTaskId] || htmlTaskId;
+            const selectedTaskId = this._normalizeTaskId(htmlTaskId);
+            this.currentTaskId = selectedTaskId;
             console.log('[Collection] 设置任务类型:', this.currentTaskId);
 
             // 【修复】重新选择任务时清空采集进度
@@ -3658,7 +3708,9 @@ console.log('[Collection] ====== 脚本开始加载 (v3-fixed-v3) ======');
             this.continualTrialCount = 0;
 
             // 重新加载配置
-            this.loadCollectionConfig();
+            this.loadCollectionConfig({ preferredTaskId: selectedTaskId });
+            this._syncCollectionConfigTask(selectedTaskId);
+            this.sendToRealtimeEngine('task_change', { taskId: this.currentTaskId });
 
             if (window.animationController) {
                 window.animationController.setCurrentTask(this.currentTaskId);

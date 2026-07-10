@@ -1,11 +1,12 @@
 // constants.js - 定义全局字符串数组常量
 
 // 也可定义多个常量数组
-export const collection_task_name = Object.freeze([
-  'discrete_gesture',
-  'continual_gesture_1',
-  'continual_gesture_2'
-]);
+export const collection_task_name = Object.freeze({
+  discrete_gesture: '\u79bb\u6563\u624b\u52bf',
+  continual_gesture_1: '\u8fde\u7eed\u624b\u52bf1',
+  continual_gesture_2: '\u8fde\u7eed\u624b\u52bf2',
+  continual_gesture_3: '\u8fde\u7eed\u624b\u52bf3'
+});
 
 
 // 使用 Object.freeze 冻结数组，防止被修改（浅冻结，数组元素若为对象需额外处理）
