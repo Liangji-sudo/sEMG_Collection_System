@@ -336,6 +336,14 @@ class RealtimeEngine extends EventEmitter {
         this.currentSessionIndex = sessionIndex ?? 0;
         this.currentSessionNumber = sessionNumber ?? 1;
         this.sessionCount = sessionCount ?? 3;
+        // stage_start may arrive while this async method is still waiting for
+        // camera time. Set test-mode and a fresh fallback timestamp before any
+        // await so test runs cannot accidentally create H5 files.
+        this.isTestMode = isTestMode || false;
+        this.collectionDataStartTs = Date.now() / 1000;
+        if (this.isTestMode) {
+            console.log(`[realtimeEngine] ★★★ 测试模式：不会创建H5文件 ★★★`);
+        }
         // 【统一时钟】获取 Python time.time() 作为会话起始时间基准
         // 与 EMG 数据时间戳（ble_server.py）和视频时间戳（camera_server.py）同源，
         // 消除 Node.js Date.now() 与 Python time.time() 之间的潜在时钟偏差
@@ -359,12 +367,6 @@ class RealtimeEngine extends EventEmitter {
         if (this.realtimeDataTimer) {
             clearTimeout(this.realtimeDataTimer);
             this.realtimeDataTimer = null;
-        }
-
-        // 【新增】保存测试模式状态
-        this.isTestMode = isTestMode || false;
-        if (this.isTestMode) {
-            console.log(`[realtimeEngine] ★★★ 测试模式：不会创建H5文件 ★★★`);
         }
 
         // 【新增】保存录像会话信息
