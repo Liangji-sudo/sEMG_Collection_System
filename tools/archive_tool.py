@@ -82,6 +82,9 @@ def read_h5_status(h5_path: str) -> dict:
         'template_name':     '',
         'compressed':        False,
         'compression_info':  '',
+        'bin_refs':          [],
+        'video_refs':        [],
+        'video_compressed':  False,
     }
     if not HAS_H5PY or not os.path.isfile(h5_path):
         return result
@@ -107,6 +110,14 @@ def read_h5_status(h5_path: str) -> dict:
             if isinstance(tmpl, bytes):
                 tmpl = tmpl.decode('utf-8', errors='replace')
             result['template_name'] = tmpl
+
+            result['bin_refs'] = _extract_bin_refs_from_attrs(attrs)
+            result['video_refs'] = _extract_video_refs_from_attrs(attrs)
+            video_compression = _attr_to_str(attrs.get('video_compression', '')).lower()
+            result['video_compressed'] = (
+                video_compression in ('h264_mp4', 'mp4', 'h264')
+                or any(ref.lower().endswith('.mp4') for ref in result['video_refs'])
+            )
 
             # Check for 2kHz sync datasets
             if 'emg1_2khz_adc' in f or 'emg2_2khz_adc' in f:
@@ -144,6 +155,62 @@ def read_h5_status(h5_path: str) -> dict:
         pass
 
     return result
+
+
+def _attr_to_str(value: Any) -> str:
+    if value is None:
+        return ''
+    if isinstance(value, bytes):
+        return value.decode('utf-8', errors='replace')
+    return str(value)
+
+
+def _clean_file_ref(value: Any) -> str:
+    ref = _attr_to_str(value).strip()
+    if not ref or ref.lower() in ('none', 'null', '-'):
+        return ''
+    return os.path.basename(ref.replace('\\', '/'))
+
+
+def _unique_names(items: List[str]) -> List[str]:
+    seen = set()
+    result = []
+    for item in items:
+        if item and item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+
+def _bin_names_from_ref(ref: str) -> List[str]:
+    """H5 stores sd_bin_dev* as either a prefix or an EMG/IMU filename."""
+    if not ref:
+        return []
+    lower = ref.lower()
+    if lower.endswith('_emg.bin'):
+        return [ref, re.sub(r'_emg\.bin$', '_imu.bin', ref, flags=re.IGNORECASE)]
+    if lower.endswith('_imu.bin'):
+        return [re.sub(r'_imu\.bin$', '_emg.bin', ref, flags=re.IGNORECASE), ref]
+    if lower.endswith('.bin'):
+        return [ref]
+    return [f'{ref}_emg.bin', f'{ref}_imu.bin']
+
+
+def _extract_bin_refs_from_attrs(attrs: dict) -> List[str]:
+    refs = []
+    for key in ('sd_bin_dev1', 'sd_bin_dev2', 'sd_imu_bin_dev1', 'sd_imu_bin_dev2'):
+        ref = _clean_file_ref(attrs.get(key))
+        refs.extend(_bin_names_from_ref(ref))
+    return _unique_names(refs)
+
+
+def _extract_video_refs_from_attrs(attrs: dict) -> List[str]:
+    refs = []
+    for key in ('video_left', 'video_right'):
+        ref = _clean_file_ref(attrs.get(key))
+        if ref:
+            refs.append(ref)
+    return _unique_names(refs)
 
 
 def status_color(status: str) -> QColor:
@@ -205,6 +272,60 @@ def extract_session_number(filename: str) -> Optional[int]:
     """Extract session number from H5 filename."""
     m = re.search(r'_session(\d+)_', filename)
     return int(m.group(1)) if m else None
+
+
+def _parse_timestamp_dt(ts: str) -> Optional[datetime]:
+    if not ts:
+        return None
+    try:
+        return datetime.strptime(ts, '%Y%m%d_%H%M%S')
+    except Exception:
+        return None
+
+
+def _index_files_by_name(files: List[dict]) -> Dict[str, dict]:
+    return {f.get('name', ''): f for f in files if f.get('name')}
+
+
+def _match_refs_to_files(refs: List[str], files_by_name: Dict[str, dict]) -> List[dict]:
+    matched = []
+    seen = set()
+    for ref in refs or []:
+        item = files_by_name.get(ref)
+        if item and item.get('name') not in seen:
+            matched.append(item)
+            seen.add(item.get('name'))
+    return matched
+
+
+def _nearest_timestamp_group(target_ts: str, files: List[dict], max_seconds: int = 600) -> List[dict]:
+    """Fallback for old H5 files without attrs: choose one closest timestamp group."""
+    target_dt = _parse_timestamp_dt(target_ts)
+    if not target_dt:
+        return []
+
+    groups = defaultdict(list)
+    for item in files:
+        ts = item.get('timestamp', '')
+        if ts:
+            groups[ts].append(item)
+    if not groups:
+        return []
+
+    best_ts = None
+    best_delta = None
+    for ts in groups:
+        dt = _parse_timestamp_dt(ts)
+        if not dt:
+            continue
+        delta = abs((dt - target_dt).total_seconds())
+        if best_delta is None or delta < best_delta:
+            best_ts = ts
+            best_delta = delta
+
+    if best_ts is None or best_delta is None or best_delta > max_seconds:
+        return []
+    return sorted(groups[best_ts], key=lambda x: (x.get('hand', ''), x.get('ftype', ''), x.get('name', '')))
 
 
 # ── Scanner ────────────────────────────────────────────────────────────────
@@ -296,10 +417,15 @@ class DataScanner:
                                 'status': STATUS_NONE,
                                 'collection_status': '',
                                 'video_compressed': False,
+                                'bin_refs': [],
+                                'video_refs': [],
                             }
                             if HAS_H5PY:
                                 meta = read_h5_status(str(f))
                                 h5_info['collection_status'] = meta['collection_status']
+                                h5_info['bin_refs'] = meta.get('bin_refs', [])
+                                h5_info['video_refs'] = meta.get('video_refs', [])
+                                h5_info['video_compressed'] = meta.get('video_compressed', False)
                                 if meta['sync_status'] == STATUS_FAILED:
                                     h5_info['status'] = STATUS_FAILED
                                 elif meta['sync_status'] == STATUS_SYNCED:
@@ -337,6 +463,9 @@ class DataScanner:
                         'session': sess,
                         'status': STATUS_NONE,
                         'collection_status': '',
+                        'bin_refs': [],
+                        'video_refs': [],
+                        'video_compressed': False,
                     }
                     # Read H5 metadata (sync status)
                     if HAS_H5PY:
@@ -344,6 +473,9 @@ class DataScanner:
                         h5_info['collection_status'] = meta['collection_status']
                         h5_info['compressed'] = meta['compressed']
                         h5_info['compression_info'] = meta['compression_info']
+                        h5_info['bin_refs'] = meta.get('bin_refs', [])
+                        h5_info['video_refs'] = meta.get('video_refs', [])
+                        h5_info['video_compressed'] = meta.get('video_compressed', False)
                         # Priority: sync_failed > synced > pending > abnormal
                         if meta['sync_status'] == STATUS_FAILED:
                             h5_info['status'] = STATUS_FAILED
@@ -384,53 +516,83 @@ class DataScanner:
                 result.append({
                     'name': f, 'path': fpath,
                     'timestamp': extract_timestamp_bin_video(f) or '',
+                    'hand': 'L' if '_L_' in f else ('R' if '_R_' in f else '?'),
                 })
         return result
 
     # ── Matching ───────────────────────────────────────────────────────
 
     def _match_files_to_h5(self, node: dict):
-        """Match bin files and video files to H5 sessions by timestamp order."""
+        """Match bin/video files to H5 sessions by H5 attrs, with a timestamp fallback."""
         all_bins = node.get('band_all_bins', [])
-        # Sort bins by timestamp
         sorted_bins = sorted(all_bins, key=lambda b: b['timestamp'])
+        bin_by_name = _index_files_by_name(sorted_bins)
+        matched_bin_names = set()
+
+        subject_videos = sorted(node.get('subject_video', []), key=lambda v: v.get('timestamp', ''))
+        subject_video_by_name = _index_files_by_name(subject_videos)
+        matched_subject_video_names = set()
+
+        def _match_bins_for_h5(h5: dict) -> List[dict]:
+            matched = _match_refs_to_files(h5.get('bin_refs', []), bin_by_name)
+            if not matched:
+                matched = _nearest_timestamp_group(h5.get('timestamp', ''), sorted_bins)
+            return matched
+
+        def _match_videos_for_h5(h5: dict, cfg_videos: List[dict], cfg_video_by_name: Dict[str, dict]) -> List[dict]:
+            video_by_name = dict(subject_video_by_name)
+            video_by_name.update(cfg_video_by_name)
+            matched = _match_refs_to_files(h5.get('video_refs', []), video_by_name)
+            if not matched:
+                matched = _nearest_timestamp_group(h5.get('timestamp', ''), cfg_videos)
+            if not matched:
+                matched = _nearest_timestamp_group(h5.get('timestamp', ''), subject_videos)
+            return matched
 
         for cfg_name, cfg in node.get('pc_configs', {}).items():
-            h5_list   = cfg.get('h5_list', [])
-            vid_list  = cfg.get('video_list', [])
-            num_sessions = len(h5_list)
+            h5_list = cfg.get('h5_list', [])
+            vid_list = sorted(cfg.get('video_list', []), key=lambda v: v.get('timestamp', ''))
+            cfg_video_by_name = _index_files_by_name(vid_list)
+            matched_cfg_video_names = set()
 
-            if num_sessions == 0:
-                continue
+            for h5 in h5_list:
+                matched_bins = _match_bins_for_h5(h5)
+                h5['matched_bins'] = matched_bins
+                matched_bin_names.update(b.get('name') for b in matched_bins if b.get('name'))
 
-            # Match bins: bins per session = total_bins / num_h5_sessions (or 4 per)
-            if sorted_bins:
-                bins_per = max(4, len(sorted_bins) // num_sessions)
-                for i, h5 in enumerate(h5_list):
-                    start = i * bins_per
-                    end   = start + bins_per if i < num_sessions - 1 else len(sorted_bins)
-                    h5['matched_bins'] = sorted_bins[start:end]
+                matched_videos = _match_videos_for_h5(h5, vid_list, cfg_video_by_name)
+                h5['matched_videos'] = matched_videos
+                for v in matched_videos:
+                    name = v.get('name')
+                    if name in cfg_video_by_name:
+                        matched_cfg_video_names.add(name)
+                    if name in subject_video_by_name:
+                        matched_subject_video_names.add(name)
 
-            # Match videos similarly
-            if vid_list:
-                vids_per = max(2, len(vid_list) // num_sessions)  # 2 per session (L+R)
-                for i, h5 in enumerate(h5_list):
-                    start = i * vids_per
-                    end   = start + vids_per if i < num_sessions - 1 else len(vid_list)
-                    h5['matched_videos'] = vid_list[start:end]
+            cfg['matched_video_names'] = matched_cfg_video_names
+            cfg['unmatched_videos'] = [v for v in vid_list if v.get('name') not in matched_cfg_video_names]
 
-        # Handle direct_h5
         for h5 in node.get('direct_h5', []):
-            if sorted_bins:
-                h5['matched_bins'] = sorted_bins
-            if node.get('subject_video'):
-                h5['matched_videos'] = node['subject_video']
+            matched_bins = _match_bins_for_h5(h5)
+            h5['matched_bins'] = matched_bins
+            matched_bin_names.update(b.get('name') for b in matched_bins if b.get('name'))
+
+            matched_videos = _match_videos_for_h5(h5, subject_videos, subject_video_by_name)
+            h5['matched_videos'] = matched_videos
+            matched_subject_video_names.update(v.get('name') for v in matched_videos if v.get('name'))
+
+        node['matched_bin_names'] = matched_bin_names
+        node['unmatched_bins'] = [b for b in sorted_bins if b.get('name') not in matched_bin_names]
+        node['matched_subject_video_names'] = matched_subject_video_names
+        node['unmatched_subject_video'] = [
+            v for v in subject_videos if v.get('name') not in matched_subject_video_names
+        ]
 
         # Detect video compression: mp4 = compressed from avi
         def _check_video_compression(h5_list):
             for h5 in h5_list:
                 vids = h5.get('matched_videos', [])
-                if vids and all(v.get('name', '').lower().endswith('.mp4') for v in vids):
+                if h5.get('video_compressed') or (vids and all(v.get('name', '').lower().endswith('.mp4') for v in vids)):
                     h5['video_compressed'] = True
                     if h5.get('status') in (STATUS_NONE, STATUS_PENDING):
                         h5['status'] = 'compressed'
@@ -587,18 +749,20 @@ class TreeBuilder:
         for h5 in subj.get('direct_h5', []):
             TreeBuilder._add_h5_node(item, h5, show_session=False)
 
-        # ── Subject-level video (unmatched) ──
-        if subj.get('subject_video') and not subj.get('direct_h5'):
-            sv = subj['subject_video']
-            sv_node = QTreeWidgetItem(item, [f"🎬 视频 ({len(sv)}个)"])
-            for v in sv:
+        # Subject-level files that are not referenced by any H5.
+        unmatched_sv = subj.get('unmatched_subject_video', [])
+        if unmatched_sv:
+            sv_node = QTreeWidgetItem(item, [f"🎬 未关联视频 ({len(unmatched_sv)}个)"])
+            for v in unmatched_sv:
                 QTreeWidgetItem(sv_node, [f"  {v['name']}"])
 
-        # ── Unmatched bins ──
-        if all_bins and not configs:
-            bin_node = QTreeWidgetItem(item, [f"💾 手环数据 ({len(all_bins)}bin)"])
-            for b in all_bins[:50]:
+        unmatched_bins = subj.get('unmatched_bins', [])
+        if unmatched_bins:
+            bin_node = QTreeWidgetItem(item, [f"💾 未关联手环Bin ({len(unmatched_bins)}个)"])
+            for b in unmatched_bins[:80]:
                 QTreeWidgetItem(bin_node, [f"  {b['name']}"])
+            if len(unmatched_bins) > 80:
+                QTreeWidgetItem(bin_node, [f"  ... 还有 {len(unmatched_bins) - 80} 个"])
 
     @staticmethod
     def _add_config(parent: QTreeWidgetItem, cfg_name: str, cfg: dict):
@@ -608,9 +772,7 @@ class TreeBuilder:
         synced   = sum(1 for h5 in h5_list if h5.get('status') == STATUS_SYNCED)
         icon = '✅' if h5_list and synced == len(h5_list) else ('⚠️' if h5_list else '❌')
 
-        # Also count unmatched videos
-        matched_vid = sum(len(h5.get('matched_videos', [])) for h5 in h5_list)
-        unmatched_vid = max(0, len(vid_list) - matched_vid)
+        unmatched_videos = cfg.get('unmatched_videos', [])
 
         label = f"{icon} {cfg_name}  H5:{len(h5_list)}({synced}已同步)  视频:{len(vid_list)}"
         cfg_item = QTreeWidgetItem(parent, [label])
@@ -620,16 +782,10 @@ class TreeBuilder:
             TreeBuilder._add_h5_node(cfg_item, h5, show_session=True)
 
         # Unmatched videos
-        if unmatched_vid > 0:
-            uv_node = QTreeWidgetItem(cfg_item, [f"  ⚪ 未匹配视频 ({unmatched_vid}个)"])
-            # Find which videos are not matched
-            all_matched = set()
-            for h5 in h5_list:
-                for v in h5.get('matched_videos', []):
-                    all_matched.add(v.get('name', ''))
-            for v in vid_list:
-                if v['name'] not in all_matched:
-                    QTreeWidgetItem(uv_node, [f"    {v['name']}"])
+        if unmatched_videos:
+            uv_node = QTreeWidgetItem(cfg_item, [f"  ⚪ 未关联视频 ({len(unmatched_videos)}个)"])
+            for v in unmatched_videos:
+                QTreeWidgetItem(uv_node, [f"    {v['name']}"])
 
     @staticmethod
     def _add_h5_node(parent: QTreeWidgetItem, h5: dict, show_session: bool = False):
