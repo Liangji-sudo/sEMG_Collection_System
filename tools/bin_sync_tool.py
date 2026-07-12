@@ -2372,24 +2372,14 @@ def _extend_2khz_to_cover_prompts(h5_path, data_2khz, emg_parser, channel_map, r
 
 def _build_full_bin_2khz_from_anchor(emg_parser, channel_map, dtype, timestamps_250hz,
                                      anchor_sd_frame_ids, bin_offset, anchor_position):
-    """Build 2kHz directly from the paired SD bin after using BLE 250Hz only as a time anchor."""
+    """Build full 2kHz bin data while preserving the legacy BLE-anchored time segment.
+
+    The old sync path produced correct prompt alignment for the available BLE
+    250Hz span, but it stopped when BLE data stopped. Keep that proven time
+    axis inside the BLE span, then extend the paired SD bin before/after it at
+    the fixed 2kHz interval.
+    """
     if not emg_parser.frames or len(timestamps_250hz) == 0:
-        return None
-
-    anchor_sd = None
-    anchor_time = None
-    if anchor_sd_frame_ids is not None:
-        for idx, sd in enumerate(anchor_sd_frame_ids):
-            sd_int = int(sd)
-            if sd_int >= 0:
-                anchor_sd = sd_int
-                anchor_time = float(timestamps_250hz[idx])
-                break
-    else:
-        anchor_sd = int(bin_offset) + int(anchor_position)
-        anchor_time = float(timestamps_250hz[0])
-
-    if anchor_sd is None or anchor_time is None:
         return None
 
     min_sd = int(min(emg_parser.frames.keys()))
@@ -2397,9 +2387,53 @@ def _build_full_bin_2khz_from_anchor(emg_parser, channel_map, dtype, timestamps_
     if max_sd < min_sd:
         return None
 
+    legacy_sd_times = []
+    if anchor_sd_frame_ids is not None:
+        anchor_iter = enumerate(anchor_sd_frame_ids)
+    else:
+        anchor_iter = ((i, int(bin_offset) + i * DOWNSAMPLE_RATIO + int(anchor_position))
+                       for i in range(len(timestamps_250hz)))
+
+    for row_idx, anchor_sd in anchor_iter:
+        if row_idx < 0 or row_idx >= len(timestamps_250hz):
+            continue
+        anchor_sd = int(anchor_sd)
+        if anchor_sd < 0:
+            continue
+        anchor_time = float(timestamps_250hz[row_idx])
+        if not np.isfinite(anchor_time):
+            continue
+        sd_base = anchor_sd - int(anchor_position)
+        for phase in range(DOWNSAMPLE_RATIO):
+            sd_frame_id = sd_base + phase
+            if sd_frame_id < min_sd or sd_frame_id > max_sd:
+                continue
+            t = anchor_time + (phase - int(anchor_position)) / 2000.0
+            legacy_sd_times.append((sd_frame_id, float(t)))
+
+    if not legacy_sd_times:
+        return None
+
+    # Collapse duplicate frame ids, if any, using the median timestamp.
+    by_sd = {}
+    for sd, t in legacy_sd_times:
+        by_sd.setdefault(int(sd), []).append(float(t))
+    known_sd = np.array(sorted(by_sd.keys()), dtype=np.float64)
+    known_time = np.array([float(np.median(by_sd[int(sd)])) for sd in known_sd], dtype=np.float64)
+    if len(known_sd) == 0:
+        return None
+
     frame_count = max_sd - min_sd + 1
     data_2khz = np.empty(frame_count, dtype=dtype)
-    base_time = anchor_time - anchor_sd / 2000.0
+    full_sd = np.arange(min_sd, max_sd + 1, dtype=np.float64)
+    full_time = np.interp(full_sd, known_sd, known_time)
+    before_mask = full_sd < known_sd[0]
+    after_mask = full_sd > known_sd[-1]
+    if np.any(before_mask):
+        full_time[before_mask] = known_time[0] - (known_sd[0] - full_sd[before_mask]) / 2000.0
+    if np.any(after_mask):
+        full_time[after_mask] = known_time[-1] + (full_sd[after_mask] - known_sd[-1]) / 2000.0
+
     prev_channels = np.zeros(16, dtype=np.int32)
     filled_frames = 0
     missing_frames = 0
@@ -2413,7 +2447,7 @@ def _build_full_bin_2khz_from_anchor(emg_parser, channel_map, dtype, timestamps_
             missing_frames += 1
         data_2khz[idx]['channels'] = prev_channels
         data_2khz[idx]['sd_frame_id'] = sd_frame_id
-        data_2khz[idx]['time'] = base_time + sd_frame_id / 2000.0
+        data_2khz[idx]['time'] = float(full_time[idx])
 
     return {
         'data_2khz': data_2khz,
@@ -2421,9 +2455,13 @@ def _build_full_bin_2khz_from_anchor(emg_parser, channel_map, dtype, timestamps_
         'missing_frames': missing_frames,
         'min_sd': min_sd,
         'max_sd': max_sd,
-        'anchor_sd': int(anchor_sd),
-        'anchor_time': float(anchor_time),
-        'base_time': float(base_time),
+        'anchor_sd': int(known_sd[0]),
+        'anchor_time': float(known_time[0]),
+        'base_time': float(known_time[0] - known_sd[0] / 2000.0),
+        'legacy_time_min_sd': int(known_sd[0]),
+        'legacy_time_max_sd': int(known_sd[-1]),
+        'legacy_time_anchor_count': int(len(known_sd)),
+        'time_source_mode': 'legacy_ble_250hz_extended',
     }
 
 
@@ -2465,7 +2503,10 @@ def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
         }
         log(
             f"2kHz full-bin sync: sd={full_bin_info['min_sd']}..{full_bin_info['max_sd']} "
-            f"({num_frames_2khz} frames), anchor_sd={full_bin_info['anchor_sd']}"
+            f"({num_frames_2khz} frames), "
+            f"time={full_bin_info.get('time_source_mode', 'anchor')} "
+            f"legacy_sd={full_bin_info.get('legacy_time_min_sd', full_bin_info['anchor_sd'])}"
+            f"..{full_bin_info.get('legacy_time_max_sd', full_bin_info['anchor_sd'])}"
         )
     else:
         data_2khz = np.empty(num_frames_2khz, dtype=emg_2khz_dtype)
@@ -2545,6 +2586,10 @@ def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
             ds_2khz.attrs["sync_base_time"] = float(full_bin_info['base_time'])
             ds_2khz.attrs["sync_min_sd_frame_id"] = int(full_bin_info['min_sd'])
             ds_2khz.attrs["sync_max_sd_frame_id"] = int(full_bin_info['max_sd'])
+            ds_2khz.attrs["sync_time_source_mode"] = full_bin_info.get('time_source_mode', 'anchor')
+            ds_2khz.attrs["sync_legacy_time_min_sd_frame_id"] = int(full_bin_info.get('legacy_time_min_sd', full_bin_info['anchor_sd']))
+            ds_2khz.attrs["sync_legacy_time_max_sd_frame_id"] = int(full_bin_info.get('legacy_time_max_sd', full_bin_info['anchor_sd']))
+            ds_2khz.attrs["sync_legacy_time_anchor_count"] = int(full_bin_info.get('legacy_time_anchor_count', 1))
         ds_2khz.attrs["prompt_coverage_extended"] = bool(extension_info['extra_frames'] > 0)
         if extension_info['extra_frames'] > 0:
             ds_2khz.attrs["prompt_coverage_extra_frames"] = int(extension_info['extra_frames'])
