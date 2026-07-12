@@ -782,8 +782,10 @@ def sync_h5_with_bin(h5_path, emg_bin_path, imu_bin_path=None, device_id=1, veri
         # 检查sync_status
         current_status = f.attrs.get('sync_status', 'unknown')
         if current_status == 'synced':
-            log("警告: 文件已同步，跳过")
-            return {'status': 'skipped', 'reason': 'already_synced'}
+            if not _synced_file_needs_prompt_coverage_resync(f, device_id):
+                log("警告: 文件已同步，跳过")
+                return {'status': 'skipped', 'reason': 'already_synced'}
+            log("[repair] 文件已标记 synced，但 2kHz 不是 full-bin 同步结果，允许重新同步升级")
 
         # Phase 4: 检查 collection_status，异常中断 segment 提示但不阻止同步
         coll_status = f.attrs.get('collection_status', 'unknown')
@@ -2124,8 +2126,10 @@ def sync_h5_one_to_one(h5_path, emg_bin_path, imu_bin_path=None, device_id=1,
     with h5py.File(h5_path, 'r+') as f:
         current_status = f.attrs.get('sync_status', 'unknown')
         if current_status == 'synced':
-            log("警告: 文件已同步，跳过")
-            return {'status': 'skipped', 'reason': 'already_synced'}
+            if not _synced_file_needs_prompt_coverage_resync(f, device_id):
+                log("警告: 文件已同步，跳过")
+                return {'status': 'skipped', 'reason': 'already_synced'}
+            log("[repair] 文件已标记 synced，但 2kHz 不是 full-bin 同步结果，允许重新同步升级")
 
         ds_250hz_name = f"emg{device_id}_250hz_adc"
         if ds_250hz_name not in f:
@@ -2242,6 +2246,187 @@ def sync_h5_one_to_one(h5_path, emg_bin_path, imu_bin_path=None, device_id=1,
     )
 
 
+def _synced_file_needs_prompt_coverage_resync(h5_file, device_id):
+    """Allow resync for old synced H5 files that were not built from the full SD bin."""
+    try:
+        ds_name = f'emg{device_id}_2khz_adc'
+        if ds_name not in h5_file:
+            return False
+        ds = h5_file[ds_name]
+        source_mode = ds.attrs.get('sync_source_mode', '')
+        if isinstance(source_mode, bytes):
+            source_mode = source_mode.decode('utf-8', errors='ignore')
+        if source_mode != 'full_sd_bin':
+            return True
+        if 'prompts' not in h5_file or 'times' not in h5_file['prompts']:
+            return False
+        if len(ds) == 0 or ds.dtype.names is None or 'time' not in ds.dtype.names:
+            return False
+        prompt_times = h5_file['prompts']['times'][:]
+        if len(prompt_times) == 0:
+            return False
+        prompt_end = float(np.nanmax(prompt_times.astype(np.float64)))
+        data_end = float(ds['time'][-1])
+        if prompt_end > 1e11 or data_end > 1e11:
+            return False
+        return prompt_end > data_end + 1e-3
+    except Exception:
+        return False
+
+
+def _get_prompt_coverage_target_time(h5_path, current_end_time, margin_seconds=3.0):
+    """Return a target time only when synced 2kHz would otherwise not cover prompts."""
+    try:
+        with h5py.File(h5_path, 'r') as f:
+            if 'prompts' not in f or 'times' not in f['prompts']:
+                return None, None
+            prompt_times = f['prompts']['times'][:]
+            if len(prompt_times) == 0:
+                return None, None
+            prompt_end = float(np.nanmax(prompt_times.astype(np.float64)))
+            if not np.isfinite(prompt_end):
+                return None, None
+
+            # Timestamps must be in the same Unix-second scale. If an old file
+            # accidentally stored milliseconds, do not guess here.
+            if prompt_end > 1e11 or current_end_time > 1e11:
+                return None, None
+
+            if prompt_end <= float(current_end_time) + 1e-3:
+                return None, prompt_end
+
+            end_time = f.attrs.get('end_time', None)
+            try:
+                end_time = float(end_time) if end_time is not None else None
+            except Exception:
+                end_time = None
+            target = prompt_end + float(margin_seconds)
+            if end_time is not None and np.isfinite(end_time):
+                target = max(target, end_time)
+            return float(target), prompt_end
+    except Exception as exc:
+        log(f"  WARN: prompt coverage check failed: {exc}")
+        return None, None
+
+
+def _extend_2khz_to_cover_prompts(h5_path, data_2khz, emg_parser, channel_map, resolved_map_name):
+    """Append all remaining real SD-bin 2kHz frames when H5 BLE 250Hz ended before prompts."""
+    result = {
+        'data_2khz': data_2khz,
+        'extra_frames': 0,
+        'extra_filled_frames': 0,
+        'extra_missing_frames': 0,
+        'prompt_end_time': 0.0,
+        'target_time': 0.0,
+        'original_end_time': 0.0,
+    }
+    if len(data_2khz) == 0:
+        return result
+
+    original_end_time = float(data_2khz['time'][-1])
+    target_time, prompt_end = _get_prompt_coverage_target_time(h5_path, original_end_time)
+    result['original_end_time'] = original_end_time
+    result['prompt_end_time'] = float(prompt_end or 0.0)
+    result['target_time'] = float(target_time or 0.0)
+    if target_time is None:
+        return result
+
+    last_sd = int(data_2khz['sd_frame_id'][-1])
+    if last_sd <= 0 and len(data_2khz) > 1:
+        # A zero may be a clamped invalid frame at the beginning, but it should
+        # not be used as an extension anchor if the stream later has real ids.
+        nonzero = data_2khz['sd_frame_id'][data_2khz['sd_frame_id'] > 0]
+        if len(nonzero):
+            last_sd = int(nonzero[-1])
+
+    max_sd = int(max(emg_parser.frames.keys())) if emg_parser.frames else last_sd
+    available_extra = max(0, max_sd - last_sd)
+    if available_extra <= 0:
+        log("  WARN: prompt extends past EMG, but SD bin has no additional frames")
+        return result
+    extra_frames = available_extra
+    result['target_time'] = original_end_time + extra_frames / 2000.0
+
+    extra = np.empty(extra_frames, dtype=data_2khz.dtype)
+    prev_channels = data_2khz['channels'][-1].astype(np.int32)
+    filled = 0
+    missing = 0
+    for idx in range(extra_frames):
+        sd_frame_id = last_sd + idx + 1
+        bin_data = emg_parser.get_frame(sd_frame_id)
+        if bin_data is not None:
+            prev_channels = np.array(map_physical_to_h5_order(bin_data, channel_map), dtype=np.int32)
+            filled += 1
+        else:
+            missing += 1
+        extra[idx]['channels'] = prev_channels
+        extra[idx]['sd_frame_id'] = sd_frame_id
+        extra[idx]['time'] = original_end_time + (idx + 1) / 2000.0
+
+    result['data_2khz'] = np.concatenate([data_2khz, extra])
+    result['extra_frames'] = int(extra_frames)
+    result['extra_filled_frames'] = int(filled)
+    result['extra_missing_frames'] = int(missing)
+    return result
+
+
+def _build_full_bin_2khz_from_anchor(emg_parser, channel_map, dtype, timestamps_250hz,
+                                     anchor_sd_frame_ids, bin_offset, anchor_position):
+    """Build 2kHz directly from the paired SD bin after using BLE 250Hz only as a time anchor."""
+    if not emg_parser.frames or len(timestamps_250hz) == 0:
+        return None
+
+    anchor_sd = None
+    anchor_time = None
+    if anchor_sd_frame_ids is not None:
+        for idx, sd in enumerate(anchor_sd_frame_ids):
+            sd_int = int(sd)
+            if sd_int >= 0:
+                anchor_sd = sd_int
+                anchor_time = float(timestamps_250hz[idx])
+                break
+    else:
+        anchor_sd = int(bin_offset) + int(anchor_position)
+        anchor_time = float(timestamps_250hz[0])
+
+    if anchor_sd is None or anchor_time is None:
+        return None
+
+    min_sd = int(min(emg_parser.frames.keys()))
+    max_sd = int(max(emg_parser.frames.keys()))
+    if max_sd < min_sd:
+        return None
+
+    frame_count = max_sd - min_sd + 1
+    data_2khz = np.empty(frame_count, dtype=dtype)
+    base_time = anchor_time - anchor_sd / 2000.0
+    prev_channels = np.zeros(16, dtype=np.int32)
+    filled_frames = 0
+    missing_frames = 0
+
+    for idx, sd_frame_id in enumerate(range(min_sd, max_sd + 1)):
+        bin_data = emg_parser.get_frame(sd_frame_id)
+        if bin_data is not None:
+            prev_channels = np.array(map_physical_to_h5_order(bin_data, channel_map), dtype=np.int32)
+            filled_frames += 1
+        else:
+            missing_frames += 1
+        data_2khz[idx]['channels'] = prev_channels
+        data_2khz[idx]['sd_frame_id'] = sd_frame_id
+        data_2khz[idx]['time'] = base_time + sd_frame_id / 2000.0
+
+    return {
+        'data_2khz': data_2khz,
+        'filled_frames': filled_frames,
+        'missing_frames': missing_frames,
+        'min_sd': min_sd,
+        'max_sd': max_sd,
+        'anchor_sd': int(anchor_sd),
+        'anchor_time': float(anchor_time),
+        'base_time': float(base_time),
+    }
+
+
 def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
                           channel_map, resolved_map_name,
                           data_250hz, num_frames_250hz, bin_offset,
@@ -2255,50 +2440,84 @@ def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
     channels_250hz = data_250hz['channels']
     timestamps_250hz = data_250hz['time']
 
-    num_frames_2khz = num_frames_250hz * DOWNSAMPLE_RATIO
     emg_2khz_dtype = np.dtype([
         ("channels", "<i4", (16,)),
         ("sd_frame_id", "<u4"),
         ("time", "<f8")
     ])
 
-    data_2khz = np.empty(num_frames_2khz, dtype=emg_2khz_dtype)
-    filled_frames = 0
-    missing_frames = 0
+    num_frames_2khz = num_frames_250hz * DOWNSAMPLE_RATIO
     invalid_negative_sd_frames = 0
+    full_bin_info = _build_full_bin_2khz_from_anchor(
+        emg_parser, channel_map, emg_2khz_dtype, timestamps_250hz,
+        anchor_sd_frame_ids, bin_offset, anchor_position
+    )
+    if full_bin_info is not None:
+        data_2khz = full_bin_info['data_2khz']
+        filled_frames = int(full_bin_info['filled_frames'])
+        missing_frames = int(full_bin_info['missing_frames'])
+        num_frames_2khz = int(len(data_2khz))
+        extension_info = {
+            'extra_frames': 0,
+            'prompt_end_time': 0.0,
+            'target_time': 0.0,
+            'original_end_time': 0.0,
+        }
+        log(
+            f"2kHz full-bin sync: sd={full_bin_info['min_sd']}..{full_bin_info['max_sd']} "
+            f"({num_frames_2khz} frames), anchor_sd={full_bin_info['anchor_sd']}"
+        )
+    else:
+        data_2khz = np.empty(num_frames_2khz, dtype=emg_2khz_dtype)
+        filled_frames = 0
+        missing_frames = 0
 
-    for i in range(num_frames_250hz):
-        if anchor_sd_frame_ids is not None:
-            sd_base = int(anchor_sd_frame_ids[i]) - int(anchor_position)
-        else:
-            sd_base = bin_offset + int(i) * DOWNSAMPLE_RATIO
-        for j in range(DOWNSAMPLE_RATIO):
-            sd_frame_id = sd_base + j
-            idx_2khz = i * DOWNSAMPLE_RATIO + j
-            if sd_frame_id < 0:
-                bin_data = None
-                stored_sd_frame_id = 0
-                invalid_negative_sd_frames += 1
+        for i in range(num_frames_250hz):
+            if anchor_sd_frame_ids is not None:
+                sd_base = int(anchor_sd_frame_ids[i]) - int(anchor_position)
             else:
-                bin_data = emg_parser.get_frame(sd_frame_id)
-                stored_sd_frame_id = sd_frame_id
-            if bin_data is not None:
-                bin_mapped = map_physical_to_h5_order(bin_data, channel_map)
-                data_2khz[idx_2khz]['channels'] = np.array(bin_mapped, dtype=np.int32)
-                data_2khz[idx_2khz]['sd_frame_id'] = stored_sd_frame_id
-                filled_frames += 1
-            else:
-                if j == int(anchor_position):
-                    data_2khz[idx_2khz]['channels'] = channels_250hz[i].astype(np.int32)
-                elif idx_2khz > 0:
-                    data_2khz[idx_2khz]['channels'] = data_2khz[idx_2khz - 1]['channels']
+                sd_base = bin_offset + int(i) * DOWNSAMPLE_RATIO
+            for j in range(DOWNSAMPLE_RATIO):
+                sd_frame_id = sd_base + j
+                idx_2khz = i * DOWNSAMPLE_RATIO + j
+                if sd_frame_id < 0:
+                    bin_data = None
+                    stored_sd_frame_id = 0
+                    invalid_negative_sd_frames += 1
                 else:
-                    data_2khz[idx_2khz]['channels'] = np.zeros(16, dtype=np.int32)
-                data_2khz[idx_2khz]['sd_frame_id'] = stored_sd_frame_id
-                missing_frames += 1
+                    bin_data = emg_parser.get_frame(sd_frame_id)
+                    stored_sd_frame_id = sd_frame_id
+                if bin_data is not None:
+                    bin_mapped = map_physical_to_h5_order(bin_data, channel_map)
+                    data_2khz[idx_2khz]['channels'] = np.array(bin_mapped, dtype=np.int32)
+                    data_2khz[idx_2khz]['sd_frame_id'] = stored_sd_frame_id
+                    filled_frames += 1
+                else:
+                    if j == int(anchor_position):
+                        data_2khz[idx_2khz]['channels'] = channels_250hz[i].astype(np.int32)
+                    elif idx_2khz > 0:
+                        data_2khz[idx_2khz]['channels'] = data_2khz[idx_2khz - 1]['channels']
+                    else:
+                        data_2khz[idx_2khz]['channels'] = np.zeros(16, dtype=np.int32)
+                    data_2khz[idx_2khz]['sd_frame_id'] = stored_sd_frame_id
+                    missing_frames += 1
 
-            anchor_time = timestamps_250hz[i]
-            data_2khz[idx_2khz]['time'] = anchor_time + (j - int(anchor_position)) / 2000.0
+                anchor_time = timestamps_250hz[i]
+                data_2khz[idx_2khz]['time'] = anchor_time + (j - int(anchor_position)) / 2000.0
+
+        extension_info = _extend_2khz_to_cover_prompts(
+            h5_path, data_2khz, emg_parser, channel_map, resolved_map_name
+        )
+        if extension_info['extra_frames'] > 0:
+            data_2khz = extension_info['data_2khz']
+            filled_frames += extension_info['extra_filled_frames']
+            missing_frames += extension_info['extra_missing_frames']
+            num_frames_2khz = int(len(data_2khz))
+            log(
+                f"2kHz prompt coverage extension: +{extension_info['extra_frames']} frames "
+                f"to t={extension_info['target_time']:.3f} "
+                f"(prompt_end={extension_info['prompt_end_time']:.3f})"
+            )
 
     log(f"2kHz: {filled_frames} from bin, {missing_frames} interpolated")
     if invalid_negative_sd_frames:
@@ -2319,6 +2538,20 @@ def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
         ds_2khz.attrs["missing_frames"] = missing_frames
         ds_2khz.attrs["invalid_negative_sd_frames"] = invalid_negative_sd_frames
         ds_2khz.attrs["sample_rate"] = 2000
+        if full_bin_info is not None:
+            ds_2khz.attrs["sync_source_mode"] = "full_sd_bin"
+            ds_2khz.attrs["sync_anchor_sd_frame_id"] = int(full_bin_info['anchor_sd'])
+            ds_2khz.attrs["sync_anchor_time"] = float(full_bin_info['anchor_time'])
+            ds_2khz.attrs["sync_base_time"] = float(full_bin_info['base_time'])
+            ds_2khz.attrs["sync_min_sd_frame_id"] = int(full_bin_info['min_sd'])
+            ds_2khz.attrs["sync_max_sd_frame_id"] = int(full_bin_info['max_sd'])
+        ds_2khz.attrs["prompt_coverage_extended"] = bool(extension_info['extra_frames'] > 0)
+        if extension_info['extra_frames'] > 0:
+            ds_2khz.attrs["prompt_coverage_extra_frames"] = int(extension_info['extra_frames'])
+            ds_2khz.attrs["prompt_coverage_prompt_end_time"] = float(extension_info['prompt_end_time'])
+            ds_2khz.attrs["prompt_coverage_target_time"] = float(extension_info['target_time'])
+            ds_2khz.attrs["prompt_coverage_original_end_time"] = float(extension_info['original_end_time'])
+            ds_2khz.attrs["prompt_coverage_mode"] = "extend_from_sd_bin"
 
         # IMU 同步（复用原逻辑）
         imu_result = _sync_imu_100hz(f, emg_parser, imu_parser, data_2khz, device_id)
@@ -2338,9 +2571,14 @@ def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
             f.attrs["sync_time_alignment"] = "anchor_sample"
             f.attrs["sync_250hz_anchor_position"] = int(anchor_position)
             f.attrs["sync_2khz_sample_interval"] = 0.0005
+            if extension_info['extra_frames'] > 0:
+                f.attrs["sync_prompt_coverage_repair"] = True
+                f.attrs[f"sync_prompt_coverage_extra_frames_dev{device_id}"] = int(extension_info['extra_frames'])
             detail = {'mode': sync_mode, 'offset': bin_offset, 'filled': filled_frames, 'missing': missing_frames}
             if sync_match_rate is not None:
                 detail['match_rate'] = float(sync_match_rate)
+            if extension_info['extra_frames'] > 0:
+                detail['prompt_coverage_extra_frames'] = int(extension_info['extra_frames'])
             append_sync_history(f, action='sync', status='synced', details=detail)
 
     imu_info = f", IMU: {imu_result.get('imu_frames',0)}f filled={imu_result.get('imu_filled',0)}" if imu_result.get('imu_status') == 'success' else f", IMU: {imu_result.get('imu_status','skipped')}"
@@ -2353,6 +2591,7 @@ def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
         'status': 'success', 'frames_250hz': num_frames_250hz,
         'frames_2khz': num_frames_2khz, 'filled_frames': filled_frames,
         'missing_frames': missing_frames, 'bin_offset': bin_offset,
+        'prompt_coverage_extra_frames': int(extension_info['extra_frames']),
         'imu_status': imu_result.get('imu_status', 'skipped'),
         'imu_frames': imu_result.get('imu_frames', 0),
         'imu_filled': imu_result.get('imu_filled', 0),
