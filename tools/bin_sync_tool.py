@@ -2603,6 +2603,95 @@ def _build_and_write_2khz(h5_path, emg_parser, imu_parser, device_id,
     }
 
 
+def _iter_imu_ble_anchor_rows(h5_file, device_id):
+    """Yield BLE IMU rows as (imu_index, emg_sd_frame_id, time, acc)."""
+    all_name = f'imu{device_id}_all_ble'
+    if all_name in h5_file:
+        ds = h5_file[all_name]
+        if ds.dtype.names and all(k in ds.dtype.names for k in ('imu_index', 'time', 'acc')):
+            has_sd = 'sd_frame_id' in ds.dtype.names
+            has_frame = 'frame_id' in ds.dtype.names
+            for row in ds:
+                if not np.isfinite(float(row['time'])):
+                    continue
+                if has_sd:
+                    emg_sd = int(row['sd_frame_id'])
+                elif has_frame:
+                    emg_sd = int(row['frame_id']) * DOWNSAMPLE_RATIO
+                else:
+                    continue
+                yield int(row['imu_index']), emg_sd, float(row['time']), np.array(row['acc'], dtype=np.float32)
+        return
+
+    labels = ['a', 'b', 'c', 'd']
+    for imu_index, label in enumerate(labels):
+        ds_name = f'imu{device_id}{label}_ble'
+        if ds_name not in h5_file:
+            continue
+        ds = h5_file[ds_name]
+        if ds.dtype.names is None or not all(k in ds.dtype.names for k in ('time', 'acc')):
+            continue
+        has_sd = 'sd_frame_id' in ds.dtype.names
+        has_frame = 'frame_id' in ds.dtype.names
+        for row in ds:
+            if not np.isfinite(float(row['time'])):
+                continue
+            if has_sd:
+                emg_sd = int(row['sd_frame_id'])
+            elif has_frame:
+                emg_sd = int(row['frame_id']) * DOWNSAMPLE_RATIO
+            else:
+                continue
+            yield imu_index, emg_sd, float(row['time']), np.array(row['acc'], dtype=np.float32)
+
+
+def _build_imu_frame_axis_from_ble(h5_file, imu_parser, device_id, num_imus,
+                                   max_anchor_rows=3000, search_radius=3,
+                                   acc_tolerance=0.035, min_anchors=5):
+    """Build a full IMU-bin frame axis using BLE IMU samples as independent time anchors."""
+    if not imu_parser.frames:
+        return None
+
+    anchors = []
+    for row_count, (imu_index, emg_sd, t, ble_acc) in enumerate(_iter_imu_ble_anchor_rows(h5_file, device_id)):
+        if row_count >= max_anchor_rows:
+            break
+        if imu_index < 0 or imu_index >= num_imus:
+            continue
+        approx_imu_fid = int(round(float(emg_sd) / EMG_IMU_RATIO))
+        best = None
+        for fid in range(approx_imu_fid - search_radius, approx_imu_fid + search_radius + 1):
+            imu_data = imu_parser.frames.get(fid)
+            if imu_data is None or imu_index >= len(imu_data):
+                continue
+            bin_acc = np.array(imu_data[imu_index]['acc'], dtype=np.float32)
+            acc_err = float(np.max(np.abs(bin_acc - ble_acc)))
+            if best is None or acc_err < best[0]:
+                best = (acc_err, fid)
+        if best is None or best[0] > acc_tolerance:
+            continue
+        anchors.append((int(best[1]), float(t), int(imu_index), float(best[0])))
+
+    if len(anchors) < min_anchors:
+        return None
+
+    base_times = np.array([t - fid / 100.0 for fid, t, _idx, _err in anchors], dtype=np.float64)
+    base_time = float(np.median(base_times))
+    min_fid = int(min(imu_parser.frames.keys()))
+    max_fid = int(max(imu_parser.frames.keys()))
+    frame_ids = np.arange(min_fid, max_fid + 1, dtype=np.uint32)
+    time_by_frame = {int(fid): base_time + int(fid) / 100.0 for fid in frame_ids}
+    return {
+        'frame_ids': frame_ids,
+        'time_by_frame': time_by_frame,
+        'base_time': base_time,
+        'anchor_count': len(anchors),
+        'min_frame_id': min_fid,
+        'max_frame_id': max_fid,
+        'median_acc_error': float(np.median([a[3] for a in anchors])),
+    }
+
+
 def _sync_imu_100hz(h5_file, emg_parser, imu_parser, data_2khz, device_id):
     """IMU 100Hz 同步 — 支持 2/3 动态数量 IMU"""
     if imu_parser is None:
@@ -2610,14 +2699,28 @@ def _sync_imu_100hz(h5_file, emg_parser, imu_parser, data_2khz, device_id):
     num_imus = imu_parser.num_imus
     labels = ['a', 'b', 'c', 'd'][:num_imus]
 
-    emg_sd_frame_ids = data_2khz['sd_frame_id']
-    imu_frame_ids_all = emg_sd_frame_ids // EMG_IMU_RATIO
-    imu_frame_ids_unique = np.unique(imu_frame_ids_all)
-    imu_time_by_frame = {}
-    for emg_idx, imu_fid_raw in enumerate(imu_frame_ids_all):
-        imu_fid_int = int(imu_fid_raw)
-        if imu_fid_int not in imu_time_by_frame:
-            imu_time_by_frame[imu_fid_int] = float(data_2khz[emg_idx]['time'])
+    anchor_info = _build_imu_frame_axis_from_ble(h5_file, imu_parser, device_id, num_imus)
+    if anchor_info is not None:
+        imu_frame_ids_unique = anchor_info['frame_ids']
+        imu_time_by_frame = anchor_info['time_by_frame']
+        imu_time_alignment = 'imu_ble_anchor_full_bin'
+        log(
+            f"  IMU BLE anchor: {anchor_info['anchor_count']} anchors, "
+            f"frame {anchor_info['min_frame_id']}..{anchor_info['max_frame_id']}, "
+            f"base_time={anchor_info['base_time']:.6f}, "
+            f"median_acc_err={anchor_info['median_acc_error']:.4f}"
+        )
+    else:
+        emg_sd_frame_ids = data_2khz['sd_frame_id']
+        imu_frame_ids_all = emg_sd_frame_ids // EMG_IMU_RATIO
+        imu_frame_ids_unique = np.unique(imu_frame_ids_all)
+        imu_time_by_frame = {}
+        for emg_idx, imu_fid_raw in enumerate(imu_frame_ids_all):
+            imu_fid_int = int(imu_fid_raw)
+            if imu_fid_int not in imu_time_by_frame:
+                imu_time_by_frame[imu_fid_int] = float(data_2khz[emg_idx]['time'])
+        imu_time_alignment = 'emg_time_fallback'
+        log("  WARN: no reliable BLE IMU anchor; falling back to EMG-derived IMU time axis")
     num_imu_frames = len(imu_frame_ids_unique)
 
     imu_100hz_dtype = np.dtype([
@@ -2673,9 +2776,16 @@ def _sync_imu_100hz(h5_file, emg_parser, imu_parser, data_2khz, device_id):
         dataset.attrs["sync_time"] = datetime.now().isoformat()
         dataset.attrs["filled_frames"] = filled
         dataset.attrs["missing_frames"] = missing
+        dataset.attrs["sync_source_mode"] = imu_time_alignment
         if imu_index is not None:
             dataset.attrs["imu_index"] = imu_index
         dataset.attrs["imu_count"] = num_imus
+        if anchor_info is not None:
+            dataset.attrs["sync_anchor_count"] = int(anchor_info['anchor_count'])
+            dataset.attrs["sync_base_time"] = float(anchor_info['base_time'])
+            dataset.attrs["sync_min_sd_frame_id"] = int(anchor_info['min_frame_id'])
+            dataset.attrs["sync_max_sd_frame_id"] = int(anchor_info['max_frame_id'])
+            dataset.attrs["sync_median_acc_error"] = float(anchor_info['median_acc_error'])
         return dataset
 
     for k, label in enumerate(labels):
