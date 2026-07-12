@@ -198,6 +198,43 @@ def ensure_matplotlib():
     return HAS_MATPLOTLIB
 
 
+def _iter_non_preview_bin_files(bin_dir):
+    """Yield non-preview bin files under bin_dir recursively."""
+    if not bin_dir or not os.path.isdir(bin_dir):
+        return
+    for root, _dirs, files in os.walk(bin_dir):
+        for name in files:
+            if 'PREVIEW_' in name:
+                continue
+            if name.endswith('.bin'):
+                yield root, name, os.path.join(root, name)
+
+
+def _find_named_file_recursive(base_dir, target_name):
+    """Find target_name anywhere under base_dir."""
+    for _root, name, path in _iter_non_preview_bin_files(base_dir):
+        if name == target_name:
+            return path
+    return None
+
+
+def _count_bin_files_recursive(base_dir):
+    """Return recursive EMG/IMU bin counts for display."""
+    emg_count = 0
+    imu_count = 0
+    for _root, name, _path in _iter_non_preview_bin_files(base_dir):
+        if name.endswith('_emg.bin'):
+            emg_count += 1
+        elif name.endswith('_imu.bin'):
+            imu_count += 1
+    return emg_count, imu_count
+
+
+def _contains_emg_bin_recursive(base_dir):
+    """Whether a directory tree contains at least one EMG bin."""
+    return any(name.endswith('_emg.bin') for _root, name, _path in _iter_non_preview_bin_files(base_dir))
+
+
 class SyncWorker(QThread):
     """同步工作线程"""
     progress = pyqtSignal(int, int, str)
@@ -240,18 +277,8 @@ class SyncWorker(QThread):
                 emg_bin_name = f"{bin_prefix}_emg.bin"
                 imu_bin_name = f"{bin_prefix}_imu.bin"
 
-                emg_path = None
-                imu_path = None
-                for root, dirs, files in os.walk(self.bin_dir):
-                    for f in files:
-                        if f == emg_bin_name:
-                            emg_path = os.path.join(root, f)
-                        elif f == imu_bin_name:
-                            imu_path = os.path.join(root, f)
-                        if emg_path and imu_path:
-                            break
-                    if emg_path and imu_path:
-                        break
+                emg_path = _find_named_file_recursive(self.bin_dir, emg_bin_name)
+                imu_path = _find_named_file_recursive(self.bin_dir, imu_bin_name)
 
                 return (emg_path, imu_path)
 
@@ -3846,31 +3873,10 @@ class SyncTab(QWidget):
                     bin_prefix = bin_prefix.decode('utf-8')
 
                 # 在 bin_dir 及子目录中搜索
-                search_dirs = [bin_dir]
-                try:
-                    for entry in os.listdir(bin_dir):
-                        full = os.path.join(bin_dir, entry)
-                        if os.path.isdir(full):
-                            search_dirs.append(full)
-                except OSError:
-                    pass
-
-                emg_found = None
-                imu_found = None
                 emg_name = f"{bin_prefix}_emg.bin"
                 imu_name = f"{bin_prefix}_imu.bin"
-
-                for d in search_dirs:
-                    if emg_found is None:
-                        p = os.path.join(d, emg_name)
-                        if os.path.exists(p):
-                            emg_found = p
-                    if imu_found is None:
-                        p = os.path.join(d, imu_name)
-                        if os.path.exists(p):
-                            imu_found = p
-                    if emg_found and imu_found:
-                        break
+                emg_found = _find_named_file_recursive(bin_dir, emg_name)
+                imu_found = _find_named_file_recursive(bin_dir, imu_name)
 
                 if emg_found:
                     return ('paired', emg_found, imu_found)
@@ -3880,53 +3886,41 @@ class SyncTab(QWidget):
             return ('error', None, None)
 
     def _auto_detect_bin_dir(self):
-        """自动推测 Bin 目录：从 H5 文件路径出发，搜索常见位置"""
+        """Auto-detect a top-level bin directory from loaded H5 files."""
         candidates = set()
-        # 从已加载 H5 的位置推测
         for h5_path in self.h5_files:
             h5_dir = os.path.dirname(os.path.abspath(h5_path))
-            # 同目录
             candidates.add(h5_dir)
-            # 上级目录的 bin/ 子目录
             parent = os.path.dirname(h5_dir)
             candidates.add(os.path.join(parent, 'bin'))
-            # 上上级
             grandparent = os.path.dirname(parent)
             candidates.add(os.path.join(grandparent, 'bin'))
-            # 同级 _bin 目录
-            for item in os.listdir(parent):
-                full = os.path.join(parent, item)
-                if os.path.isdir(full) and item.endswith('_bin'):
-                    candidates.add(full)
-            # storage 根目录下查找 bin 目录
-            for item in os.listdir(grandparent):
-                full = os.path.join(grandparent, item)
-                if os.path.isdir(full) and ('bin' in item.lower()):
-                    candidates.add(full)
-
-        # 找到第一个包含 _emg.bin 文件的目录
-        for d in sorted(candidates):
-            if os.path.isdir(d):
+            for base in (parent, grandparent):
                 try:
-                    for f in os.listdir(d):
-                        if f.endswith('_emg.bin') and 'PREVIEW_' not in f:
-                            self.bin_dir = d
-                            QSettings("sEMG", "HDF5Tool").setValue("sync_bin_dir", d)
-                            display_path = d
-                            if len(display_path) > 50:
-                                display_path = "..." + display_path[-47:]
-                            self.bin_dir_label.setText(display_path)
-                            self.bin_dir_label.setStyleSheet(
-                                "color: #009900; padding: 5px; background: #f0fff0; border: 1px solid #90EE90;")
-                            self.bin_dir_label.setToolTip(d)
-                            self.log_text.append(f"🔍 自动发现Bin目录: {d}")
-                            if self.h5_files:
-                                self._refresh_pairing_status()
-                            return
+                    for item in os.listdir(base):
+                        full = os.path.join(base, item)
+                        if os.path.isdir(full) and ('bin' in item.lower() or item.endswith('_bin')):
+                            candidates.add(full)
                 except OSError:
                     continue
 
-        self.log_text.append("⚠️ 自动查找Bin目录失败，请手动选择")
+        for d in sorted(candidates):
+            if os.path.isdir(d) and _contains_emg_bin_recursive(d):
+                self.bin_dir = d
+                QSettings("sEMG", "HDF5Tool").setValue("sync_bin_dir", d)
+                display_path = d
+                if len(display_path) > 50:
+                    display_path = "..." + display_path[-47:]
+                self.bin_dir_label.setText(display_path)
+                self.bin_dir_label.setStyleSheet(
+                    "color: #009900; padding: 5px; background: #f0fff0; border: 1px solid #90EE90;")
+                self.bin_dir_label.setToolTip(d)
+                self.log_text.append(f"Auto-detected top-level Bin directory: {d}")
+                if self.h5_files:
+                    self._refresh_pairing_status()
+                return
+
+        self.log_text.append("Auto-detect Bin directory failed; please choose the top-level directory manually")
 
     def _refresh_pairing_status(self):
         """扫描 H5 列表，更新每个文件的 bin 配对状态显示"""
@@ -3968,14 +3962,13 @@ class SyncTab(QWidget):
             self.h5_count_label.setStyleSheet("color: #dc2626; font-weight: bold;")
 
     def select_bin_dir(self):
-        """选择bin文件所在目录"""
+        """Select the top-level bin directory; all subdirectories are scanned recursively."""
         dir_path = QFileDialog.getExistingDirectory(
-            self, "选择Bin文件所在目录"
+            self, "Select top-level Bin directory (subfolders scanned automatically)"
         )
         if dir_path:
             self.bin_dir = dir_path
             QSettings("sEMG", "HDF5Tool").setValue("sync_bin_dir", dir_path)
-            # 显示目录名（如果路径太长则截断）
             display_path = dir_path
             if len(display_path) > 50:
                 display_path = "..." + display_path[-47:]
@@ -3983,22 +3976,13 @@ class SyncTab(QWidget):
             self.bin_dir_label.setStyleSheet("color: #009900; padding: 5px; background: #f0fff0; border: 1px solid #90EE90;")
             self.bin_dir_label.setToolTip(dir_path)
 
-            # 统计目录中的bin文件数量
-            all_emg = []
-            all_imu = []
-            for root, dirs, files in os.walk(dir_path):
-                for f in files:
-                    if f.endswith('_emg.bin') and 'PREVIEW_' not in f:
-                        all_emg.append(os.path.join(root, f))
-                    elif f.endswith('_imu.bin') and 'PREVIEW_' not in f:
-                        all_imu.append(os.path.join(root, f))
-            self.log_text.append(f"已选择Bin目录: {dir_path}")
-            self.log_text.append(f"  找到 {len(all_emg)} EMG bin + {len(all_imu)} IMU bin (含子目录)")
+            emg_count, imu_count = _count_bin_files_recursive(dir_path)
+            self.log_text.append(f"Selected top-level Bin directory: {dir_path}")
+            self.log_text.append(f"  Recursively found {emg_count} EMG bin + {imu_count} IMU bin")
 
-            # 自动预检配对状态
             if self.h5_files:
                 self._refresh_pairing_status()
-                self.log_text.append(f"  配对预检完成，见H5列表颜色标记")
+                self.log_text.append("  Pairing precheck complete; see H5 list colors")
 
     def start_sync(self):
         if self._compressing:
@@ -4036,6 +4020,8 @@ class SyncTab(QWidget):
         self.worker.progress.connect(self.on_progress)
         self.worker.log.connect(self.on_log)
         self.worker.finished_signal.connect(self.on_finished)
+        self.worker.finished.connect(self.on_worker_thread_finished)
+        self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
 
     def run_video_compress(self):
@@ -4112,9 +4098,7 @@ class SyncTab(QWidget):
         self.log_text.append(message)
 
     def on_finished(self, success, message):
-        self.worker = None
         self.sync_btn.setEnabled(True)
-        self._update_video_compress_controls()
         self.progress_bar.setVisible(False)
         self.progress_label.setText("")
         self.log_text.append("")
@@ -4122,13 +4106,17 @@ class SyncTab(QWidget):
         self.log_text.append("=" * 50)
         if success:
             QMessageBox.information(self, "完成", message)
-            self.clear_h5_files()
+            self._refresh_pairing_status()
         else:
             QMessageBox.warning(self, "错误", message)
         # 刷新主窗口文件列表颜色（sync_status 可能已变更）
         main_win = self.window()
         if hasattr(main_win, 'refresh_file_list_colors'):
             main_win.refresh_file_list_colors()
+
+    def on_worker_thread_finished(self):
+        self.worker = None
+        self._update_video_compress_controls()
 
 
 class BreakpointTab(QWidget):

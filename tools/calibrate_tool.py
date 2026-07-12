@@ -2420,18 +2420,18 @@ class CalibrateWidget(QWidget):
 
         # 收集当前窗口内的 prompt
         in_window = []
-        for name, t in zip(self.prompt_names, self.prompt_times):
+        for prompt_idx, (name, t) in enumerate(zip(self.prompt_names, self.prompt_times)):
             if time_start <= t <= time_end:
-                in_window.append((name, float(t)))
+                in_window.append((prompt_idx, name, float(t)))
 
         if not in_window:
             return
 
         n = len(in_window)
-        first_t = in_window[0][1]
-        last_t = in_window[-1][1]
+        first_t = in_window[0][2]
+        last_t = in_window[-1][2]
 
-        for name, t in in_window:
+        for prompt_idx, name, t in in_window:
             # 红色虚线
             ax.axvline(x=t, color='red', linestyle='--', linewidth=1, alpha=0.7)
 
@@ -2440,10 +2440,11 @@ class CalibrateWidget(QWidget):
 
             # 上方：名称（换行处理）
             max_chars = 8
-            if len(name) > max_chars:
-                wrapped_name = '\n'.join([name[i:i+max_chars] for i in range(0, len(name), max_chars)])
+            label = f'{prompt_idx + 1}. {name}'
+            if len(label) > max_chars:
+                wrapped_name = '\n'.join([label[i:i+max_chars] for i in range(0, len(label), max_chars)])
             else:
-                wrapped_name = name
+                wrapped_name = label
             ax.text(t, ylim[1] - y_range * 0.02, wrapped_name,
                     rotation=0, verticalalignment='bottom', horizontalalignment='left',
                     fontsize=11, color='#c0392b', alpha=1.0, fontweight='bold',
@@ -2463,8 +2464,8 @@ class CalibrateWidget(QWidget):
             pair_end_idx = -1
             SUFFIX_PAIRS = [('start', 'end'), ('开始', '结束'), ('_s', '_e')]
             for i in range(n - 1):
-                na = in_window[i][0].lower()
-                nb = in_window[i + 1][0].lower()
+                na = in_window[i][1].lower()
+                nb = in_window[i + 1][1].lower()
                 for sa, sb in SUFFIX_PAIRS:
                     ba = na.replace(sa, '').rstrip('_')
                     bb = nb.replace(sb, '').rstrip('_')
@@ -2482,17 +2483,17 @@ class CalibrateWidget(QWidget):
                     break
 
             if pair_start_idx >= 0:
-                interval = in_window[pair_end_idx][1] - in_window[pair_start_idx][1]
-                ax.text(in_window[pair_start_idx][1], ylim[0] + y_range * 0.08,
-                        f'start: {in_window[pair_start_idx][1]:.2f}s',
+                interval = in_window[pair_end_idx][2] - in_window[pair_start_idx][2]
+                ax.text(in_window[pair_start_idx][2], ylim[0] + y_range * 0.08,
+                        f'start: {in_window[pair_start_idx][2]:.2f}s',
                         fontsize=11, color='#e74c3c', alpha=0.9,
                         fontweight='bold', style='italic')
-                ax.text(in_window[pair_end_idx][1], ylim[0] + y_range * 0.08,
-                        f'end: {in_window[pair_end_idx][1]:.2f}s',
+                ax.text(in_window[pair_end_idx][2], ylim[0] + y_range * 0.08,
+                        f'end: {in_window[pair_end_idx][2]:.2f}s',
                         fontsize=11, color='#e74c3c', alpha=0.9,
                         fontweight='bold', style='italic',
                         horizontalalignment='right')
-                mid_t = (in_window[pair_start_idx][1] + in_window[pair_end_idx][1]) / 2.0
+                mid_t = (in_window[pair_start_idx][2] + in_window[pair_end_idx][2]) / 2.0
                 ax.annotate(f'Δ {interval:.2f}s',
                             xy=(mid_t, ylim[1] - y_range * 0.02),
                             fontsize=12, color='#d63031', alpha=0.9,
