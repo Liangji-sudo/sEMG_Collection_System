@@ -8,6 +8,8 @@ HDF5整合工具 - 结合查看和同步功能
 
 import sys
 import os
+# 必须在 import h5py 之前设置，解决 Win32 GetLastError()=33 文件锁冲突
+os.environ.setdefault('HDF5_USE_FILE_LOCKING', 'FALSE')
 import json
 import glob
 import shutil

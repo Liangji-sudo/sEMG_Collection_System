@@ -30,6 +30,7 @@ bin文件格式（来自ESP32固件）：
 """
 
 import os
+os.environ.setdefault('HDF5_USE_FILE_LOCKING', 'FALSE')
 import sys
 import json
 import math
@@ -520,12 +521,32 @@ class EMGBinParser:
         with open(self.bin_path, 'rb') as f:
             # 读取文件头
             header = f.read(HEADER_SIZE)
-            magic, sample_rate, gain_idx, bit_depth, imu_en, ts_bytes = struct.unpack(
-                '<I H B B B 32s', header[:41]
-            )
+            if struct.unpack('<I', header[:4])[0] != EMG_MAGIC:
+                raise ValueError(f"无效的EMG文件Magic: 0x{struct.unpack('<I', header[:4])[0]:08X}")
 
-            if magic != EMG_MAGIC:
-                raise ValueError(f"无效的EMG文件Magic: 0x{magic:08X}")
+            # ── 自动检测固件版本（header 格式） ──
+            # 旧固件: magic(4) sample_rate(2H) gain(1B) bit_depth(1B) imu_en(1B) timestamp(32s)
+            # 新固件: magic(4) proto_ver(1B) sample_rate(2H) gain(1B) bit_depth(1B) imu_en(1B) timestamp(32s)
+            sr_old = struct.unpack('<H', header[4:6])[0]
+            if 500 <= sr_old <= 5000:
+                # 旧格式: sample_rate 在 offset 4 合理范围内
+                _, sample_rate, gain_idx, bit_depth, imu_en, ts_bytes = struct.unpack(
+                    '<I H B B B 32s', header[:41]
+                )
+            else:
+                # 新格式: offset 4 是 proto_version，sample_rate 在 offset 5
+                sr_new = struct.unpack('<H', header[5:7])[0]
+                if 500 <= sr_new <= 5000:
+                    _, proto_ver, sample_rate, gain_idx, bit_depth, imu_en, ts_bytes = struct.unpack(
+                        '<I B H B B B 32s', header[:42]
+                    )
+                    log(f"检测到新版固件 header (proto_ver={proto_ver})")
+                else:
+                    # 无法识别，尝试旧格式但给出警告
+                    _, sample_rate, gain_idx, bit_depth, imu_en, ts_bytes = struct.unpack(
+                        '<I H B B B 32s', header[:41]
+                    )
+                    log(f"WARN: 无法自动检测固件版本，使用旧格式 (sample_rate={sample_rate})")
 
             self.sample_rate = sample_rate
             self.gain = GAIN_MAP[gain_idx] if gain_idx < len(GAIN_MAP) else 12
@@ -609,12 +630,20 @@ class IMUBinParser:
         with open(self.bin_path, 'rb') as f:
             # 读取文件头
             header = f.read(HEADER_SIZE)
-            magic, sample_rate, _, _, _, ts_bytes = struct.unpack(
-                '<I H B B B 32s', header[:41]
-            )
+            if struct.unpack('<I', header[:4])[0] != IMU_MAGIC:
+                raise ValueError(f"无效的IMU文件Magic: 0x{struct.unpack('<I', header[:4])[0]:08X}")
 
-            if magic != IMU_MAGIC:
-                raise ValueError(f"无效的IMU文件Magic: 0x{magic:08X}")
+            # 自动检测固件版本（同 EMG 逻辑）
+            sr_old = struct.unpack('<H', header[4:6])[0]
+            if 10 <= sr_old <= 1000:
+                _, sample_rate, _, _, _, ts_bytes = struct.unpack(
+                    '<I H B B B 32s', header[:41]
+                )
+            else:
+                _, proto_ver, sample_rate, _, _, _, ts_bytes = struct.unpack(
+                    '<I B H B B B 32s', header[:42]
+                )
+                log(f"检测到新版固件 header (proto_ver={proto_ver})")
 
             self.sample_rate = sample_rate if 0 < sample_rate <= 1000 else 100
             self.timestamp_str = ts_bytes.decode('utf-8').strip('\x00')
