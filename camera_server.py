@@ -755,6 +755,7 @@ class FrameRecorder:
                 '-i', str(self.raw_path),
                 '-an',
                 '-c:v', 'copy',
+                '-r', f'{effective_fps:.6f}',   # 强制输出容器帧率，修复 AVI 默认 600fps 问题
                 '-y',
                 str(self.output_path)
             ], capture_output=True, text=True, timeout=remux_timeout,

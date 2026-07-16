@@ -1651,6 +1651,24 @@ class CalibrateWidget(QWidget):
 
                 fps = cap.get(cv2.CAP_PROP_FPS)
                 frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                # 兜底：修复旧 AVI 文件 fps header 错误（600fps → 30fps）
+                # 仅 nominal fps > 120 时触发（正常 USB 摄像头不会超过 120fps）
+                if fps > 120:
+                    actual_dur_from_timing = vt_dur.get(side, 0)
+                    if actual_dur_from_timing > 0:
+                        # 优先用 timing 数据推算正确值
+                        corrected_fps = frame_count / actual_dur_from_timing
+                        if 20 <= corrected_fps <= 60:
+                            fps = corrected_fps
+                        else:
+                            fps = 30.0
+                        frame_count = int(round(fps * actual_dur_from_timing))
+                    else:
+                        # 无 timing 数据：假定真实 fps=30，按比例修正帧数
+                        fps = 30.0
+                        frame_count = int(round(frame_count * 30.0 / 600.0))
+                    print(f'[CalibrateTool] 视频 fps 修正 ({side}): {cap.get(cv2.CAP_PROP_FPS):.0f} → {fps:.0f}, '
+                          f'帧数: {int(cap.get(cv2.CAP_PROP_FRAME_COUNT))} → {frame_count}')
                 self.video_caps[side] = cap
                 self.video_fps[side] = fps if fps > 0 else 30.0
                 self.video_frame_count[side] = frame_count
