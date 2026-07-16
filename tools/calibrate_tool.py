@@ -183,6 +183,9 @@ class CalibrateWidget(QWidget):
         self.video_last_frame_unix = {}   # {'left': unix_ts, 'right': unix_ts}
         self.video_duration = {}        # {'left': dur_sec, 'right': dur_sec}
         self.video_frame_count = {}     # {'left': n_frames, 'right': n_frames}
+        # 旧 AVI 的头部可能把 30fps 写成 600fps。OpenCV 对这类文件按帧号
+        # 随机 seek 会落到错误位置，需要按校正后的时间轴并带预滚量定位。
+        self.video_seek_preroll = {}    # {'left': n_frames, 'right': n_frames}
         self.video_enabled = False      # 是否有可用的视频
         self._video_current_frame = {'left': None, 'right': None}   # 当前显示的 QPixmap
         self._video_current_idx = {'left': -1, 'right': -1}         # 当前帧索引
@@ -236,7 +239,12 @@ class CalibrateWidget(QWidget):
         self._preview_stop_frame = 0      # 预览停止帧
         self._preview_fps = 30.0          # 预览帧率
         self._preview_current_frame = 0   # 当前预览帧号
+        self._preview_start_frame = 0     # 本次预览起始帧
+        self._preview_started_monotonic = 0.0
+        self._preview_duration_seconds = 2.0
+        self._preview_rendered_frames = 0
         self.playback_timer = QTimer()
+        self.playback_timer.setTimerType(Qt.PreciseTimer)
         self.playback_timer.timeout.connect(self._on_playback_tick)
 
         # 完整播放控制
@@ -1651,6 +1659,8 @@ class CalibrateWidget(QWidget):
 
                 fps = cap.get(cv2.CAP_PROP_FPS)
                 frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                reported_fps = fps
+                seek_preroll = 0
                 # 兜底：修复旧 AVI 文件 fps header 错误（600fps → 30fps）
                 # 仅 nominal fps > 120 时触发（正常 USB 摄像头不会超过 120fps）
                 if fps > 120:
@@ -1667,11 +1677,18 @@ class CalibrateWidget(QWidget):
                         # 无 timing 数据：假定真实 fps=30，按比例修正帧数
                         fps = 30.0
                         frame_count = int(round(frame_count * 30.0 / 600.0))
+                    # FFmpeg 生成的错误 AVI 通常为 600/30=20 倍时间基。
+                    # OpenCV 时间 seek 会多解码 scale-1 帧，提前该数量即可
+                    # 精确落到目标帧。该值由文件头和校正帧率动态推导。
+                    seek_scale = max(1, int(round(reported_fps / max(fps, 1.0))))
+                    seek_preroll = max(0, seek_scale - 1)
                     print(f'[CalibrateTool] 视频 fps 修正 ({side}): {cap.get(cv2.CAP_PROP_FPS):.0f} → {fps:.0f}, '
-                          f'帧数: {int(cap.get(cv2.CAP_PROP_FRAME_COUNT))} → {frame_count}')
+                          f'帧数: {int(cap.get(cv2.CAP_PROP_FRAME_COUNT))} → {frame_count}, '
+                          f'seek预滚={seek_preroll}帧')
                 self.video_caps[side] = cap
                 self.video_fps[side] = fps if fps > 0 else 30.0
                 self.video_frame_count[side] = frame_count
+                self.video_seek_preroll[side] = seek_preroll
                 self.video_first_frame_unix[side] = vt_first.get(side, 0)
                 self.video_last_frame_unix[side] = vt_last.get(side, 0)
                 self.video_duration[side] = vt_dur.get(side, frame_count / self.video_fps[side] if fps > 0 else 0)
@@ -1731,6 +1748,7 @@ class CalibrateWidget(QWidget):
         self.video_last_frame_unix.clear()
         self.video_duration.clear()
         self.video_frame_count.clear()
+        self.video_seek_preroll.clear()
         self._video_current_frame.clear()
         self._video_current_idx.clear()
         self.video_enabled = False
@@ -1827,15 +1845,16 @@ class CalibrateWidget(QWidget):
             if cached is not None:
                 return frame_idx, cached
 
-        # seek 到目标帧
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        # seek 到目标帧。旧 600fps 错误头 AVI 必须按时间定位；直接设置
+        # CAP_PROP_POS_FRAMES 会把后段目标错误映射到视频开头。
+        self._position_video_capture(side, frame_idx, effective_fps)
         ret, frame = cap.read()
 
         if not ret or frame is None:
             # 回退：seek 到最近的关键帧后逐帧解码
             # 先往回跳 50 帧，再逐帧前进
             fallback_start = max(0, frame_idx - 50)
-            cap.set(cv2.CAP_PROP_POS_FRAMES, fallback_start)
+            self._position_video_capture(side, fallback_start, effective_fps)
             for _ in range(frame_idx - fallback_start + 1):
                 ret, frame = cap.read()
                 if not ret:
@@ -1855,6 +1874,23 @@ class CalibrateWidget(QWidget):
         self._video_current_frame[side] = qimage
 
         return frame_idx, qimage
+
+    def _position_video_capture(self, side, frame_idx, effective_fps=None):
+        """将 VideoCapture 定位到实际帧号，兼容旧 600fps 错误头 AVI。"""
+        cap = self.video_caps.get(side)
+        if cap is None:
+            return False
+
+        frame_idx = max(0, int(frame_idx))
+        preroll = self.video_seek_preroll.get(side, 0)
+        if effective_fps is None or effective_fps <= 0:
+            effective_fps = self.video_fps.get(side, 30.0)
+
+        if preroll > 0 and frame_idx >= preroll:
+            seek_seconds = (frame_idx - preroll) / effective_fps
+            return bool(cap.set(cv2.CAP_PROP_POS_MSEC, seek_seconds * 1000.0))
+
+        return bool(cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx))
 
     def _update_video_frames(self, target_unix):
         """更新左右视频 QLabel 显示。
@@ -2599,20 +2635,48 @@ class CalibrateWidget(QWidget):
         if cap is None or self.h5_file is None:
             return
 
-        # 先 seek 到当前显示帧，确保 cap 位置正确
+        # 直接根据当前数据窗口重新计算起播帧，避免 Prompt/滑块刚跳转时
+        # 40ms 防抖刷新尚未执行，误用上一次缓存的视频帧。
         current_idx = self._video_current_idx.get(side, -1)
+        if self.emg_start_time is not None:
+            sample_rate = self._active_emg_sample_rate()
+            window_center_offset = (self.current_pos + self.window_size / 2) / sample_rate
+            target_unix = float(self.emg_start_time) + window_center_offset
+            resolved_idx, _ = self._seek_video_frame(side, target_unix)
+            if resolved_idx is not None:
+                current_idx = resolved_idx
         if current_idx < 0:
             return
-        cap.set(cv2.CAP_PROP_POS_FRAMES, current_idx)
-        # 丢弃可能不准的一帧，重新读取
-        cap.read()
+        first_u = self.video_first_frame_unix.get(side, 0)
+        last_u = self.video_last_frame_unix.get(side, 0)
+        total_frames = self.video_frame_count.get(side, 0)
+        actual_duration = last_u - first_u
+        effective_fps = (
+            total_frames / actual_duration
+            if total_frames > 0 and actual_duration > 0
+            else self.video_fps.get(side, 30.0)
+        )
+        self._position_video_capture(side, current_idx, effective_fps)
+        # 读取当前帧以校准顺序解码位置，下一次 read() 将得到 current_idx + 1。
+        seek_ok, _ = cap.read()
+        if not seek_ok:
+            return
 
-        fps = self.video_fps.get(side, 30.0)
+        fps = effective_fps
+        if not (1.0 <= fps <= 120.0):
+            fps = 30.0
         self._preview_fps = fps
         self._preview_side = side
         self._preview_current_frame = current_idx
+        self._preview_start_frame = current_idx
+        self._preview_started_monotonic = time.perf_counter()
+        self._preview_rendered_frames = 0
         # 向后 2 秒
-        self._preview_stop_frame = current_idx + int(fps * 2.0)
+        frame_span = max(1, int(round(fps * self._preview_duration_seconds)))
+        stop_frame = current_idx + frame_span
+        if total_frames > 0:
+            stop_frame = min(stop_frame, total_frames)
+        self._preview_stop_frame = stop_frame
 
         self.is_playing = True
         btn = getattr(self, f'btn_preview_{side}')
@@ -2629,8 +2693,13 @@ class CalibrateWidget(QWidget):
 
     def _stop_playback(self):
         """停止预览，恢复按钮状态，全量刷新图表"""
+        wall_elapsed = (
+            time.perf_counter() - self._preview_started_monotonic
+            if self._preview_started_monotonic > 0 else 0.0
+        )
         self.is_playing = False
         self.playback_timer.stop()
+        self._preview_started_monotonic = 0.0
 
         # 恢复按钮样式
         for s in ('left', 'right'):
@@ -2641,7 +2710,8 @@ class CalibrateWidget(QWidget):
 
         self._last_video_update = 0
         self._do_update_plots()
-        print(f'[CalibrateTool] 预览停止: pos={self.current_pos}')
+        print(f'[CalibrateTool] 预览停止: pos={self.current_pos}, '
+              f'wall={wall_elapsed:.2f}s, rendered={self._preview_rendered_frames}')
 
     def _on_playback_tick(self):
         """预览定时器：逐帧顺序读取指定侧视频"""
@@ -2659,17 +2729,33 @@ class CalibrateWidget(QWidget):
             self._stop_playback()
             return
 
-        if self._preview_current_frame >= self._preview_stop_frame:
+        elapsed = time.perf_counter() - self._preview_started_monotonic
+        if (elapsed >= self._preview_duration_seconds or
+                self._preview_current_frame >= self._preview_stop_frame - 1):
             self._stop_playback()
             return
+
+        # QTimer 在解码或绘制耗时超过间隔时不会自动补帧。根据真实经过时间
+        # 计算目标帧，并用 grab() 跳过落后的帧，保证“2s预览”约 2 秒结束。
+        target_frame = self._preview_start_frame + int(elapsed * self._preview_fps)
+        target_frame = min(target_frame, self._preview_stop_frame - 1)
+        frames_to_advance = target_frame - self._preview_current_frame
+        if frames_to_advance <= 0:
+            return
+
+        for _ in range(frames_to_advance - 1):
+            if not cap.grab():
+                self._stop_playback()
+                return
 
         ret, frame = cap.read()
         if not ret or frame is None:
             self._stop_playback()
             return
 
-        self._preview_current_frame += 1
-        new_idx = self._preview_current_frame
+        self._preview_current_frame = target_frame
+        self._preview_rendered_frames += 1
+        new_idx = target_frame
         self._video_current_idx[side] = new_idx
 
         # BGR→RGB→QPixmap
@@ -2682,7 +2768,7 @@ class CalibrateWidget(QWidget):
         lbl = getattr(self, f'lbl_video_{side}')
         lbl_time = getattr(self, f'lbl_video_{side}_time')
         lbl_size = lbl.size()
-        scaled = qimage.scaled(lbl_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        scaled = qimage.scaled(lbl_size, Qt.KeepAspectRatio, Qt.FastTransformation)
         lbl.setPixmap(QPixmap.fromImage(scaled))
         fps = self.video_fps.get(side, 30.0)
         # 使用实际帧率计算视频帧的 Unix 时间（与 _seek_video_frame 对齐）
@@ -2705,47 +2791,6 @@ class CalibrateWidget(QWidget):
                 lbl_time.setText(f'Frame #{new_idx} | 视频 {minutes:02d}:{seconds:02d} | EMG {emg_rel:.2f}s')
         else:
             lbl_time.setText(f'Frame #{new_idx} | 视频 {minutes:02d}:{seconds:02d}')
-
-        # 同步另一侧视频（seek 到对应时间点）
-        # target_unix 已使用 effective_fps 计算，见上文
-        for other_side in ('left', 'right'):
-            if other_side == side:
-                continue
-            other_cap = self.video_caps.get(other_side)
-            if other_cap is None:
-                continue
-            other_first = self.video_first_frame_unix.get(other_side, 0)
-            other_last = self.video_last_frame_unix.get(other_side, 0)
-            other_total = self.video_frame_count.get(other_side, 1)
-            other_actual_dur = other_last - other_first
-            other_eff_fps = other_total / other_actual_dur if other_actual_dur > 0 else self.video_fps.get(other_side, 30.0)
-            other_frame = int((target_unix - other_first) * other_eff_fps)
-            other_frame = max(0, min(other_frame, self.video_frame_count.get(other_side, 0) - 1))
-            other_cap.set(cv2.CAP_PROP_POS_FRAMES, other_frame)
-            ret2, frame2 = other_cap.read()
-            if ret2 and frame2 is not None:
-                frame2_rgb = cv2.cvtColor(frame2, cv2.COLOR_BGR2RGB)
-                h2, w2, ch2 = frame2_rgb.shape
-                q2 = QImage(frame2_rgb.data, w2, h2, ch2 * w2, QImage.Format_RGB888).copy()
-                self._video_current_frame[other_side] = q2
-                self._video_current_idx[other_side] = other_frame
-                lbl2 = getattr(self, f'lbl_video_{other_side}')
-                lbl2_size = lbl2.size()
-                scaled2 = q2.scaled(lbl2_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                lbl2.setPixmap(QPixmap.fromImage(scaled2))
-                other_frame_time = other_frame / other_eff_fps if other_eff_fps > 0 else 0
-                om = int(other_frame_time // 60)
-                os = int(other_frame_time % 60)
-                lbl_time2 = getattr(self, f'lbl_video_{other_side}_time')
-                if self.emg_start_time is not None:
-                    calib2 = self.calib_offset.get(other_side, 0)
-                    emg_rel2 = other_first + other_frame / other_eff_fps - float(self.emg_start_time) - calib2
-                    if abs(calib2) > 0.001:
-                        lbl_time2.setText(f'Frame #{other_frame} | 视频 {om:02d}:{os:02d} | EMG {emg_rel2:.2f}s | 标定{calib2:+.3f}s')
-                    else:
-                        lbl_time2.setText(f'Frame #{other_frame} | 视频 {om:02d}:{os:02d} | EMG {emg_rel2:.2f}s')
-                else:
-                    lbl_time2.setText(f'Frame #{other_frame} | 视频 {om:02d}:{os:02d}')
 
     # ─────────── 2s 预览结束 ───────────
 
