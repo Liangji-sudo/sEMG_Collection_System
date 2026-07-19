@@ -728,6 +728,32 @@ _last_callback_time = {}
 _callback_interval_warning_printed = {}
 _callback_interval_last_log = {}
 
+# 【修复】高精度时间基准 — 解决 Windows time.time() 15ms 精度导致 BLE 帧时间戳回退
+# time.time() 在 Windows 上分辨率约 15.6ms，而 BLE 通知每 4ms 到达一次，
+# 导致连续 3~5 个包获得相同 time.time() 值 → 反推帧时间戳重叠/回退。
+# 方案：用 time.perf_counter()（微秒精度）做相对计时，映射到 wall-clock 时间。
+_time_base_wall = time.time()
+_time_base_perf = time.perf_counter()
+_time_base_lock = __import__('threading').Lock()
+
+
+def _precise_time():
+    """返回高精度 wall-clock 时间（微秒级精度）
+
+    原理：perf_counter() 提供微秒级相对计时，映射到 time.time() 绝对时间基准。
+    每隔 60 秒自动重新校准基准，消除可能的漂移。
+    """
+    global _time_base_wall, _time_base_perf
+    now_perf = time.perf_counter()
+    # 定期重新校准（60s），让 wall clock 基准保持在合理范围内
+    if now_perf - _time_base_perf > 60.0:
+        with _time_base_lock:
+            # 双重检查
+            if now_perf - _time_base_perf > 60.0:
+                _time_base_wall = time.time()
+                _time_base_perf = time.perf_counter()
+    return _time_base_wall + (now_perf - _time_base_perf)
+
 
 def reset_callback_timing(device_id: int):
     _last_callback_time.pop(device_id, None)
@@ -819,7 +845,7 @@ def clear_stream_buffers(dev: DeviceState):
 def _legacy_create_notification_handler(dev: DeviceState):
     def handler(sender: int, data: bytearray):
         try:
-            ts = time.time()
+            ts = _precise_time()  # 高精度时间戳
 
             # 【诊断】检测回调间隔异常
             device_key = dev.device_id
@@ -881,7 +907,7 @@ def create_notification_handler(dev: DeviceState):
         try:
             if handler_epoch != dev.notification_epoch:
                 return
-            ts = time.time()
+            ts = _precise_time()  # 高精度时间戳，避免 time.time() 15ms 精度导致回退
             device_key = dev.device_id
 
             if device_key in _last_callback_time:

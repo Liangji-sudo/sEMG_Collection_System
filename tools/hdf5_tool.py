@@ -237,6 +237,119 @@ def _contains_emg_bin_recursive(base_dir):
     return any(name.endswith('_emg.bin') for _root, name, _path in _iter_non_preview_bin_files(base_dir))
 
 
+def repair_250hz_timestamps_in_h5(h5_path, device_id, log_cb=None):
+    """修复 H5 文件中 250Hz EMG 的时间戳回退
+
+    检测 emg{device_id}_250hz_adc 数据集的时间戳是否有回退，
+    如有则用 sd_frame_id 重新计算精确时间戳。
+
+    返回: dict {dataset_name: {backward, adjusted, dur_orig, dur_fixed}} 或 None
+    """
+    ds_name = f'emg{device_id}_250hz_adc'
+    results = {}
+
+    try:
+        with h5py.File(h5_path, 'r+') as f:
+            if ds_name not in f:
+                return None
+
+            ds = f[ds_name]
+            if ds.shape[0] < 2:
+                return None
+
+            # 检查是否有 sd_frame_id
+            if 'sd_frame_id' not in ds.dtype.names:
+                if log_cb:
+                    log_cb(f'    [{ds_name}] 无 sd_frame_id 字段，跳过时间戳修复')
+                return None
+
+            times = ds['time'][:]
+            frame_ids = ds['sd_frame_id'][:]
+
+            # 检测回退
+            diffs = np.diff(times)
+            n_backward = int(np.sum(diffs < 0))
+            if n_backward == 0:
+                if log_cb:
+                    log_cb(f'    [{ds_name}] 时间戳无回退，跳过修复')
+                return {'backward': 0, 'adjusted': 0}
+
+            # 验证 sd_frame_id 可用性（允许少量溢出复位点）
+            id_diffs = np.diff(frame_ids.astype(np.int64))
+            n_bad = int(np.sum(id_diffs <= 0))
+            # 允许 ≤5 处非单调（ESP32 计数器溢出复位），仍可精确修复
+            if n_bad > 5 or (n_bad > 0 and not np.any(id_diffs < -100000)):
+                if log_cb:
+                    log_cb(f'    [{ds_name}] sd_frame_id 严重损坏({n_bad}处异常)，无法精确修复')
+                return None
+
+            # sd_frame_id 速率固定为 2000Hz
+            # （ESP32 SD 卡以 2kHz 记录，无论 250Hz 还是 2kHz 数据集都用同一个计数器）
+            # 不自动检测 —— 溢出复位和已修复数据会导致检测错误
+            sd_rate = 2000
+
+            # 处理 sd_frame_id 计数器溢出复位
+            ids_i64 = frame_ids.astype(np.int64).copy()
+            adjusted = np.zeros(len(ids_i64), dtype=np.int64)
+            adjusted[0] = ids_i64[0]
+            overflow = np.int64(0)
+            prev_raw = ids_i64[0]
+            for i in range(1, len(ids_i64)):
+                raw = ids_i64[i]
+                if raw < prev_raw - 100000:
+                    overflow += prev_raw
+                adjusted[i] = raw + overflow
+                prev_raw = raw
+
+            # 精确修复：time_base + (adjusted_id - adjusted_id[0]) / sd_rate
+            time_base = times[0]
+            frame_base = adjusted[0]
+            corrected = time_base + (adjusted.astype(np.float64) - frame_base) / sd_rate
+
+            dur_orig = times[-1] - times[0]
+            dur_fixed = corrected[-1] - corrected[0]
+            n_adjusted = int(np.sum(np.abs(corrected - times) > (1.0 / sd_rate) * 0.01))
+
+            # 写回（h5py compound dtype 字段写入不生效，必须完整替换）
+            _data = ds[:]
+            _data['time'] = corrected
+            _parent = ds.parent
+            _name = ds.name.split('/')[-1]
+            _dtype = ds.dtype
+            _attrs = dict(ds.attrs)
+            _maxshape = ds.maxshape if hasattr(ds, 'maxshape') else (None,)
+            _chunks = ds.chunks
+            _comp = ds.compression
+            _comp_opt = ds.compression_opts
+            del f[ds.name]
+            _new = _parent.create_dataset(_name, data=_data, dtype=_dtype,
+                                          maxshape=_maxshape, chunks=_chunks,
+                                          compression=_comp, compression_opts=_comp_opt)
+            for k, v in _attrs.items():
+                _new.attrs[k] = v
+
+            results = {
+                'backward': n_backward,
+                'adjusted': n_adjusted,
+                'dur_orig': dur_orig,
+                'dur_fixed': dur_fixed,
+                'sd_rate': sd_rate,
+            }
+
+            if log_cb:
+                log_cb(f'    [{ds_name}] 时间戳修复完成: '
+                       f'回退{n_backward}处, 调整{n_adjusted}帧, '
+                       f'时长{dur_orig:.2f}s→{dur_fixed:.2f}s '
+                       f'(sd_frame_id@{sd_rate}Hz)')
+
+            return results
+
+    except Exception as e:
+        if log_cb:
+            log_cb(f'    [{ds_name}] 时间戳修复失败: {e}')
+        return None
+
+
 class SyncWorker(QThread):
     """同步工作线程"""
     progress = pyqtSignal(int, int, str)
@@ -400,6 +513,14 @@ class SyncWorker(QThread):
                         self.log.emit(f"    EMG bin: {os.path.basename(emg_bin)}")
                         if imu_bin:
                             self.log.emit(f"    IMU bin: {os.path.basename(imu_bin)}")
+
+                        # 【修复】同步前先修复 250Hz 时间戳回退
+                        # 原因：Windows time.time() 精度不足（~15ms），导致 BLE 通知
+                        # 时间戳重叠，250Hz 帧时间戳回退 ~32ms。用 sd_frame_id
+                        # （ESP32 SD卡帧计数器，严格单调）重新计算精确时间戳。
+                        if self.sync_mode == 'one_to_one':
+                            repair_250hz_timestamps_in_h5(
+                                h5_file, device_id, log_cb=self.log.emit)
 
                         # 判断是否是最后一个设备，只有最后一个设备同步完才设置synced
                         is_last_device = (idx == total_devices - 1)
